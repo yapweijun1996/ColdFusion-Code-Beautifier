@@ -1,12 +1,7 @@
-
 <!DOCTYPE html>
-<!-- Code Beautifier for Coldfusion HTML JavaScript CSS v9 -->
-<!-- https://codepen.io/yapweijun1996/pen/MWdajrB -->
 <html>
 	<head>
 		<style>
-			
-			
 			body {
 				font-family: Arial, sans-serif;
 			}
@@ -28,24 +23,36 @@
 				white-space: pre-wrap;
 				color: blue;
 			}
-			
 		</style>
 	</head>
 	<body>
 		<h1>ColdFusion Code Beautifier</h1>
-		<textarea id="input" placeholder="Pase your code here..."></textarea>
+		<textarea id="input" placeholder="Pase your code here...">
+		</textarea>
 		<button onclick="beautifyCodes()">Beautify!</button>
 		<button onclick="clear_data();">clear all</button>
-		<br>
-		<br>
-		<textarea id="output" placeholder="Pase your code here..."></textarea>
-		<script>
+		<input type="checkbox" id="split_html_tag" value="y">
+		<label for="split_html_tag">Force split HTML tag >
+			< </label>
+			<br>
+			<br>
+			<textarea id="output" placeholder="Pase your code here...">
+			</textarea>
 			
-			
-			function beautifyCodes() {
+			<script>
 				
-				var rawCode = document.getElementById('input').value;
-				var output = document.getElementById('output');
+				
+				function beautifyCodes() {
+					
+					var split_html_tag = document.getElementById('split_html_tag').checked;
+					var rawCode = document.getElementById('input').value;
+					var output = document.getElementById('output');
+					
+					
+					if(split_html_tag == true){
+						rawCode = rawCode.replace(/>
+					</g, '>\n<');
+				}
 				
 				var lines = rawCode.split('\n');
 				var indentLevel = 0;
