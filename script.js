@@ -142,71 +142,71 @@ function beautifyCodes() {
 			}
 			/* Increase [end  ] */
 		}else{ // Handle JavaScript CSS
-			/* maintain_yn [start] */
-			if(line_data.startsWith("//")){
-				maintain_yn = "y";
-				
-				// indentation
-				//lines[i] = ''.padStart(indentLevel * indentSize) + line;
-				if(indentLevel != 0 && indentSize != 0){
-					indentSpace = indentLevel * indentSize;
-				}else{
-					indentSpace = 0;
-				}
-				lines[i] = ''.padStart(indentSpace, '\t') + line;
-			}
-			/* maintain_yn [end  ] */
+		/* maintain_yn [start] */
+		if(line_data.startsWith("//")){
+			maintain_yn = "y";
 			
-			if(maintain_yn == "n"){
-				/* Decrease [start] */
-				// JavaScript CSS
-				if(line_data.startsWith("}")){
-					indentLevel -= 1;
-				}
-				else if(line_data.startsWith("]")){
-					indentLevel -= 1;
-				}
-				else if(line_data.includes("}") && !line_data.includes("{")){
-					indentLevel -= 1;
-				}
-				/* Decrease [end  ] */
-				
-				
-				// indentation
-				//lines[i] = ''.padStart(indentLevel * indentSize) + line;
-				if(indentLevel != 0 && indentSize != 0){
-					indentSpace = indentLevel * indentSize;
-				}else{
-					indentSpace = 0;
-				}
-				lines[i] = ''.padStart(indentSpace, '\t') + line;
-				
-				/* Increase [start] */
-				// JavaScript CSS
-				if(line_data.endsWith("{")){
-					indentLevel += 1;
-				}else if(line_data.endsWith("[")){
-					indentLevel += 1;
-					/* Increase [end  ] */
-				}
-				else if(line_data.includes("{") && !line_data.includes("}")){
-					indentLevel += 1;
-					/* Increase [end  ] */
-				}
-				
+			// indentation
+			//lines[i] = ''.padStart(indentLevel * indentSize) + line;
+			if(indentLevel != 0 && indentSize != 0){
+				indentSpace = indentLevel * indentSize;
+			}else{
+				indentSpace = 0;
+			}
+			lines[i] = ''.padStart(indentSpace, '\t') + line;
+		}
+		/* maintain_yn [end  ] */
+		
+		if(maintain_yn == "n"){
+			/* Decrease [start] */
+			// JavaScript CSS
+			if(line_data.startsWith("}")){
+				indentLevel -= 1;
+			}
+			else if(line_data.startsWith("]")){
+				indentLevel -= 1;
+			}
+			else if(line_data.includes("}") && !line_data.includes("{")){
+				indentLevel -= 1;
+			}
+			/* Decrease [end  ] */
+			
+			
+			// indentation
+			//lines[i] = ''.padStart(indentLevel * indentSize) + line;
+			if(indentLevel != 0 && indentSize != 0){
+				indentSpace = indentLevel * indentSize;
+			}else{
+				indentSpace = 0;
+			}
+			lines[i] = ''.padStart(indentSpace, '\t') + line;
+			
+			/* Increase [start] */
+			// JavaScript CSS
+			if(line_data.endsWith("{")){
+				indentLevel += 1;
+			}else if(line_data.endsWith("[")){
+				indentLevel += 1;
+				/* Increase [end  ] */
+			}
+			else if(line_data.includes("{") && !line_data.includes("}")){
+				indentLevel += 1;
+				/* Increase [end  ] */
 			}
 			
 		}
 		
-		//console.log("line_data." + line_data);
-		//console.log("indentLevel." + indentLevel);
 	}
+	
+	//console.log("line_data." + line_data);
+	//console.log("indentLevel." + indentLevel);
+}
 
-	output.value = lines.join('\n');
+output.value = lines.join('\n');
 
-	if(auto_copy_n_clear_bcontent == true){
-		copy_output_data();
-	}
+if(auto_copy_n_clear_bcontent == true){
+	copy_output_data();
+}
 
 }
 
@@ -246,6 +246,7 @@ function clear_data() {
 	document.getElementById('input').value = '';
 	document.getElementById('output').value = '';
 	console.log("Clear Data");
+	simple_toast_msg('Clear Data');
 }
 function copy_output_data() {
 	var auto_copy_n_clear_bcontent = document.getElementById('auto_copy_n_clear_bcontent').checked;
@@ -257,6 +258,7 @@ function copy_output_data() {
 		textarea.select();
 		document.execCommand("copy");
 		console.log("Copied the text.");
+		simple_toast_msg('Copied the text.');
 		
 		if(auto_copy_n_clear_bcontent == true){
 			clear_data();
@@ -265,6 +267,44 @@ function copy_output_data() {
 	} else {
 	}
 }
+
+function simple_toast_msg(content) {
+	var toastContainer = document.querySelector('.simpleToastContainer');
+	var toast = document.createElement('div');
+	toast.className = 'simple-toast';
+	toast.innerHTML = content;
+	
+	toastContainer.prepend(toast);
+	
+	setTimeout(() => {
+		toast.classList.add('show');
+		toast.classList.add('simple-toast-slidein');
+	}, 10);
+	
+	let removeTimeout = setTimeout(() => {
+		toast.remove();
+	}, 4200);
+	
+	toast.addEventListener('mouseenter', () => {
+		clearTimeout(removeTimeout);
+		toast.style.setProperty('--animation-paused', 'paused');
+		toast.classList.remove('simple-toast-slidein');
+	});
+	
+	toast.addEventListener('mouseleave', () => {
+		toast.style.setProperty('--animation-paused', 'running');
+		toast.classList.add('simple-toast-slidein');
+		removeTimeout = setTimeout(() => {
+			toast.remove();
+		}, 4200);
+	});
+	
+	toast.addEventListener('click', () => {
+		toast.remove();
+	});
+}
+
+
 window.onload = function() {
 	console.log('window - onload');
 };
