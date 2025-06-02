@@ -92,7 +92,7 @@ function beautifyCodes() {
 			|| start_width_tag.startsWith('<cfhttpparam')
 			|| start_width_tag.startsWith('<cfcookie')
 			|| start_width_tag.startsWith('<cfsleep')
-			|| start_width_tag.startsWith('<cfparam')
+			|| start_width_tag.startsWith('<cflog')
 			|| start_width_tag.startsWith('<cfparam')
 			|| start_width_tag.startsWith('<cfparam')
 			|| start_width_tag.startsWith('<cfparam')
