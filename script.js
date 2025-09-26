@@ -95,7 +95,7 @@ function beautifyCodes() {
 			|| start_width_tag.startsWith('<cflog')
 			|| start_width_tag.startsWith('<cfheader')
 			|| start_width_tag.startsWith('<cfcontent')
-			|| start_width_tag.startsWith('<cfparam')
+			|| (start_width_tag.startsWith('<col') && !start_width_tag.startsWith('<colgroup'))
 			|| start_width_tag.startsWith('<cfparam')
 			|| start_width_tag.startsWith('<cfparam')
 			|| start_width_tag.startsWith('<cfparam')
