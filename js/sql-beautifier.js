@@ -31,7 +31,7 @@ function beautifySQL(sql) {
 	function isListContext() {
 		return currentClause != null && SQL_LIST_CLAUSES.includes(currentClause);
 	}
-	
+
 	function currentText(token) {
 		if (token.type == 'word') {
 			var upperValue = token.value.toUpperCase();
@@ -41,7 +41,7 @@ function beautifySQL(sql) {
 		}
 		return token.value;
 	}
-	
+
 	function appendText(text, token) {
 		if (line == "") {
 			line = indent();
@@ -55,7 +55,7 @@ function beautifySQL(sql) {
 			type: token.type
 		};
 	}
-	
+
 	function startsSubquery(index) {
 		var nextIndex = getNextContentIndex(tokens, index + 1);
 		if (nextIndex == -1) {
@@ -63,18 +63,20 @@ function beautifySQL(sql) {
 		}
 		return tokens[nextIndex].type == 'word' && ['SELECT', 'WITH'].includes(tokens[nextIndex].value.toUpperCase());
 	}
-	
+
 	for (var i = 0; i < tokens.length; i++) {
 		var token = tokens[i];
-		
+
 		if (token.type == 'comment') {
 			appendText(token.value, token);
 			flushLine();
 			continue;
 		}
-		
+
 		if (token.value == '(') {
 			var isSubquery = startsSubquery(i);
+			token.isSubquery = isSubquery;
+			token.needsLeadingSpace = isSubquery || currentClause == 'INSERT INTO';
 			appendText('(', token);
 			parenStack.push(isSubquery);
 			if (isSubquery) {
@@ -176,6 +178,12 @@ function beautifySQL(sql) {
 		if (clause != null) {
 			if (clause.text == 'AND' && inBetween) {
 				inBetween = false;
+			} else if (funcDepth > 0) {
+				appendText(clause.text, {
+					type: 'word'
+				});
+				i += clause.length - 1;
+				continue;
 			} else {
 				listItemIndent = 0;
 				inBetween = false;
@@ -193,27 +201,27 @@ function beautifySQL(sql) {
 
 		appendText(currentText(token), token);
 	}
-	
+
 	if (line.trim() != "") {
 		flushLine();
 	}
-	
+
 	return lines.join('\n');
 }
 
 function tokenizeSQL(sql) {
 	var tokens = [];
 	var i = 0;
-	
+
 	while (i < sql.length) {
 		var char = sql[i];
 		var nextChar = sql[i + 1];
-		
+
 		if (/\s/.test(char)) {
 			i++;
 			continue;
 		}
-		
+
 		if (char == '-' && nextChar == '-') {
 			var lineCommentStart = i;
 			i += 2;
@@ -226,7 +234,7 @@ function tokenizeSQL(sql) {
 			});
 			continue;
 		}
-		
+
 		if (char == '/' && nextChar == '*') {
 			var blockCommentStart = i;
 			i += 2;
@@ -242,7 +250,7 @@ function tokenizeSQL(sql) {
 			});
 			continue;
 		}
-		
+
 		if (char == "'" || char == '"' || char == '`') {
 			var quote = char;
 			var quoteStart = i;
@@ -268,7 +276,28 @@ function tokenizeSQL(sql) {
 			});
 			continue;
 		}
-		
+
+		if (char == '[') {
+			var bracketStart = i;
+			i++;
+			while (i < sql.length) {
+				if (sql[i] == ']') {
+					if (sql[i + 1] == ']') {
+						i += 2;
+						continue;
+					}
+					i++;
+					break;
+				}
+				i++;
+			}
+			tokens.push({
+				type: 'identifier',
+				value: sql.slice(bracketStart, i)
+			});
+			continue;
+		}
+
 		if (/[A-Za-z_]/.test(char)) {
 			var wordStart = i;
 			i++;
@@ -281,7 +310,7 @@ function tokenizeSQL(sql) {
 			});
 			continue;
 		}
-		
+
 		if (/[0-9]/.test(char)) {
 			var numberStart = i;
 			i++;
@@ -294,7 +323,28 @@ function tokenizeSQL(sql) {
 			});
 			continue;
 		}
-		
+
+		if ((char == '-' || char == '+') && /[0-9]/.test(nextChar)) {
+			var lastTok = tokens[tokens.length - 1];
+			var unaryKeywords = /^(AND|OR|NOT|BETWEEN|LIKE|IN|IS|THEN|WHEN|ELSE|CASE|AS|RETURNING|SET|VALUES|SELECT|WHERE|HAVING|BY|ON|UNION|INTERSECT|EXCEPT|ALL|ANY|SOME|DISTINCT)$/i;
+			var isUnary = !lastTok
+				|| lastTok.type == 'operator'
+				|| (lastTok.type == 'symbol' && (lastTok.value == '(' || lastTok.value == ',' || lastTok.value == '['))
+				|| (lastTok.type == 'word' && unaryKeywords.test(lastTok.value));
+			if (isUnary) {
+				var signedStart = i;
+				i++;
+				while (i < sql.length && /[0-9.]/.test(sql[i])) {
+					i++;
+				}
+				tokens.push({
+					type: 'number',
+					value: sql.slice(signedStart, i)
+				});
+				continue;
+			}
+		}
+
 		var twoChars = sql.slice(i, i + 2);
 		var threeChars = sql.slice(i, i + 3);
 		if (threeChars == '->>') {
@@ -313,14 +363,14 @@ function tokenizeSQL(sql) {
 			i += 2;
 			continue;
 		}
-		
+
 		tokens.push({
 			type: ['=', '+', '-', '*', '/', '<', '>'].includes(char) ? 'operator' : 'symbol',
 			value: char
 		});
 		i++;
 	}
-	
+
 	return tokens;
 }
 
@@ -328,7 +378,7 @@ function matchSQLMajorClause(tokens, index) {
 	for (var i = 0; i < SQL_MAJOR_CLAUSES.length; i++) {
 		var clause = SQL_MAJOR_CLAUSES[i];
 		var matched = true;
-		
+
 		for (var j = 0; j < clause.length; j++) {
 			var token = tokens[index + j];
 			if (!token || token.type != 'word' || token.value.toUpperCase() != clause[j]) {
@@ -336,7 +386,7 @@ function matchSQLMajorClause(tokens, index) {
 				break;
 			}
 		}
-		
+
 		if (matched) {
 			return {
 				text: clause.join(' '),
@@ -344,7 +394,7 @@ function matchSQLMajorClause(tokens, index) {
 			};
 		}
 	}
-	
+
 	return null;
 }
 
@@ -370,7 +420,17 @@ function needsSpaceBefore(text, token, lastToken, line) {
 	if (lastToken.value == '(' || lastToken.value == '.' || lastToken.value == '::' || lastToken.value == '->' || lastToken.value == '->>') {
 		return false;
 	}
-	if (text == '(' && lastToken.type == 'word' && SQL_FUNCTION_KEYWORDS.includes(lastToken.value.toUpperCase())) {
+	if (text == '(' && lastToken.type == 'word') {
+		var upperLast = lastToken.value.toUpperCase();
+		if (SQL_FUNCTION_KEYWORDS.includes(upperLast)) {
+			return false;
+		}
+		if (SQL_UPPERCASE_KEYWORDS.includes(upperLast)) {
+			return true;
+		}
+		if (token && token.needsLeadingSpace) {
+			return true;
+		}
 		return false;
 	}
 	if (['=', '+', '-', '*', '/', '<', '>', '<=', '>=', '!=', '<>'].includes(text)) {

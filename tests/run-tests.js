@@ -16,7 +16,7 @@ var browserCode = scripts.map(function(file) {
 	return fs.readFileSync(file, 'utf8');
 }).join('\n');
 
-function makeContext(input, language, splitHtmlTag, deepFormat) {
+function makeContext(input, language, splitHtmlTag, deepFormat, autoCopyAndClear) {
 	var elements = {
 		language: {
 			value: language || 'auto'
@@ -25,7 +25,7 @@ function makeContext(input, language, splitHtmlTag, deepFormat) {
 			checked: splitHtmlTag == true
 		},
 		auto_copy_n_clear_bcontent: {
-			checked: false
+			checked: autoCopyAndClear == true
 		},
 		deep_format: {
 			checked: deepFormat == true
@@ -38,14 +38,18 @@ function makeContext(input, language, splitHtmlTag, deepFormat) {
 			select: function() {}
 		}
 	};
-	
+
 	var context = {
-		console: console,
+		console: {
+			log: function() {}
+		},
 		document: {
 			getElementById: function(id) {
 				return elements[id];
 			},
-			execCommand: function() {},
+			execCommand: function() {
+				return true;
+			},
 			querySelector: function() {
 				return {
 					prepend: function() {}
@@ -70,10 +74,10 @@ function makeContext(input, language, splitHtmlTag, deepFormat) {
 		setTimeout: setTimeout,
 		clearTimeout: clearTimeout
 	};
-	
+
 	vm.createContext(context);
 	vm.runInContext(browserCode, context);
-	
+
 	return {
 		context: context,
 		elements: elements
@@ -87,6 +91,12 @@ function runSQL(input) {
 
 function runRouter(input, language, deepFormat) {
 	var harness = makeContext(input, language || 'auto', false, deepFormat == true);
+	harness.context.beautifyCodes();
+	return harness.elements.output.value;
+}
+
+function runRouterWithAutoCopy(input, language, deepFormat) {
+	var harness = makeContext(input, language || 'auto', false, deepFormat == true, true);
 	harness.context.beautifyCodes();
 	return harness.elements.output.value;
 }
@@ -173,6 +183,18 @@ assertEqual(
 );
 
 assertEqual(
+	'deep cfquery preserves escaped and expression hashes',
+	runRouter('<cfquery name="q">\nselect * from users where code = ## and id = #x#\n</cfquery>', 'cfml', true),
+	'<cfquery name="q">\n\tSELECT *\n\tFROM users\n\tWHERE code = ##\n\tAND id = #x#\n</cfquery>'
+);
+
+assertEqual(
+	'deep cfquery preserves cfquery close text inside sql string',
+	runRouter('<cfquery name="q">\nselect \'</cfquery>\' as x from t\n</cfquery>', 'cfml', true),
+	'<cfquery name="q">\n\tSELECT \'</cfquery>\' AS x\n\tFROM t\n</cfquery>'
+);
+
+assertEqual(
 	'deep style css',
 	runRouter('<style>\nbody{margin:0;color:red}.btn{padding:10px}\n</style>', 'cfml', true),
 	'<style>\n\tbody{margin:0;color:red}\n\t.btn{padding:10px}\n</style>'
@@ -182,6 +204,18 @@ assertEqual(
 	'deep script javascript',
 	runRouter('<script>\nif(x){foo();}\n</script>', 'cfml', true),
 	'<script>\n\tif(x){\n\t\tfoo();\n\t}\n</script>'
+);
+
+assertEqual(
+	'deep script preserves closing brace inside string',
+	runRouter('<script>\nvar token = "}";\nif(x){foo();}\n</script>', 'cfml', true),
+	'<script>\n\tvar token = "}";\n\tif(x){\n\t\tfoo();\n\t}\n</script>'
+);
+
+assertEqual(
+	'deep script preserves script close text inside string',
+	runRouter('<script>\nvar token = "</script>";\nif(x){foo();}\n</script>', 'cfml', true),
+	'<script>\n\tvar token = "</script>";\n\tif(x){\n\t\tfoo();\n\t}\n</script>'
 );
 
 assertEqual(
@@ -209,9 +243,21 @@ assertEqual(
 );
 
 assertEqual(
+	'multiline cfml comment does not affect following live code indent',
+	runRouter('<cfif x>\n<!---\n<cfif y>\ncomment only\n</cfif>\n--->\n<cfset z = 1>\n</cfif>', 'cfml', false),
+	'<cfif x>\n\t<!---\n\t<cfif y>\n\tcomment only\n\t</cfif>\n\t--->\n\t<cfset z = 1>\n</cfif>'
+);
+
+assertEqual(
 	'select breaks multiple columns',
 	runSQL('select a, b, c, d from t'),
 	'SELECT a,\n\tb,\n\tc,\n\td\nFROM t'
+);
+
+assertEqual(
+	'sql server bracket identifiers preserved',
+	runSQL('select [User Name], [Order] from [User Table] where [Order] = 1'),
+	'SELECT [User Name],\n\t[Order]\nFROM [User Table]\nWHERE [Order] = 1'
 );
 
 assertEqual(
@@ -266,6 +312,36 @@ assertEqual(
 	'case when multiple branches',
 	runSQL("select id, case when s = 'P' then 'Pending' when s = 'A' then 'Approved' else 'Unknown' end as label from t"),
 	"SELECT id,\n\tCASE\n\t\tWHEN s = 'P' THEN 'Pending'\n\t\tWHEN s = 'A' THEN 'Approved'\n\t\tELSE 'Unknown'\n\tEND AS label\nFROM t"
+);
+
+assertEqual(
+	'default auto-copy keeps beautified output visible',
+	runRouterWithAutoCopy('<cfif x>\n<cfset y = 1>\n</cfif>', 'cfml', true),
+	'<cfif x>\n\t<cfset y = 1>\n</cfif>'
+);
+
+assertEqual(
+	'window function order by stays inline',
+	runSQL('SELECT ROW_NUMBER() OVER (PARTITION BY x ORDER BY y DESC) AS rn FROM t'),
+	'SELECT ROW_NUMBER() OVER (PARTITION BY x ORDER BY y DESC) AS rn\nFROM t'
+);
+
+assertEqual(
+	'function call no space before paren',
+	runSQL('select dateadd(day, -90, getdate()) from t'),
+	'SELECT dateadd(day, -90, getdate())\nFROM t'
+);
+
+assertEqual(
+	'unary minus on literal',
+	runSQL('select * from t where x between -100 and -10'),
+	'SELECT *\nFROM t\nWHERE x BETWEEN -100 AND -10'
+);
+
+assertEqual(
+	'binary minus still has spaces',
+	runSQL('select a - b from t'),
+	'SELECT a - b\nFROM t'
 );
 
 if (!process.exitCode) {
