@@ -1,0 +1,222 @@
+* { box-sizing: border-box; }
+
+html, body {
+	height: 100%;
+	margin: 0;
+}
+
+body {
+	font-family: system-ui, -apple-system, Segoe UI, Arial, sans-serif;
+	background: #f5f5f5;
+	color: #222;
+	display: flex;
+	flex-direction: column;
+	padding: 12px;
+	gap: 8px;
+}
+
+.container {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	background: #fff;
+	padding: 16px;
+	border-radius: 8px;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+	min-height: 0;
+}
+
+h1 {
+	font-size: 20px;
+	text-align: center;
+	margin: 0 0 12px;
+}
+
+.editor-grid {
+	flex: 1;
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 12px;
+	margin-bottom: 12px;
+	min-height: 0;
+}
+
+.pane {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.pane-label {
+	display: block;
+	font-size: 13px;
+	font-weight: 600;
+	color: #555;
+	margin-bottom: 6px;
+}
+
+textarea {
+	flex: 1;
+	width: 100%;
+	padding: 12px;
+	border: 1px solid #d0d0d0;
+	border-radius: 6px;
+	font-family: Consolas, Monaco, "Courier New", monospace;
+	font-size: 13px;
+	line-height: 1.5;
+	resize: none;
+	background: #fff;
+	min-height: 0;
+}
+
+textarea:focus {
+	outline: none;
+	border-color: #007dff;
+	box-shadow: 0 0 0 3px rgba(0, 125, 255, 0.15);
+}
+
+#output {
+	background: #fafafa;
+}
+
+.toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 10px;
+	align-items: center;
+	padding-top: 12px;
+	border-top: 1px solid #eee;
+}
+
+button {
+	padding: 10px 18px;
+	font-size: 15px;
+	border: none;
+	border-radius: 6px;
+	cursor: pointer;
+	font-weight: 500;
+	transition: opacity 0.15s, transform 0.05s;
+}
+
+button:hover { opacity: 0.88; }
+button:active { transform: translateY(1px); }
+
+.btn-primary { background: #28a745; color: #fff; }
+.btn-secondary { background: #007dff; color: #fff; }
+.btn-ghost { background: #f0f0f0; color: #333; }
+
+.toolbar-options {
+	display: flex;
+	gap: 16px;
+	margin-left: auto;
+	font-size: 14px;
+	color: #555;
+}
+
+.toolbar-options label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	cursor: pointer;
+	user-select: none;
+}
+
+footer {
+	text-align: center;
+	font-size: 12px;
+	color: #666;
+	padding: 4px 0;
+	flex-shrink: 0;
+}
+
+footer p { margin: 0; }
+
+footer a {
+	color: #666;
+	text-decoration: underline;
+	font-weight: 600;
+}
+
+.simpleToastContainer {
+	position: fixed;
+	right: 10px;
+	bottom: 10px;
+	z-index: 1000;
+	display: flex;
+	flex-direction: column-reverse;
+	width: 90%;
+	max-width: 340px;
+	padding: 10px;
+}
+
+.simple-toast {
+	visibility: hidden;
+	min-width: 100px;
+	max-width: 100%;
+	background-color: #292b2c;
+	color: #fff;
+	text-align: center;
+	border-radius: 12px;
+	padding: 20px;
+	margin-bottom: 15px;
+	font-size: 16px;
+	opacity: 0;
+	transform: translateY(20px);
+	box-shadow: 0 5px 10px rgba(0, 0, 0, 0.4);
+	transition: opacity 0.5s ease, transform 0.5s ease;
+	position: relative;
+	overflow: hidden;
+}
+
+.simple-toast.show {
+	visibility: visible;
+	opacity: 1;
+	transform: translateY(0);
+	background: linear-gradient(135deg, #000, #666);
+}
+
+.simple-toast-slidein:before {
+	content: '';
+	position: absolute;
+	bottom: 0;
+	left: 0;
+	width: 100%;
+	height: 3px;
+	background: linear-gradient(90deg, #000, #fff);
+	animation: slidein 5s forwards var(--animation-paused, running);
+}
+
+@keyframes slidein {
+	from { width: 0%; }
+	to { width: 100%; }
+}
+
+@media (max-width: 768px) {
+	html, body { height: auto; }
+	body { padding: 8px; display: block; min-height: 100vh; }
+	.container { padding: 12px; }
+	h1 { font-size: 17px; margin-bottom: 10px; }
+
+	.editor-grid {
+		grid-template-columns: 1fr;
+		gap: 10px;
+	}
+
+	textarea { min-height: 200px; font-size: 12px; resize: vertical; }
+
+	.toolbar { gap: 8px; }
+	button { padding: 10px 14px; font-size: 14px; flex: 1; min-width: 90px; }
+	.btn-primary { flex: 1 1 100%; }
+
+	.toolbar-options {
+		margin-left: 0;
+		width: 100%;
+		flex-direction: column;
+		gap: 8px;
+		align-items: flex-start;
+		padding-top: 4px;
+	}
+
+	.simple-toast { font-size: 14px; padding: 15px; }
+	.simpleToastContainer { max-width: 80vw; }
+}

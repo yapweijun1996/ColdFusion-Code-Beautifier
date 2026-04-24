@@ -10,182 +10,44 @@
 		<meta property="og:type" content="website">
 		<meta property="og:url" content="https://yapweijun1996.github.io/ColdFusion-Code-Beautifier/">
 		<meta property="og:image" content="https://yapweijun1996.github.io/ColdFusion-Code-Beautifier/og_img.jpg">
-		<style>
-			* { box-sizing: border-box; }
-			body {
-				font-family: Arial, sans-serif;
-				margin: 0;
-				padding: 20px;
-				background: #f5f5f5;
-			}
-			.container {
-				max-width: 95vw;
-				margin: 0 auto;
-				background: #fff;
-				padding: 20px;
-				border-radius: 4px;
-				box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-			}
-			h1 {
-				font-size: 24px;
-				text-align: center;
-				margin-bottom: 20px;
-			}
-			textarea {
-				width: 100%;
-				min-height: 150px;
-				padding: 10px;
-				margin-bottom: 15px;
-				border: 1px solid #ccc;
-				border-radius: 4px;
-				resize: vertical;
-			}
-			button {
-				padding: 10px 20px;
-				font-size: 16px;
-				margin-right: 10px;
-				border: none;
-				border-radius: 4px;
-				cursor: pointer;
-			}
-			#beautify {
-				background-color: #28a745;
-				color: #fff;
-			}
-			#clear {
-				background-color: #dc3545;
-				color: #fff;
-			}
-			#copy {
-				background-color: #007dff;
-				color: #fff;
-			}
-			.checkbox-group {
-				display: flex;
-				align-items: center;
-				margin-top: 20px;
-				margin-bottom: 20px;
-			}
-			.checkbox-group input {
-				margin-right: 5px;
-			}
-			footer {
-				text-align: center;
-				margin-top: 30px;
-				font-size: 14px;
-				color: #666;
-			}
-			footer a {
-				color: #666;
-				text-decoration: none;
-			}
-			footer a:hover {
-				text-decoration: underline;
-			}
-			
-			
-			.simpleToastContainer {
-				position: fixed;
-				right: 10px;
-				bottom: 10px;
-				z-index: 1000;
-				display: flex;
-				flex-direction: column-reverse;
-				width: 90%;
-				max-width: 340px;
-				padding: 10px;
-				box-sizing: border-box;
-			}
-			
-			.simple-toast {
-				visibility: hidden;
-				min-width: 100px;
-				max-width: 100%;
-				background-color: #292b2c;
-				color: #fff;
-				text-align: center;
-				border-radius: 12px;
-				padding: 20px;
-				margin-bottom: 15px;
-				font-size: 16px;
-				opacity: 0;
-				transform: translateY(20px);
-				box-shadow: 0 5px 10px rgba(0, 0, 0, 0.4);
-				transition: opacity 0.5s ease, transform 0.5s ease;
-				position: relative;
-				overflow: hidden;
-			}
-			
-			.simple-toast.show {
-				visibility: visible;
-				opacity: 1;
-				transform: translateY(0);
-				background: linear-gradient(135deg, #000, #666);
-			}
-			
-			.simple-toast-slidein:before {
-				content: '';
-				position: absolute;
-				bottom: 0;
-				left: 0;
-				width: 100%;
-				height: 3px;
-				background: linear-gradient(90deg, #000, #fff);
-				animation: slidein 5s forwards var(--animation-paused, running);
-			}
-			
-			@keyframes slidein {
-				from {
-					width: 0%;
-				}
-				to {
-					width: 100%;
-				}
-			}
-			
-			@media screen and (max-width: 768px) {
-				.simple-toast {
-					font-size: 14px;
-					padding: 15px;
-					max-width: 50vw;
-				}
-				.simpleToastContainer {
-					max-width: 50vw;
-				}
-			}
-			
-			@media (max-width: 600px) {
-				h1 { font-size: 20px; }
-				button { font-size: 14px; padding: 8px 16px; }
-			}
-		</style>
+		<link rel="stylesheet" href="./styles.css">
 	</head>
 	<body>
 		<div class="simpleToastContainer"></div>
 		<div class="container">
 			<h1>ColdFusion Code Beautifier</h1>
-			<textarea id="input" placeholder="Paste your code here..."></textarea>
-			<div>
-				<button id="beautify" onclick="beautifyCodes()">Beautify!</button>
-				<button id="copy" onclick="copy_output_data();">Copy</button>
-				<button id="clear" onclick="clear_data();">Clear All</button>
+
+			<div class="editor-grid">
+				<section class="pane">
+					<label class="pane-label" for="input">Input</label>
+					<textarea id="input" placeholder="Paste your code here..."></textarea>
+				</section>
+
+				<section class="pane">
+					<label class="pane-label" for="output">Output</label>
+					<textarea id="output" readonly placeholder="Your beautified code will appear here..."></textarea>
+				</section>
 			</div>
-			<div class="checkbox-group">
-				<input type="checkbox" id="split_html_tag" value="y">
-				<label for="split_html_tag">Force split HTML tag &gt; &lt;</label>
+
+			<div class="toolbar">
+				<button id="beautify" class="btn-primary" onclick="beautifyCodes()">Beautify</button>
+				<button id="copy" class="btn-secondary" onclick="copy_output_data();">Copy</button>
+				<button id="clear" class="btn-ghost" onclick="clear_data();">Clear</button>
+
+				<div class="toolbar-options">
+					<label><input type="checkbox" id="split_html_tag" value="y"> Split &lt;tag&gt;&lt;tag&gt;</label>
+					<label><input type="checkbox" id="auto_copy_n_clear_bcontent" value="y" checked> Auto copy &amp; clear</label>
+				</div>
 			</div>
-			<div class="checkbox-group">
-				<input type="checkbox" id="auto_copy_n_clear_bcontent" value="y" checked>
-				<label for="auto_copy_n_clear_bcontent">Automatically Copy Beautified Content and Clear All Data</label>
-			</div>
-			<textarea id="output" placeholder="Your beautified code will appear here..."></textarea>
 		</div>
-		<script src="./script.js"></script>
 		<footer>
-			<p>By <a href="https://github.com/yapweijun1996" target="_blank" style="font-weight: 600; text-decoration: underline;">yapweijun1996</a> <span class="at_year"><span></p>
-			<script>
-				document.querySelector('.at_year').textContent = "@ " + new Date().getFullYear();
-			</script>
+			<p>By <a href="https://github.com/yapweijun1996" target="_blank">yapweijun1996</a> @ <span class="at_year"></span></p>
 		</footer>
+		<script src="./js/cf-tags.js"></script>
+		<script src="./js/tag-utils.js"></script>
+		<script src="./js/toast.js"></script>
+		<script src="./js/clipboard.js"></script>
+		<script src="./js/beautifier.js"></script>
+		<script src="./js/app.js"></script>
 	</body>
 </html>
