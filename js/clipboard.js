@@ -23,7 +23,9 @@ function copy_output_data() {
 			console.log("Copy failed.");
 			simple_toast_msg('Copy failed.');
 		}
+		return copied;
 
 	} else {
 	}
+	return false;
 }

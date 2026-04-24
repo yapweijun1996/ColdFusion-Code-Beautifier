@@ -16,7 +16,7 @@ var browserCode = scripts.map(function(file) {
 	return fs.readFileSync(file, 'utf8');
 }).join('\n');
 
-function makeContext(input, language, splitHtmlTag, deepFormat, autoCopyAndClear) {
+function makeContext(input, language, splitHtmlTag, deepFormat, autoCopy, autoClearInput, autoClearOutput, copyResult) {
 	var elements = {
 		language: {
 			value: language || 'auto'
@@ -25,10 +25,13 @@ function makeContext(input, language, splitHtmlTag, deepFormat, autoCopyAndClear
 			checked: splitHtmlTag == true
 		},
 		auto_copy: {
-			checked: autoCopyAndClear == true
+			checked: autoCopy == true
 		},
 		auto_clear: {
-			checked: false
+			checked: autoClearInput == true
+		},
+		auto_clear_output: {
+			checked: autoClearOutput == true
 		},
 		deep_format: {
 			checked: deepFormat == true
@@ -47,12 +50,12 @@ function makeContext(input, language, splitHtmlTag, deepFormat, autoCopyAndClear
 			log: function() {}
 		},
 		document: {
-			getElementById: function(id) {
-				return elements[id];
-			},
-			execCommand: function() {
-				return true;
-			},
+				getElementById: function(id) {
+					return elements[id];
+				},
+				execCommand: function() {
+					return copyResult !== false;
+				},
 			querySelector: function() {
 				return {
 					prepend: function() {}
@@ -102,6 +105,15 @@ function runRouterWithAutoCopy(input, language, deepFormat) {
 	var harness = makeContext(input, language || 'auto', false, deepFormat == true, true);
 	harness.context.beautifyCodes();
 	return harness.elements.output.value;
+}
+
+function runRouterWithAutoClears(input, language, deepFormat, copyResult) {
+	var harness = makeContext(input, language || 'auto', false, deepFormat == true, true, true, true, copyResult);
+	harness.context.beautifyCodes();
+	return JSON.stringify({
+		input: harness.elements.input.value,
+		output: harness.elements.output.value
+	});
 }
 
 function assertEqual(name, actual, expected) {
@@ -252,6 +264,12 @@ assertEqual(
 );
 
 assertEqual(
+	'deep cfquery preserves cfml comment inside sql body',
+	runRouter('<cfquery name="q">\nselect a,\n<!--- inline note --->\nb\nfrom t\n</cfquery>', 'cfml', true),
+	'<cfquery name="q">\n\tSELECT a,\n\t\t<!--- inline note ---> b\n\tFROM t\n</cfquery>'
+);
+
+assertEqual(
 	'multiline cfml comment does not affect following live code indent',
 	runRouter('<cfif x>\n<!---\n<cfif y>\ncomment only\n</cfif>\n--->\n<cfset z = 1>\n</cfif>', 'cfml', false),
 	'<cfif x>\n\t<!---\n\t<cfif y>\n\tcomment only\n\t</cfif>\n\t--->\n\t<cfset z = 1>\n</cfif>'
@@ -333,6 +351,18 @@ assertEqual(
 	'default auto-copy keeps beautified output visible',
 	runRouterWithAutoCopy('<cfif x>\n<cfset y = 1>\n</cfif>', 'cfml', true),
 	'<cfif x>\n\t<cfset y = 1>\n</cfif>'
+);
+
+assertEqual(
+	'default auto-copy and auto-clear clears both fields after copy',
+	runRouterWithAutoClears('<cfif x>\n<cfset y = 1>\n</cfif>', 'cfml', true, true),
+	'{"input":"","output":""}'
+);
+
+assertEqual(
+	'auto-clear output keeps result visible when copy fails',
+	runRouterWithAutoClears('<cfif x>\n<cfset y = 1>\n</cfif>', 'cfml', true, false),
+	'{"input":"","output":"<cfif x>\\n\\t<cfset y = 1>\\n</cfif>"}'
 );
 
 assertEqual(

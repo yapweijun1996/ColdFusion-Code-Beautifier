@@ -204,10 +204,12 @@ function beautifyCodes() {
 	var split_html_tag = document.getElementById('split_html_tag').checked;
 	var auto_copy = document.getElementById('auto_copy').checked;
 	var auto_clear = document.getElementById('auto_clear').checked;
+	var auto_clear_output = document.getElementById('auto_clear_output').checked;
 	var deep_format = document.getElementById('deep_format').checked;
 	var rawCode = document.getElementById('input').value;
 	var output = document.getElementById('output');
 	var language = document.getElementById('language').value;
+	var copied = false;
 
 	if(language == 'auto'){
 		language = detectLanguage(rawCode);
@@ -224,9 +226,12 @@ function beautifyCodes() {
 	}
 
 	if(auto_copy == true){
-		copy_output_data();
+		copied = copy_output_data();
 	}
 	if(auto_clear == true){
 		document.getElementById('input').value = '';
+	}
+	if(auto_clear_output == true && (auto_copy != true || copied == true)){
+		output.value = '';
 	}
 }

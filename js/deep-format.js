@@ -137,11 +137,52 @@ function findClosingTagOutsideText(code, tagName, startIndex) {
 
 function protectCFMLTokens(sqlBody) {
 	var tokens = [];
-	var code = sqlBody.replace(/<cfqueryparam\b[^>]*\/?>|<\/?cf\w+\b[^>]*>|##|#(?:##|[^#])+#/gi, function(match) {
+	var code = "";
+	var i = 0;
+
+	function addToken(value) {
 		var id = '__CFTOKEN_' + tokens.length + '__';
-		tokens.push(match);
+		tokens.push(value);
 		return id;
-	});
+	}
+
+	while (i < sqlBody.length) {
+		var char = sqlBody[i];
+
+		if (char == "'" || char == '"' || char == '`') {
+			var quote = char;
+			var quoteStart = i;
+			i++;
+			while (i < sqlBody.length) {
+				if (sqlBody[i] == '\\') {
+					i += 2;
+					continue;
+				}
+				if (sqlBody[i] == quote) {
+					if (sqlBody[i + 1] == quote) {
+						i += 2;
+						continue;
+					}
+					i++;
+					break;
+				}
+				i++;
+			}
+			code += addToken(sqlBody.slice(quoteStart, i));
+			continue;
+		}
+
+		var rest = sqlBody.slice(i);
+		var tokenMatch = rest.match(/^(<!---[\s\S]*?--->|<cfqueryparam\b[^>]*\/?>|<\/?cf\w+\b[^>]*>|##|#(?:##|[^#])+#)/i);
+		if (tokenMatch) {
+			code += addToken(tokenMatch[0]);
+			i += tokenMatch[0].length;
+			continue;
+		}
+
+		code += char;
+		i++;
+	}
 
 	return {
 		code: code,
