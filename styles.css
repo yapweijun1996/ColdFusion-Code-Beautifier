@@ -105,6 +105,31 @@ button:active { transform: translateY(1px); }
 .btn-secondary { background: #007dff; color: #fff; }
 .btn-ghost { background: #f0f0f0; color: #333; }
 
+.language-control {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 14px;
+	color: #555;
+}
+
+.lang-select {
+	min-width: 130px;
+	padding: 10px 12px;
+	font-size: 15px;
+	border: 1px solid #d0d0d0;
+	border-radius: 6px;
+	background: #fff;
+	color: #222;
+	cursor: pointer;
+}
+
+.lang-select:focus {
+	outline: none;
+	border-color: #007dff;
+	box-shadow: 0 0 0 3px rgba(0, 125, 255, 0.15);
+}
+
 .toolbar-options {
 	display: flex;
 	gap: 16px;
@@ -205,6 +230,8 @@ footer a {
 	textarea { min-height: 200px; font-size: 12px; resize: vertical; }
 
 	.toolbar { gap: 8px; }
+	.language-control { width: 100%; justify-content: space-between; }
+	.lang-select { flex: 1; min-width: 0; }
 	button { padding: 10px 14px; font-size: 14px; flex: 1; min-width: 90px; }
 	.btn-primary { flex: 1 1 100%; }
 

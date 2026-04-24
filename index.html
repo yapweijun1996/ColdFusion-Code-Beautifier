@@ -30,6 +30,14 @@
 			</div>
 
 			<div class="toolbar">
+				<label class="language-control" title="SQL formatter works best with standalone queries. Complex procedures may require manual adjustment.">
+					<span>Language</span>
+					<select id="language" class="lang-select">
+						<option value="auto">Auto</option>
+						<option value="cfml">CFML / HTML</option>
+						<option value="sql">SQL</option>
+					</select>
+				</label>
 				<button id="beautify" class="btn-primary" onclick="beautifyCodes()">Beautify</button>
 				<button id="copy" class="btn-secondary" onclick="copy_output_data();">Copy</button>
 				<button id="clear" class="btn-ghost" onclick="clear_data();">Clear</button>
@@ -44,6 +52,8 @@
 			<p>By <a href="https://github.com/yapweijun1996" target="_blank">yapweijun1996</a> @ <span class="at_year"></span></p>
 		</footer>
 		<script src="./js/cf-tags.js"></script>
+		<script src="./js/sql-keywords.js"></script>
+		<script src="./js/sql-beautifier.js"></script>
 		<script src="./js/tag-utils.js"></script>
 		<script src="./js/toast.js"></script>
 		<script src="./js/clipboard.js"></script>
