@@ -1,3 +1,5 @@
+var SQL_LIST_CLAUSES = ['SELECT', 'GROUP BY', 'ORDER BY', 'VALUES'];
+
 function beautifySQL(sql) {
 	var tokens = tokenizeSQL(sql);
 	var lines = [];
@@ -5,19 +7,29 @@ function beautifySQL(sql) {
 	var parenIndent = 0;
 	var parenStack = [];
 	var lastToken = null;
-	
+	var funcDepth = 0;
+	var currentClause = null;
+	var clauseStack = [];
+	var caseLevel = 0;
+	var listItemIndent = 0;
+	var inBetween = false;
+
 	// Known limitations: complex procedures/triggers with BEGIN...END and multiple CTE chains may need manual cleanup.
 	// Strings, quoted identifiers, and comments are preserved as tokens so SQL keywords inside them are not reformatted.
-	function indent() {
-		return ''.padStart(parenIndent, '\t');
+	function indent(extra) {
+		return ''.padStart(parenIndent + caseLevel + listItemIndent + (extra || 0), '\t');
 	}
-	
-	function flushLine() {
+
+	function flushLine(extra) {
 		if (line.trim() != "") {
 			lines.push(line.replace(/\s+$/g, ''));
 		}
-		line = indent();
+		line = indent(extra);
 		lastToken = null;
+	}
+
+	function isListContext() {
+		return currentClause != null && SQL_LIST_CLAUSES.includes(currentClause);
 	}
 	
 	function currentText(token) {
@@ -67,14 +79,26 @@ function beautifySQL(sql) {
 			parenStack.push(isSubquery);
 			if (isSubquery) {
 				parenIndent += 1;
+				clauseStack.push({
+					clause: currentClause,
+					caseLevel: caseLevel,
+					listItemIndent: listItemIndent,
+					inBetween: inBetween
+				});
+				currentClause = null;
+				caseLevel = 0;
+				listItemIndent = 0;
+				inBetween = false;
 				flushLine();
+			} else {
+				funcDepth += 1;
 			}
 			continue;
 		}
-		
+
 		if (token.value == ')') {
-			var closesSubquery = parenStack.pop() == true;
-			if (closesSubquery) {
+			var wasSubquery = parenStack.pop() == true;
+			if (wasSubquery) {
 				if (line.trim() != "") {
 					flushLine();
 				}
@@ -82,25 +106,91 @@ function beautifySQL(sql) {
 				if (parenIndent < 0) {
 					parenIndent = 0;
 				}
+				var prev = clauseStack.pop();
+				currentClause = prev.clause;
+				caseLevel = prev.caseLevel;
+				listItemIndent = prev.listItemIndent;
+				inBetween = prev.inBetween;
 				line = indent();
 				lastToken = null;
+			} else {
+				funcDepth -= 1;
+				if (funcDepth < 0) {
+					funcDepth = 0;
+				}
 			}
 			appendText(')', token);
 			continue;
 		}
-		
-		var clause = matchSQLMajorClause(tokens, i);
-		if (clause != null) {
-			if (line.trim() != "") {
-				flushLine();
-			}
-			appendText(clause.text, {
-				type: 'word'
-			});
-			i += clause.length - 1;
+
+		if (token.value == ',' && isListContext() && funcDepth == 0 && caseLevel == 0) {
+			appendText(',', token);
+			listItemIndent = 1;
+			flushLine();
 			continue;
 		}
-		
+
+		if (token.type == 'word') {
+			var upperValue = token.value.toUpperCase();
+
+			if (upperValue == 'BETWEEN') {
+				inBetween = true;
+			}
+
+			if (upperValue == 'CASE') {
+				appendText('CASE', token);
+				flushLine();
+				caseLevel += 1;
+				line = indent();
+				continue;
+			}
+
+			if (upperValue == 'WHEN' && caseLevel > 0) {
+				if (line.trim() != "") {
+					flushLine();
+				}
+				appendText('WHEN', token);
+				continue;
+			}
+
+			if (upperValue == 'ELSE' && caseLevel > 0) {
+				if (line.trim() != "") {
+					flushLine();
+				}
+				appendText('ELSE', token);
+				continue;
+			}
+
+			if (upperValue == 'END' && caseLevel > 0) {
+				if (line.trim() != "") {
+					flushLine();
+				}
+				caseLevel -= 1;
+				line = indent();
+				appendText('END', token);
+				continue;
+			}
+		}
+
+		var clause = matchSQLMajorClause(tokens, i);
+		if (clause != null) {
+			if (clause.text == 'AND' && inBetween) {
+				inBetween = false;
+			} else {
+				listItemIndent = 0;
+				inBetween = false;
+				if (line.trim() != "") {
+					flushLine();
+				}
+				appendText(clause.text, {
+					type: 'word'
+				});
+				currentClause = clause.text;
+				i += clause.length - 1;
+				continue;
+			}
+		}
+
 		appendText(currentText(token), token);
 	}
 	

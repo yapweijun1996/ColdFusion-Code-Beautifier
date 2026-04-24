@@ -103,13 +103,13 @@ function assertEqual(name, actual, expected) {
 assertEqual(
 	'simple select',
 	runSQL('select u.id, u.name from users u where u.active = 1 order by u.id desc limit 10'),
-	'SELECT u.id, u.name\nFROM users u\nWHERE u.active = 1\nORDER BY u.id DESC\nLIMIT 10'
+	'SELECT u.id,\n\tu.name\nFROM users u\nWHERE u.active = 1\nORDER BY u.id DESC\nLIMIT 10'
 );
 
 assertEqual(
 	'join with subquery',
 	runSQL('select * from orders o left join (select user_id, count(*) c from items group by user_id) i on o.user_id = i.user_id'),
-	'SELECT *\nFROM orders o\nLEFT JOIN (\n\tSELECT user_id, COUNT(*) c\n\tFROM items\n\tGROUP BY user_id\n) i\nON o.user_id = i.user_id'
+	'SELECT *\nFROM orders o\nLEFT JOIN (\n\tSELECT user_id,\n\t\tCOUNT(*) c\n\tFROM items\n\tGROUP BY user_id\n) i\nON o.user_id = i.user_id'
 );
 
 assertEqual(
@@ -145,7 +145,7 @@ assertEqual(
 assertEqual(
 	'mysql backticks and json operator',
 	runSQL('select `user`, data->>\'$.name\' from `users` where name like \'a%\' limit 5, 10'),
-	'SELECT `user`, data->>\'$.name\'\nFROM `users`\nWHERE name LIKE \'a%\'\nLIMIT 5, 10'
+	'SELECT `user`,\n\tdata->>\'$.name\'\nFROM `users`\nWHERE name LIKE \'a%\'\nLIMIT 5, 10'
 );
 
 assertEqual(
@@ -163,7 +163,7 @@ assertEqual(
 assertEqual(
 	'deep cfquery sql',
 	runRouter('<cfquery name="q">\nselect u.id,u.name from users u where u.active=1 order by u.id\n</cfquery>', 'cfml', true),
-	'<cfquery name="q">\n\tSELECT u.id, u.name\n\tFROM users u\n\tWHERE u.active = 1\n\tORDER BY u.id\n</cfquery>'
+	'<cfquery name="q">\n\tSELECT u.id,\n\t\tu.name\n\tFROM users u\n\tWHERE u.active = 1\n\tORDER BY u.id\n</cfquery>'
 );
 
 assertEqual(
@@ -206,6 +206,66 @@ assertEqual(
 	'deep cfquery preserves parent indentation',
 	runRouter('<cfif x>\n<cfquery name="q">\nselect 1\n</cfquery>\n</cfif>', 'cfml', true),
 	'<cfif x>\n\t<cfquery name="q">\n\t\tSELECT 1\n\t</cfquery>\n</cfif>'
+);
+
+assertEqual(
+	'select breaks multiple columns',
+	runSQL('select a, b, c, d from t'),
+	'SELECT a,\n\tb,\n\tc,\n\td\nFROM t'
+);
+
+assertEqual(
+	'select keeps function args on one line',
+	runSQL('select count(a, b), sum(c) from t'),
+	'SELECT COUNT(a, b),\n\tSUM(c)\nFROM t'
+);
+
+assertEqual(
+	'group by breaks columns',
+	runSQL('select x from t group by a, b, c'),
+	'SELECT x\nFROM t\nGROUP BY a,\n\tb,\n\tc'
+);
+
+assertEqual(
+	'order by breaks columns',
+	runSQL('select x from t order by a desc, b asc'),
+	'SELECT x\nFROM t\nORDER BY a DESC,\n\tb ASC'
+);
+
+assertEqual(
+	'insert column list stays in parens',
+	runSQL('insert into t (a, b, c) values (1, 2, 3)'),
+	'INSERT INTO t (a, b, c)\nVALUES (1, 2, 3)'
+);
+
+assertEqual(
+	'deep cfquery real world multi column select',
+	runRouter('<cfif x>\n<cfquery name="q">\nselect a, b as x, c as y, d as z from t where e = 1 and f = 2\n</cfquery>\n</cfif>', 'cfml', true),
+	'<cfif x>\n\t<cfquery name="q">\n\t\tSELECT a,\n\t\t\tb AS x,\n\t\t\tc AS y,\n\t\t\td AS z\n\t\tFROM t\n\t\tWHERE e = 1\n\t\tAND f = 2\n\t</cfquery>\n</cfif>'
+);
+
+assertEqual(
+	'between and not split',
+	runSQL('select * from t where x between 1 and 10'),
+	'SELECT *\nFROM t\nWHERE x BETWEEN 1 AND 10'
+);
+
+assertEqual(
+	'between followed by boolean and',
+	runSQL('select * from t where x between 1 and 10 and y = 2'),
+	'SELECT *\nFROM t\nWHERE x BETWEEN 1 AND 10\nAND y = 2'
+);
+
+assertEqual(
+	'case when basic',
+	runSQL("select case when x = 1 then 'a' else 'b' end as label from t"),
+	"SELECT CASE\n\tWHEN x = 1 THEN 'a'\n\tELSE 'b'\nEND AS label\nFROM t"
+);
+
+assertEqual(
+	'case when multiple branches',
+	runSQL("select id, case when s = 'P' then 'Pending' when s = 'A' then 'Approved' else 'Unknown' end as label from t"),
+	"SELECT id,\n\tCASE\n\t\tWHEN s = 'P' THEN 'Pending'\n\t\tWHEN s = 'A' THEN 'Approved'\n\t\tELSE 'Unknown'\n\tEND AS label\nFROM t"
 );
 
 if (!process.exitCode) {
