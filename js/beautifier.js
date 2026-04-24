@@ -174,6 +174,7 @@ function detectLanguage(code) {
 function beautifyCodes() {
 	var split_html_tag = document.getElementById('split_html_tag').checked;
 	var auto_copy_n_clear_bcontent = document.getElementById('auto_copy_n_clear_bcontent').checked;
+	var deep_format = document.getElementById('deep_format').checked;
 	var rawCode = document.getElementById('input').value;
 	var output = document.getElementById('output');
 	var language = document.getElementById('language').value;
@@ -185,7 +186,11 @@ function beautifyCodes() {
 	if(language == 'sql'){
 		output.value = beautifySQL(rawCode);
 	}else{
-		output.value = beautifyCFML(rawCode, split_html_tag);
+		var result = beautifyCFML(rawCode, split_html_tag);
+		if(deep_format == true){
+			result = deepFormatEmbedded(result);
+		}
+		output.value = result;
 	}
 	
 	if(auto_copy_n_clear_bcontent == true){

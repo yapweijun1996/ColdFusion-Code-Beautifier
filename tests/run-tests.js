@@ -5,6 +5,7 @@ var scripts = [
 	'js/cf-tags.js',
 	'js/sql-keywords.js',
 	'js/sql-beautifier.js',
+	'js/deep-format.js',
 	'js/tag-utils.js',
 	'js/toast.js',
 	'js/clipboard.js',
@@ -15,7 +16,7 @@ var browserCode = scripts.map(function(file) {
 	return fs.readFileSync(file, 'utf8');
 }).join('\n');
 
-function makeContext(input, language, splitHtmlTag) {
+function makeContext(input, language, splitHtmlTag, deepFormat) {
 	var elements = {
 		language: {
 			value: language || 'auto'
@@ -25,6 +26,9 @@ function makeContext(input, language, splitHtmlTag) {
 		},
 		auto_copy_n_clear_bcontent: {
 			checked: false
+		},
+		deep_format: {
+			checked: deepFormat == true
 		},
 		input: {
 			value: input || ''
@@ -81,8 +85,8 @@ function runSQL(input) {
 	return harness.context.beautifySQL(input);
 }
 
-function runRouter(input, language) {
-	var harness = makeContext(input, language || 'auto');
+function runRouter(input, language, deepFormat) {
+	var harness = makeContext(input, language || 'auto', false, deepFormat == true);
 	harness.context.beautifyCodes();
 	return harness.elements.output.value;
 }
@@ -151,9 +155,57 @@ assertEqual(
 );
 
 assertEqual(
-	'cfml routed without sql formatting',
-	runRouter('<cfif x><cfquery name="q">SELECT 1</cfquery></cfif>', 'auto'),
+	'cfml routed without sql formatting when deep format off',
+	runRouter('<cfif x><cfquery name="q">SELECT 1</cfquery></cfif>', 'auto', false),
 	'<cfif x><cfquery name="q">SELECT 1</cfquery></cfif>'
+);
+
+assertEqual(
+	'deep cfquery sql',
+	runRouter('<cfquery name="q">\nselect u.id,u.name from users u where u.active=1 order by u.id\n</cfquery>', 'cfml', true),
+	'<cfquery name="q">\n\tSELECT u.id, u.name\n\tFROM users u\n\tWHERE u.active = 1\n\tORDER BY u.id\n</cfquery>'
+);
+
+assertEqual(
+	'deep cfquery preserves cfqueryparam',
+	runRouter('<cfquery name="q">\nselect * from users where id = <cfqueryparam value="#userId#" cfsqltype="cf_sql_integer">\n</cfquery>', 'cfml', true),
+	'<cfquery name="q">\n\tSELECT *\n\tFROM users\n\tWHERE id = <cfqueryparam value="#userId#" cfsqltype="cf_sql_integer">\n</cfquery>'
+);
+
+assertEqual(
+	'deep style css',
+	runRouter('<style>\nbody{margin:0;color:red}.btn{padding:10px}\n</style>', 'cfml', true),
+	'<style>\n\tbody{margin:0;color:red}\n\t.btn{padding:10px}\n</style>'
+);
+
+assertEqual(
+	'deep script javascript',
+	runRouter('<script>\nif(x){foo();}\n</script>', 'cfml', true),
+	'<script>\n\tif(x){\n\t\tfoo();\n\t}\n</script>'
+);
+
+assertEqual(
+	'script src skipped',
+	runRouter('<script src="app.js"></script>', 'cfml', true),
+	'<script src="app.js"></script>'
+);
+
+assertEqual(
+	'non javascript script skipped',
+	runRouter('<script type="text/x-template"><div>{{ value }}</div></script>', 'cfml', true),
+	'<script type="text/x-template"><div>{{ value }}</div></script>'
+);
+
+assertEqual(
+	'deep cfquery preserves cfif tokens',
+	runRouter('<cfquery name="q">\nselect * from t <cfif showAll>where active=1</cfif>\n</cfquery>', 'cfml', true),
+	'<cfquery name="q">\n\tSELECT *\n\tFROM t <cfif showAll>where active = 1</cfif>\n</cfquery>'
+);
+
+assertEqual(
+	'deep cfquery preserves parent indentation',
+	runRouter('<cfif x>\n<cfquery name="q">\nselect 1\n</cfquery>\n</cfif>', 'cfml', true),
+	'<cfif x>\n\t<cfquery name="q">\n\t\tSELECT 1\n\t</cfquery>\n</cfif>'
 );
 
 if (!process.exitCode) {
