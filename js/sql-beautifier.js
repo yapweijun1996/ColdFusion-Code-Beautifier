@@ -174,13 +174,19 @@ function beautifySQL(sql) {
 			}
 		}
 
-		var clause = matchSQLMajorClause(tokens, i);
-		if (clause != null) {
-			if (clause.text == 'AND' && inBetween) {
-				inBetween = false;
-			} else if (funcDepth > 0) {
-				appendText(clause.text, {
-					type: 'word'
+			var clause = matchSQLMajorClause(tokens, i);
+			if (clause != null) {
+				if (clause.text == 'AND' && inBetween) {
+					inBetween = false;
+				} else if (caseLevel > 0 && ['AND', 'OR'].includes(clause.text)) {
+					appendText(clause.text, {
+						type: 'word'
+					});
+					i += clause.length - 1;
+					continue;
+				} else if (funcDepth > 0) {
+					appendText(clause.text, {
+						type: 'word'
 				});
 				i += clause.length - 1;
 				continue;

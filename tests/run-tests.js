@@ -237,6 +237,12 @@ assertEqual(
 );
 
 assertEqual(
+	'deep cfquery keeps space after dynamic and before paren',
+	runRouter('<cfquery name="q">\nselect * from t where x=1 <cfif y>and (a=1 or b=2)</cfif>\n</cfquery>', 'cfml', true),
+	'<cfquery name="q">\n\tSELECT *\n\tFROM t\n\tWHERE x = 1 <cfif y>AND (a = 1 OR b = 2)</cfif>\n</cfquery>'
+);
+
+assertEqual(
 	'deep cfquery preserves parent indentation',
 	runRouter('<cfif x>\n<cfquery name="q">\nselect 1\n</cfquery>\n</cfif>', 'cfml', true),
 	'<cfif x>\n\t<cfquery name="q">\n\t\tSELECT 1\n\t</cfquery>\n</cfif>'
@@ -312,6 +318,12 @@ assertEqual(
 	'case when multiple branches',
 	runSQL("select id, case when s = 'P' then 'Pending' when s = 'A' then 'Approved' else 'Unknown' end as label from t"),
 	"SELECT id,\n\tCASE\n\t\tWHEN s = 'P' THEN 'Pending'\n\t\tWHEN s = 'A' THEN 'Approved'\n\t\tELSE 'Unknown'\n\tEND AS label\nFROM t"
+);
+
+assertEqual(
+	'case when boolean condition keeps and inline',
+	runSQL("select case when status = 'PENDING' and datediff(day, created_date, getdate()) > 30 then 'overdue' when status = 'PENDING' then 'warning' else 'ok' end as badge_class, case when total_amt between 0 and 1000 then 'small' else 'large' end as amt_tier from t"),
+	"SELECT CASE\n\tWHEN status = 'PENDING' AND datediff(day, created_date, getdate()) > 30 THEN 'overdue'\n\tWHEN status = 'PENDING' THEN 'warning'\n\tELSE 'ok'\nEND AS badge_class,\n\tCASE\n\t\tWHEN total_amt BETWEEN 0 AND 1000 THEN 'small'\n\t\tELSE 'large'\n\tEND AS amt_tier\nFROM t"
 );
 
 assertEqual(
