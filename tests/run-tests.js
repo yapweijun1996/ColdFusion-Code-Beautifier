@@ -419,6 +419,18 @@ assertEqual(
 	'SELECT a - b\nFROM t'
 );
 
+assertEqual(
+	'html attribute with /* not treated as block comment',
+	runRouter('<div>\n<input type="file" accept="image/*">\n<button onclick="foo()">\n<span>ok</span>\n</button>\n</div>', 'cfml', false),
+	'<div>\n\t<input type="file" accept="image/*">\n\t<button onclick="foo()">\n\t\t<span>ok</span>\n\t</button>\n</div>'
+);
+
+assertEqual(
+	'standalone block comment still treated as comment',
+	runRouter('<cfif x>\n/* this spans\nmany lines */\n<cfset y = 1>\n</cfif>', 'cfml', false),
+	'<cfif x>\n\t/* this spans\n\tmany lines */\n\t<cfset y = 1>\n</cfif>'
+);
+
 if (!process.exitCode) {
 	console.log('All tests passed.');
 }

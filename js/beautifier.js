@@ -30,8 +30,8 @@ function beautifyCFML(rawCode, split_html_tag) {
 		var line_data = line.toLowerCase();
 		var opensMarkupComment = line_data.includes('<!---') || line_data.includes('<!--');
 		var closesMarkupComment = line_data.includes('--->') || line_data.includes('-->');
-		var opensBlockComment = line_data.includes('/*');
-		var closesBlockComment = line_data.includes('*/');
+		var opensBlockComment = line_data.startsWith('/*') && !line_data.endsWith('*/');
+		var closesBlockComment = line_data.endsWith('*/');
 
 		if (inMarkupComment || inBlockComment) {
 			applyIndent();
