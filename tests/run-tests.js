@@ -431,6 +431,18 @@ assertEqual(
 	'<cfif x>\n\t/* this spans\n\tmany lines */\n\t<cfset y = 1>\n</cfif>'
 );
 
+assertEqual(
+	'deep format ignores script tag inside cfscript line comment',
+	runRouter('<cfscript>\n// Safe: <script>window.X=1;</script>\nvar y = 2;\n</cfscript>', 'cfml', true),
+	'<cfscript>\n\t// Safe: <script>window.X=1;</script>\n\tvar y = 2;\n</cfscript>'
+);
+
+assertEqual(
+	'deep format ignores cfquery inside cfml markup comment',
+	runRouter('<cfif x>\n<!--- example: <cfquery name="q">SELECT 1</cfquery> --->\n<cfset y = 2>\n</cfif>', 'cfml', true),
+	'<cfif x>\n\t<!--- example: <cfquery name="q">SELECT 1</cfquery> --->\n\t<cfset y = 2>\n</cfif>'
+);
+
 if (!process.exitCode) {
 	console.log('All tests passed.');
 }

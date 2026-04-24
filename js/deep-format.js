@@ -47,15 +47,25 @@ function replaceEmbeddedBlock(code, tagName, formatter) {
 	var openRegex = new RegExp('<' + tagName + '\\b[^>]*>', 'gi');
 
 	while (true) {
+		var openStart = -1;
+		var openEnd = -1;
+		var openMatch = null;
 		openRegex.lastIndex = index;
-		var openMatch = openRegex.exec(code);
+		while (true) {
+			var candidate = openRegex.exec(code);
+			if (!candidate) break;
+			if (isInsideCommentOrString(code, candidate.index)) {
+				continue;
+			}
+			openMatch = candidate;
+			openStart = candidate.index;
+			openEnd = openRegex.lastIndex;
+			break;
+		}
 		if (!openMatch) {
 			output += code.slice(index);
 			break;
 		}
-
-		var openStart = openMatch.index;
-		var openEnd = openRegex.lastIndex;
 		var lineStart = code.lastIndexOf('\n', openStart) + 1;
 		var prefix = code.slice(lineStart, openStart);
 		var parentIndent = /^[ \t]*$/.test(prefix) ? prefix : "";
@@ -75,6 +85,39 @@ function replaceEmbeddedBlock(code, tagName, formatter) {
 	}
 
 	return output;
+}
+
+function isInsideCommentOrString(code, pos) {
+	var quote = "";
+	var inLine = false;
+	var inBlock = false;
+	var inMarkup = false;
+	for (var i = 0; i < pos; i++) {
+		var c = code[i];
+		var n = code[i + 1];
+		if (inLine) {
+			if (c == '\n') inLine = false;
+			continue;
+		}
+		if (inBlock) {
+			if (c == '*' && n == '/') { inBlock = false; i++; }
+			continue;
+		}
+		if (inMarkup) {
+			if (c == '-' && n == '-' && code[i + 2] == '-' && code[i + 3] == '>') { inMarkup = false; i += 3; }
+			continue;
+		}
+		if (quote != "") {
+			if (c == '\\') { i++; continue; }
+			if (c == quote) quote = "";
+			continue;
+		}
+		if (c == '/' && n == '/') { inLine = true; i++; continue; }
+		if (c == '/' && n == '*') { inBlock = true; i++; continue; }
+		if (c == '<' && n == '!' && code[i + 2] == '-' && code[i + 3] == '-' && code[i + 4] == '-') { inMarkup = true; i += 4; continue; }
+		if (c == '"' || c == "'" || c == '`') { quote = c; continue; }
+	}
+	return inLine || inBlock || inMarkup || quote != "";
 }
 
 function findClosingTagOutsideText(code, tagName, startIndex) {
