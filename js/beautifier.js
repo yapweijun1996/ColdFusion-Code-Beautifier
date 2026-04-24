@@ -205,7 +205,9 @@ function beautifyCodes() {
 	var auto_copy = document.getElementById('auto_copy').checked;
 	var auto_clear = document.getElementById('auto_clear').checked;
 	var auto_clear_output = document.getElementById('auto_clear_output').checked;
-	var deep_format = document.getElementById('deep_format').checked;
+	var deep_sql = document.getElementById('deep_sql').checked;
+	var deep_css = document.getElementById('deep_css').checked;
+	var deep_js = document.getElementById('deep_js').checked;
 	var rawCode = document.getElementById('input').value;
 	var output = document.getElementById('output');
 	var language = document.getElementById('language').value;
@@ -219,8 +221,8 @@ function beautifyCodes() {
 		output.value = beautifySQL(rawCode);
 	}else{
 		var result = beautifyCFML(rawCode, split_html_tag);
-		if(deep_format == true){
-			result = deepFormatEmbedded(result);
+		if(deep_sql || deep_css || deep_js){
+			result = deepFormatEmbedded(result, {sql: deep_sql, css: deep_css, js: deep_js});
 		}
 		output.value = result;
 	}

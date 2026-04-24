@@ -1,32 +1,42 @@
-function deepFormatEmbedded(cfmlCode) {
+function deepFormatEmbedded(cfmlCode, opts) {
 	var out = cfmlCode;
+	var options = opts || {};
+	var doSql = options.sql !== false;
+	var doCss = options.css !== false;
+	var doJs = options.js === true;
 
-	out = replaceEmbeddedBlock(out, 'cfquery', function(parentIndent, openTag, body, closeTag) {
-		var protectedSQL = protectCFMLTokens(cleanEmbeddedBody(body));
-		var formattedSQL = beautifySQL(protectedSQL.code);
-		var restoredSQL = restoreCFMLTokens(formattedSQL, protectedSQL.tokens);
-		restoredSQL = cleanRestoredCFMLTokenSpacing(restoredSQL);
+	if (doSql) {
+		out = replaceEmbeddedBlock(out, 'cfquery', function(parentIndent, openTag, body, closeTag) {
+			var protectedSQL = protectCFMLTokens(cleanEmbeddedBody(body));
+			var formattedSQL = beautifySQL(protectedSQL.code);
+			var restoredSQL = restoreCFMLTokens(formattedSQL, protectedSQL.tokens);
+			restoredSQL = cleanRestoredCFMLTokenSpacing(restoredSQL);
 
-		return parentIndent + openTag + '\n' + indentEmbeddedBody(restoredSQL, parentIndent) + '\n' + parentIndent + closeTag;
-	});
+			return parentIndent + openTag + '\n' + indentEmbeddedBody(restoredSQL, parentIndent) + '\n' + parentIndent + closeTag;
+		});
+	}
 
-	out = replaceEmbeddedBlock(out, 'script', function(parentIndent, openTag, body, closeTag) {
-		if (!shouldFormatScript(openTag) || body.trim() == "") {
-			return parentIndent + openTag + body + closeTag;
-		}
+	if (doJs) {
+		out = replaceEmbeddedBlock(out, 'script', function(parentIndent, openTag, body, closeTag) {
+			if (!shouldFormatScript(openTag) || body.trim() == "") {
+				return parentIndent + openTag + body + closeTag;
+			}
 
-		var formattedJS = formatBraceCode(cleanEmbeddedBody(body), false);
-		return parentIndent + openTag + '\n' + indentEmbeddedBody(formattedJS, parentIndent) + '\n' + parentIndent + closeTag;
-	});
+			var formattedJS = formatBraceCode(cleanEmbeddedBody(body), false);
+			return parentIndent + openTag + '\n' + indentEmbeddedBody(formattedJS, parentIndent) + '\n' + parentIndent + closeTag;
+		});
+	}
 
-	out = replaceEmbeddedBlock(out, 'style', function(parentIndent, openTag, body, closeTag) {
-		if (body.trim() == "") {
-			return parentIndent + openTag + body + closeTag;
-		}
+	if (doCss) {
+		out = replaceEmbeddedBlock(out, 'style', function(parentIndent, openTag, body, closeTag) {
+			if (body.trim() == "") {
+				return parentIndent + openTag + body + closeTag;
+			}
 
-		var formattedCSS = formatCSSCode(cleanEmbeddedBody(body));
-		return parentIndent + openTag + '\n' + indentEmbeddedBody(formattedCSS, parentIndent) + '\n' + parentIndent + closeTag;
-	});
+			var formattedCSS = formatCSSCode(cleanEmbeddedBody(body));
+			return parentIndent + openTag + '\n' + indentEmbeddedBody(formattedCSS, parentIndent) + '\n' + parentIndent + closeTag;
+		});
+	}
 
 	return out;
 }

@@ -33,7 +33,13 @@ function makeContext(input, language, splitHtmlTag, deepFormat, autoCopy, autoCl
 		auto_clear_output: {
 			checked: autoClearOutput == true
 		},
-		deep_format: {
+		deep_sql: {
+			checked: deepFormat == true
+		},
+		deep_css: {
+			checked: deepFormat == true
+		},
+		deep_js: {
 			checked: deepFormat == true
 		},
 		input: {
@@ -50,12 +56,12 @@ function makeContext(input, language, splitHtmlTag, deepFormat, autoCopy, autoCl
 			log: function() {}
 		},
 		document: {
-				getElementById: function(id) {
-					return elements[id];
-				},
-				execCommand: function() {
-					return copyResult !== false;
-				},
+			getElementById: function(id) {
+				return elements[id];
+			},
+			execCommand: function() {
+				return copyResult !== false;
+			},
 			querySelector: function() {
 				return {
 					prepend: function() {}
