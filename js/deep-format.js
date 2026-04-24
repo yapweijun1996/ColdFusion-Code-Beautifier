@@ -271,7 +271,8 @@ function indentEmbeddedBody(body, parentIndent) {
 
 function formatBraceCode(code, splitAdjacentBlocks) {
 	var protectedText = protectBraceCodeText(code);
-	var normalized = protectedText.code;
+	var protectedParens = protectBraceCodeParens(protectedText.code);
+	var normalized = protectedParens.code;
 
 	if (splitAdjacentBlocks == true) {
 		normalized = normalized.replace(/}\s*(?=[.#A-Za-z_*[])/g, '}\n');
@@ -311,7 +312,9 @@ function formatBraceCode(code, splitAdjacentBlocks) {
 		}
 	}
 
-	return restoreBraceCodeText(output.join('\n'), protectedText.tokens);
+	var joined = output.join('\n');
+	joined = restoreBraceCodeParens(joined, protectedParens.tokens);
+	return restoreBraceCodeText(joined, protectedText.tokens);
 }
 
 function formatCSSCode(code) {
@@ -350,29 +353,11 @@ function protectBraceCodeText(code) {
 	var tokens = [];
 	var output = "";
 	var i = 0;
+	var lastSig = null;
 
 	while (i < code.length) {
 		var char = code[i];
 		var nextChar = code[i + 1];
-
-		if (char == "'" || char == '"' || char == '`') {
-			var quote = char;
-			var start = i;
-			i++;
-			while (i < code.length) {
-				if (code[i] == '\\') {
-					i += 2;
-					continue;
-				}
-				if (code[i] == quote) {
-					i++;
-					break;
-				}
-				i++;
-			}
-			output += addBraceCodeToken(tokens, code.slice(start, i));
-			continue;
-		}
 
 		if (char == '/' && nextChar == '/') {
 			var lineStart = i;
@@ -397,6 +382,80 @@ function protectBraceCodeText(code) {
 			continue;
 		}
 
+		if (char == '/' && (lastSig == null || lastSig == 'operator')) {
+			var regexStart = i;
+			var scan = i + 1;
+			var inClass = false;
+			var closed = false;
+			while (scan < code.length) {
+				var rc = code[scan];
+				if (rc == '\\') { scan += 2; continue; }
+				if (rc == '\n') break;
+				if (rc == '[') inClass = true;
+				else if (rc == ']') inClass = false;
+				else if (rc == '/' && !inClass) { scan++; closed = true; break; }
+				scan++;
+			}
+			if (closed) {
+				while (scan < code.length && /[gimsuy]/.test(code[scan])) {
+					scan++;
+				}
+				output += addBraceCodeToken(tokens, code.slice(regexStart, scan));
+				i = scan;
+				lastSig = 'value';
+				continue;
+			}
+		}
+
+		if (char == "'" || char == '"') {
+			var quote = char;
+			var strStart = i;
+			i++;
+			while (i < code.length) {
+				if (code[i] == '\\') { i += 2; continue; }
+				if (code[i] == '\n') break;
+				if (code[i] == quote) { i++; break; }
+				i++;
+			}
+			output += addBraceCodeToken(tokens, code.slice(strStart, i));
+			lastSig = 'value';
+			continue;
+		}
+
+		if (char == '`') {
+			var tmplStart = i;
+			i++;
+			var exprDepth = 0;
+			while (i < code.length) {
+				var tc = code[i];
+				if (tc == '\\') { i += 2; continue; }
+				if (tc == '$' && code[i + 1] == '{' && exprDepth == 0) {
+					exprDepth++;
+					i += 2;
+					continue;
+				}
+				if (exprDepth > 0 && tc == '{') { exprDepth++; i++; continue; }
+				if (exprDepth > 0 && tc == '}') { exprDepth--; i++; continue; }
+				if (tc == '`' && exprDepth == 0) { i++; break; }
+				i++;
+			}
+			output += addBraceCodeToken(tokens, code.slice(tmplStart, i));
+			lastSig = 'value';
+			continue;
+		}
+
+		if (/\s/.test(char)) {
+			output += char;
+			i++;
+			continue;
+		}
+
+		if (char == ')' || char == ']' || /[A-Za-z0-9_$]/.test(char)) {
+			lastSig = 'value';
+		} else {
+			lastSig = 'operator';
+		}
+
 		output += char;
 		i++;
 	}
@@ -405,6 +464,51 @@ function protectBraceCodeText(code) {
 		code: output,
 		tokens: tokens
 	};
+}
+
+function protectBraceCodeParens(code) {
+	var tokens = [];
+	var output = "";
+	var i = 0;
+
+	while (i < code.length) {
+		var char = code[i];
+
+		if (char == '(') {
+			var start = i;
+			var depth = 1;
+			i++;
+			while (i < code.length && depth > 0) {
+				var c = code[i];
+				if (c == '(') { depth++; i++; continue; }
+				if (c == ')') { depth--; i++; continue; }
+				i++;
+			}
+			output += addBraceCodeParenToken(tokens, code.slice(start, i));
+			continue;
+		}
+
+		output += char;
+		i++;
+	}
+
+	return {
+		code: output,
+		tokens: tokens
+	};
+}
+
+function addBraceCodeParenToken(tokens, value) {
+	var id = '__BRACEPAREN_' + tokens.length + '__';
+	tokens.push(value);
+	return id;
+}
+
+function restoreBraceCodeParens(code, tokens) {
+	for (var i = 0; i < tokens.length; i++) {
+		code = code.split('__BRACEPAREN_' + i + '__').join(tokens[i]);
+	}
+	return code;
 }
 
 function addBraceCodeToken(tokens, value) {

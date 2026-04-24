@@ -240,6 +240,30 @@ assertEqual(
 );
 
 assertEqual(
+	'deep script preserves semicolon inside double quoted html string',
+	runRouter('<script>\nh += "<td style=\'box-sizing:border-box;\' align=\'left\'>Supplier\'s Quote:&nbsp;&nbsp;x</td>";\n</script>', 'cfml', true),
+	'<script>\n\th += "<td style=\'box-sizing:border-box;\' align=\'left\'>Supplier\'s Quote:&nbsp;&nbsp;x</td>";\n</script>'
+);
+
+assertEqual(
+	'deep script keeps for loop semicolons inline',
+	runRouter('<script>\nfor (var i = 0; i < n; i++) { foo(i); }\n</script>', 'cfml', true),
+	'<script>\n\tfor (var i = 0; i < n; i++) {\n\t\tfoo(i);\n\t}\n</script>'
+);
+
+assertEqual(
+	'deep script preserves template literal with expression',
+	runRouter('<script>\nvar s = `<div>${name}; end</div>`;\n</script>', 'cfml', true),
+	'<script>\n\tvar s = `<div>${name}; end</div>`;\n</script>'
+);
+
+assertEqual(
+	'deep script preserves regex literal with semicolon',
+	runRouter('<script>\nvar r = /^a;b$/gi;\nif(x){}\n</script>', 'cfml', true),
+	'<script>\n\tvar r = /^a;b$/gi;\n\tif(x){\n\t}\n</script>'
+);
+
+assertEqual(
 	'script src skipped',
 	runRouter('<script src="app.js"></script>', 'cfml', true),
 	'<script src="app.js"></script>'
