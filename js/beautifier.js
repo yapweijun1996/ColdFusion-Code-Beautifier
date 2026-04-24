@@ -202,7 +202,8 @@ function detectLanguage(code) {
 
 function beautifyCodes() {
 	var split_html_tag = document.getElementById('split_html_tag').checked;
-	var auto_copy_n_clear_bcontent = document.getElementById('auto_copy_n_clear_bcontent').checked;
+	var auto_copy = document.getElementById('auto_copy').checked;
+	var auto_clear = document.getElementById('auto_clear').checked;
 	var deep_format = document.getElementById('deep_format').checked;
 	var rawCode = document.getElementById('input').value;
 	var output = document.getElementById('output');
@@ -222,7 +223,10 @@ function beautifyCodes() {
 		output.value = result;
 	}
 
-	if(auto_copy_n_clear_bcontent == true){
+	if(auto_copy == true){
 		copy_output_data();
+	}
+	if(auto_clear == true){
+		document.getElementById('input').value = '';
 	}
 }

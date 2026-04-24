@@ -24,8 +24,11 @@ function makeContext(input, language, splitHtmlTag, deepFormat, autoCopyAndClear
 		split_html_tag: {
 			checked: splitHtmlTag == true
 		},
-		auto_copy_n_clear_bcontent: {
+		auto_copy: {
 			checked: autoCopyAndClear == true
+		},
+		auto_clear: {
+			checked: false
 		},
 		deep_format: {
 			checked: deepFormat == true
