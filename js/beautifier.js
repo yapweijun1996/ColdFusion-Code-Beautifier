@@ -10,6 +10,8 @@ function beautifyCFML(rawCode, split_html_tag) {
 	var indentSpace = 0;
 	var inMarkupComment = false;
 	var inBlockComment = false;
+	var commentOrigPrefix = "";
+	var commentNewPrefix = "";
 
 	function applyIndent() {
 		if(indentLevel != 0 && indentSize != 0){
@@ -34,7 +36,11 @@ function beautifyCFML(rawCode, split_html_tag) {
 		var closesBlockComment = line_data.endsWith('*/');
 
 		if (inMarkupComment || inBlockComment) {
-			applyIndent();
+			// Shift continuation line's leading whitespace so alignment
+			// relative to the opening line is preserved.
+			if (lines[i].indexOf(commentOrigPrefix) === 0) {
+				lines[i] = commentNewPrefix + lines[i].substring(commentOrigPrefix.length);
+			}
 			if (inMarkupComment && closesMarkupComment) {
 				inMarkupComment = false;
 			}
@@ -45,13 +51,17 @@ function beautifyCFML(rawCode, split_html_tag) {
 		}
 
 		if (opensMarkupComment && !closesMarkupComment) {
+			commentOrigPrefix = (lines[i].match(/^[ \t]*/) || [""])[0];
 			applyIndent();
+			commentNewPrefix = ''.padStart(indentSpace, '\t');
 			inMarkupComment = true;
 			continue;
 		}
 
 		if (opensBlockComment && !closesBlockComment) {
+			commentOrigPrefix = (lines[i].match(/^[ \t]*/) || [""])[0];
 			applyIndent();
+			commentNewPrefix = ''.padStart(indentSpace, '\t');
 			inBlockComment = true;
 			continue;
 		}
