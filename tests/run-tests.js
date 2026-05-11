@@ -186,9 +186,9 @@ assertEqual(
 );
 
 assertEqual(
-	'cfml routed without sql formatting when deep format off',
+	'cfml routed without sql formatting when deep format off (CFML tags get auto-split onto own lines, SQL body verbatim)',
 	runRouter('<cfif x><cfquery name="q">SELECT 1</cfquery></cfif>', 'auto', false),
-	'<cfif x><cfquery name="q">SELECT 1</cfquery></cfif>'
+	'<cfif x>\n\t<cfquery name="q">SELECT 1</cfquery>\n</cfif>'
 );
 
 assertEqual(
@@ -226,6 +226,60 @@ assertEqual(
 		true
 	),
 	"<cfquery name=\"a\">\n\tSELECT 'it''s ok' AS x\n\tFROM t\n</cfquery>\n<cfquery name=\"b\">\n\tSELECT id\n\tFROM u\n</cfquery>"
+);
+
+/* splitAdjacentCFMLTags — auto-split feature regression suite.
+ * Covers the real-world legacy patterns that motivated this feature:
+ * multiple <cfset>/<cfparam>/<cfinclude> jammed onto one line, often
+ * with CFML markup comments mixed in. Also pins the safe-skip semantics
+ * for inline cfif and opaque blocks (script/style/cfquery).
+ */
+assertEqual(
+	'auto-split: three adjacent cfset on one line',
+	runRouter('<cfset a = 1><cfset b = 2><cfset c = 3>', 'cfml', false),
+	'<cfset a = 1>\n<cfset b = 2>\n<cfset c = 3>'
+);
+
+assertEqual(
+	'auto-split: cfset / cfml-comment / cfset on one line',
+	runRouter('<cfset a = 1><!---<cfset old = 2>---><cfset c = 3>', 'cfml', false),
+	'<cfset a = 1>\n<!---<cfset old = 2>--->\n<cfset c = 3>'
+);
+
+assertEqual(
+	'auto-split: cfif open + cfinclude + cfif close on one line — split + close on own line',
+	runRouter('<cfif x><cfinclude template="foo.cfm"></cfif>', 'cfml', false),
+	'<cfif x>\n\t<cfinclude template="foo.cfm">\n</cfif>'
+);
+
+assertEqual(
+	'auto-split does NOT touch inline <cfif x>1<cfelse>0</cfif> (no `>` `<` boundary)',
+	runRouter('<cfif x>1<cfelse>0</cfif>', 'cfml', false),
+	'<cfif x>1<cfelse>0</cfif>'
+);
+
+assertEqual(
+	'auto-split skips contents of <script> block (JS strings can contain anything)',
+	runRouter('<script>var x = "<cfset y=1>";</script>', 'cfml', false),
+	'<script>var x = "<cfset y=1>";</script>'
+);
+
+assertEqual(
+	'auto-split skips contents of <cfquery> block (cfqueryparam stays inline with SQL)',
+	runRouter('<cfquery name="q">SELECT 1<cfqueryparam value="1" cfsqltype="cf_sql_integer"></cfquery>', 'cfml', false),
+	'<cfquery name="q">SELECT 1<cfqueryparam value="1" cfsqltype="cf_sql_integer"></cfquery>'
+);
+
+assertEqual(
+	'auto-split: cfparam + cfinclude on one line',
+	runRouter('<cfparam name="x" default=""><cfinclude template="bar.cfm">', 'cfml', false),
+	'<cfparam name="x" default="">\n<cfinclude template="bar.cfm">'
+);
+
+assertEqual(
+	'auto-split: nested cfif with inner cfset gets fully split (each tag own line)',
+	runRouter('<cfif a><cfif b><cfset x = 1></cfif></cfif>', 'cfml', false),
+	'<cfif a>\n\t<cfif b>\n\t\t<cfset x = 1>\n\t</cfif>\n</cfif>'
 );
 
 /* Lite path keyword coverage: cfquery with structural cfif inside takes the

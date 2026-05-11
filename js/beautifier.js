@@ -1,8 +1,167 @@
+/* Default-on, no checkbox: when an "executive" CFML tag (cfset, cfparam,
+ * cfinclude, cfreturn) follows the closing `>` of any other tag on the
+ * SAME line, insert a newline + the original line's leading whitespace
+ * so each executive tag lives on its own line.
+ *
+ * Why default-on: there is no legitimate visual or semantic reason to
+ * glue two <cfset> tags together on one line — splitting is a strict
+ * improvement, never a regression. Real-world legacy CFML routinely
+ * has lines like
+ *   <cfset a = 1><cfset b = 2><cfset c = 3>
+ *   <cfset x = "old"><!---<cfset x = "older"---><cfset x = "new">
+ * which become un-readable after the outer beautifier re-indents.
+ *
+ * Skipped contexts (parser is opaque inside these — we never split):
+ *   - CFML markup comment   <!--- ... --->
+ *   - HTML comment          <!-- ... -->
+ *   - Single/double quoted strings
+ *   - <script>...</script>   (JS body)
+ *   - <style>...</style>     (CSS body)
+ *   - <cfquery>...</cfquery> (SQL body — has its own dispatch)
+ *
+ * Why these particular tags: cfset / cfparam / cfinclude / cfreturn are
+ * unambiguously line-level statements; there is no inline grammar where
+ * two of them on one line is desired. cfif / cfqueryparam are EXCLUDED
+ * because both have legitimate inline uses (`<cfif x>1<cfelse>0</cfif>`
+ * and `WHERE x = <cfqueryparam>`).
+ */
+function splitAdjacentCFMLTags(code) {
+	if (typeof code !== 'string' || code === '') return code;
+
+	// Splittable: any <cfXXX> open or </cfXXX> close, EXCEPT <cfqueryparam>
+	// and <cfargument> (both have legitimate inline-with-other-content uses).
+	// Leading <!--- or <!-- (comment opener) also acts as a split boundary so
+	//   <cfset a = 1><!---<cfset b = 2>---><cfset c = 3>
+	// becomes 3 lines with the comment as a standalone middle line.
+	var SPLITTABLE_RE = /^<(\/?cf(?!queryparam\b|argument\b)[a-z]+\b|!---|!--)/i;
+	var lower = code.toLowerCase();
+	var out = '';
+	var i = 0;
+
+	function leadingWsOfInputLine(pos) {
+		var lineStart = code.lastIndexOf('\n', pos) + 1;
+		var firstNonWs = lineStart;
+		while (firstNonWs < code.length && (code[firstNonWs] === ' ' || code[firstNonWs] === '\t')) firstNonWs++;
+		return code.slice(lineStart, firstNonWs);
+	}
+
+	function emitRegion(endNeedle) {
+		// Emits up to and including the closing needle, advances i past it.
+		var j = lower.indexOf(endNeedle, i);
+		if (j === -1) {
+			out += code.slice(i);
+			i = code.length;
+			return;
+		}
+		out += code.slice(i, j + endNeedle.length);
+		i = j + endNeedle.length;
+	}
+
+	function maybeSplitBefore(pos) {
+		// Split at pos ONLY when:
+		//   1. pos (after optional whitespace) starts with a SPLITTABLE_RE
+		//      pattern (CFML tag open / close / comment open).
+		//   2. The current OUTPUT line's last non-whitespace character is `>`
+		//      — i.e., we're at a tag-to-tag boundary, NOT mid-content.
+		// Rule (2) is what protects inline patterns like
+		//   <cfif x>1<cfelse>0</cfif>
+		// from being split: at the position of `<cfelse>`, the prev non-ws
+		// in output is `1`, not `>`, so no split.
+		var j = pos;
+		while (j < code.length && (code[j] === ' ' || code[j] === '\t')) j++;
+		if (j >= code.length || code[j] !== '<') return false;
+		if (!SPLITTABLE_RE.test(code.slice(j))) return false;
+		var outLastNl = out.lastIndexOf('\n');
+		var outLineTail = outLastNl === -1 ? out : out.slice(outLastNl + 1);
+		var trimmed = outLineTail.replace(/[ \t]+$/, '');
+		if (trimmed === '' || !trimmed.endsWith('>')) return false;
+		out += '\n' + leadingWsOfInputLine(pos);
+		i = j;
+		return true;
+	}
+
+	while (i < code.length) {
+		// Order matters: longer literal first (`<!---` before `<!--`).
+		if (lower.startsWith('<!---', i)) {
+			if (maybeSplitBefore(i)) continue;
+			out += '<!---'; i += 5;
+			emitRegion('--->');
+			continue;
+		}
+		if (lower.startsWith('<!--', i)) {
+			if (maybeSplitBefore(i)) continue;
+			out += '<!--'; i += 4;
+			emitRegion('-->');
+			continue;
+		}
+		// Opaque blocks: emit open tag verbatim, then skip to closer.
+		var rest = lower.slice(i, i + 8);
+		if (/^<script\b/.test(rest)) {
+			if (maybeSplitBefore(i)) continue;
+			var oe = code.indexOf('>', i);
+			if (oe === -1) { out += code.slice(i); i = code.length; continue; }
+			out += code.slice(i, oe + 1);
+			i = oe + 1;
+			emitRegion('</script>');
+			continue;
+		}
+		if (/^<style\b/.test(rest)) {
+			if (maybeSplitBefore(i)) continue;
+			var oe2 = code.indexOf('>', i);
+			if (oe2 === -1) { out += code.slice(i); i = code.length; continue; }
+			out += code.slice(i, oe2 + 1);
+			i = oe2 + 1;
+			emitRegion('</style>');
+			continue;
+		}
+		if (/^<cfquery\b/.test(rest)) {
+			if (maybeSplitBefore(i)) continue;
+			var oe3 = code.indexOf('>', i);
+			if (oe3 === -1) { out += code.slice(i); i = code.length; continue; }
+			out += code.slice(i, oe3 + 1);
+			i = oe3 + 1;
+			emitRegion('</cfquery>');
+			continue;
+		}
+		// At a splittable open tag (cf*, /cf*) — check for split-before.
+		if (code[i] === '<' && SPLITTABLE_RE.test(code.slice(i)) && maybeSplitBefore(i)) {
+			continue;
+		}
+		// Quote (string literal) — emit verbatim until matching close.
+		var c = code[i];
+		if (c === '"' || c === "'") {
+			out += c;
+			i++;
+			while (i < code.length) {
+				if (code[i] === c) {
+					if (code[i + 1] === c) {  // SQL-style doubled-quote escape
+						out += c + c;
+						i += 2;
+						continue;
+					}
+					out += c;
+					i++;
+					break;
+				}
+				out += code[i];
+				i++;
+			}
+			continue;
+		}
+		out += c;
+		i++;
+	}
+
+	return out;
+}
+
 function beautifyCFML(rawCode, split_html_tag) {
 
 	if(split_html_tag == true){
 		rawCode = rawCode.replace(/></g, '>\n<');
 	}
+
+	rawCode = splitAdjacentCFMLTags(rawCode);
 
 	var lines = rawCode.split('\n');
 	var indentLevel = 0;
