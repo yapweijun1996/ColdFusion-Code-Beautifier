@@ -228,6 +228,63 @@ assertEqual(
 	"<cfquery name=\"a\">\n\tSELECT 'it''s ok' AS x\n\tFROM t\n</cfquery>\n<cfquery name=\"b\">\n\tSELECT id\n\tFROM u\n</cfquery>"
 );
 
+/* Lite path keyword coverage: cfquery with structural cfif inside takes the
+ * Tier 2 verbatim path. Even though full Pro SQL re-format is skipped, the
+ * Lite uppercase pass MUST still uppercase common SQL keywords like `as`,
+ * `using`, `cast`, `over` — otherwise output looks half-formatted. This
+ * regression test pins the issue found in sample/test.cfm cfquery #11
+ * (qs_result_main with cfif body and lowercase `as` aliases).
+ */
+(function runLiteUppercaseAsKeywords() {
+	var fs2 = require('fs');
+	var vendorPath2 = 'vendor/sql-formatter.min.js';
+	if (!fs2.existsSync(vendorPath2)) {
+		console.log('SKIP Lite-AS test (vendor bundle missing)');
+		return;
+	}
+	var sqlFormatter2 = require('../' + vendorPath2);
+	var proSrc2 = fs2.readFileSync('js/pro-sql.js', 'utf8');
+	var browserCode2 = scripts.map(function(file) { return fs2.readFileSync(file, 'utf8'); }).join('\n');
+	// cfquery body has cfif → goes through Tier 2 verbatim. The body has
+	// lowercase `as` (column alias) and `as` (table alias) — both must be
+	// uppercased by Lite uppercase, otherwise the output is inconsistent.
+	var input = '<cfquery name="q">\n\tselect a.id as user_id, b.name as full_name\n\tfrom users a\n\tinner join profile b on a.id = b.uid\n\t<cfif x>\n\t\twhere a.active = 1\n\t<cfelse>\n\t\twhere a.active = 0\n\t</cfif>\n</cfquery>';
+	var elements3 = {
+		language: { value: 'cfml' }, split_html_tag: { checked: false },
+		auto_copy: { checked: false }, auto_clear: { checked: false }, auto_clear_output: { checked: false },
+		deep_sql: { checked: true }, deep_css: { checked: false }, deep_js: { checked: false },
+		pro_sql: { checked: true }, pro_sql_dialect: { value: 'mysql' },
+		input: { value: input }, output: { value: '', select: function() {} }
+	};
+	var ctx3 = {
+		console: { log: function() {}, warn: function() {} },
+		window: { sqlFormatter: sqlFormatter2 },
+		document: {
+			getElementById: function(id) { return elements3[id]; },
+			execCommand: function() { return true; },
+			querySelector: function() { return { prepend: function() {}, textContent: '' }; },
+			createElement: function() { return { className: '', innerHTML: '', style:{setProperty:function(){}}, classList:{add:function(){},remove:function(){}}, addEventListener:function(){}, remove:function(){} }; },
+			addEventListener: function() {}, readyState: 'complete'
+		},
+		setTimeout: setTimeout, clearTimeout: clearTimeout
+	};
+	vm.createContext(ctx3);
+	vm.runInContext(proSrc2 + '\n' + browserCode2, ctx3);
+	ctx3.beautifyCodes();
+	var out = elements3.output.value;
+	if (/\bas\s/i.test(out) && !/\bAS\s/.test(out)) {
+		console.log('FAIL: Lite uppercase did not touch `as` keyword. Output:');
+		console.log(out);
+		process.exitCode = 1;
+	} else if (/\b(as|inner join|where|from|select|and|or)\b/.test(out)) {
+		console.log('FAIL: lowercase SQL keyword survived Lite uppercase pass. Output:');
+		console.log(out);
+		process.exitCode = 1;
+	} else {
+		console.log('PASS: Lite uppercase covers AS, INNER JOIN, WHERE, FROM, SELECT on Tier 2 verbatim path');
+	}
+})();
+
 assertEqual(
 	'CFML string with backslash before closing quote (Windows path) does NOT swallow the closer — subsequent cfquery still parses',
 	// CFML strings do NOT use C/JS-style backslash escapes. A literal Windows

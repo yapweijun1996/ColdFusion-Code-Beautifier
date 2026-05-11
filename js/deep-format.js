@@ -470,13 +470,15 @@ function formatStrippedTree(treeLines) {
 var PRO_SQL_KEYWORDS = [
 	'inner join', 'left outer join', 'right outer join', 'full outer join',
 	'left join', 'right join', 'full join', 'cross join', 'outer join',
-	'group by', 'order by', 'union all', 'partition by',
+	'natural join', 'natural left join', 'natural right join',
+	'group by', 'order by', 'union all', 'partition by', 'within group',
 	'select', 'distinct', 'from', 'where', 'and', 'or', 'not',
 	'insert into', 'insert', 'into', 'values', 'update', 'set', 'delete', 'truncate',
-	'join', 'on', 'having', 'union', 'with',
+	'join', 'on', 'having', 'union', 'intersect', 'except', 'with', 'using',
 	'case', 'when', 'then', 'else', 'end',
 	'in', 'between', 'like', 'is', 'null', 'exists',
-	'asc', 'desc', 'limit', 'offset', 'returning',
+	'as', 'asc', 'desc', 'limit', 'offset', 'returning',
+	'cast', 'over',
 	'create', 'table', 'view', 'index', 'drop', 'alter', 'add', 'column',
 	'primary', 'key', 'foreign', 'references', 'constraint', 'default', 'unique',
 	'top', 'fetch', 'next', 'rows', 'only'

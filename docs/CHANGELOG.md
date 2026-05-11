@@ -2,6 +2,25 @@
 
 ## v6 series (2026-05-11)
 
+### Feat: PRO_SQL_KEYWORDS now covers `AS`, `USING`, `CAST`, `OVER`, `INTERSECT`, `EXCEPT`, `WITHIN GROUP`, `NATURAL JOIN`, etc. — Tier 2 Lite uppercase pass is no longer half-applied
+
+When a `<cfquery>` body contains structural CFML control flow (cfif/cfloop), deep-format takes the **Tier 2 verbatim** path: layout is preserved, but SQL keywords still get uppercased via the Lite pass (`uppercaseSQLKeywordsInProtected`). Until now this list was missing several common SQL keywords — most notably `AS`, the column/table aliasing keyword. Real-world cfqueries like
+
+```cfml
+<cfquery name="q">
+	SELECT scm.uniquenum_uniq as vehicle_unique, scm.tag_others01 as bank_act_yn
+	FROM set_cnpj_main as scm
+	INNER JOIN set_cnpj_body as scb ON scm.uniquenum_pri = scb.uniquenum_pri
+	<cfif x>WHERE ...<cfelse>WHERE ...</cfif>
+</cfquery>
+```
+
+came out of the beautifier with `as` still lowercase — visually inconsistent with the uppercase `SELECT`/`FROM`/`WHERE` next to it.
+
+Added: `as`, `using`, `cast`, `over`, `intersect`, `except`, `within group`, `natural join`, `natural left join`, `natural right join`. All entries are word-boundary matched (`\bkw\b`) so none of them collide with column names like `cast_id`, `coverage`, or `as_of_date`.
+
+1 new e2e regression test (Tier 2 verbatim path with cfif inside) — fails if any of `as`/`inner join`/`where`/`from`/`select`/`and`/`or` survives lowercase. 90 tests total, green. `sw.js` `CACHE_VERSION` → `v2026-05-11-12`.
+
 ### Fix: CFML strings no longer treat `\"` as an escape — Windows-path strings stop swallowing the closing quote
 
 **Root cause of "13 cfqueries in sample/test.cfm — all skipped, no warning":**
