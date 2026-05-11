@@ -216,6 +216,19 @@ assertEqual(
 );
 
 assertEqual(
+	'sql doubled-quote escape does NOT confuse parser state — subsequent cfquery still gets deep-formatted',
+	runRouter(
+		// Earlier cfquery has 'it''s' SQL escape; without the fix in
+		// isInsideCommentOrString the second cfquery would be skipped
+		// because the quote-state machine never balances.
+		"<cfquery name=\"a\">\nselect 'it''s ok' as x from t\n</cfquery>\n<cfquery name=\"b\">\nselect id from u\n</cfquery>",
+		'cfml',
+		true
+	),
+	"<cfquery name=\"a\">\n\tSELECT 'it''s ok' AS x\n\tFROM t\n</cfquery>\n<cfquery name=\"b\">\n\tSELECT id\n\tFROM u\n</cfquery>"
+);
+
+assertEqual(
 	'deep style css',
 	runRouter('<style>\nbody{margin:0;color:red}.btn{padding:10px}\n</style>', 'cfml', true),
 	'<style>\n\tbody{margin:0;color:red}\n\t.btn{padding:10px}\n</style>'

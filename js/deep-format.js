@@ -801,6 +801,9 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 					formattedSQL = beautifySQL(protectedSQL.code);
 				}
 			} else {
+				if (sqlPro && typeof console !== 'undefined' && console.warn) {
+					console.warn('[deep-format] Pro SQL checkbox is ON but engine not ready (cfquery #' + currentIndex + '), falling back to built-in beautifySQL. isProSQLLoaded():', (typeof isProSQLLoaded === 'function' && isProSQLLoaded()), 'formatProSQLSync:', typeof formatProSQLSync);
+				}
 				formattedSQL = beautifySQL(protectedSQL.code);
 			}
 			var restoredSQL = restoreCFMLTokens(formattedSQL, protectedSQL.tokens);
@@ -903,7 +906,15 @@ function isInsideCommentOrString(code, pos) {
 		}
 		if (quote != "") {
 			if (c == '\\') { i++; continue; }
-			if (c == quote) quote = "";
+			if (c == quote) {
+				// SQL standard escape: doubled quote = literal quote inside string.
+				// Without this, a body containing 'it''s OK' would close the string
+				// at the second `'` and re-open at the third, leaving the parity
+				// flipped for the rest of the file — and subsequent cfqueries
+				// would be wrongly judged "inside a string" and skipped entirely.
+				if ((c == "'" || c == '"') && n == c) { i++; continue; }
+				quote = "";
+			}
 			continue;
 		}
 		if (c == '/' && n == '/') { inLine = true; i++; continue; }

@@ -2,6 +2,17 @@
 
 ## v6 series (2026-05-11)
 
+### Fix: SQL doubled-quote escape (`''`) no longer flips isInsideCommentOrString parity for the rest of the file
+
+**Root cause of "cfquery in 4000-line file doesn't get Pro SQL formatted, but same cfquery alone does":**
+`isInsideCommentOrString` walks character-by-character to decide whether an embedded cfquery position is inside a SQL string / comment. The check was asymmetric with `findClosingTagOutsideText`: the closing-tag finder correctly skipped `''` SQL-standard escape (doubled quote = literal quote inside string), but the entry-point check did NOT. Result: any earlier `'it''s'` in the file flipped the quote-state parity for everything after — subsequent cfqueries were judged "inside a string" and **completely skipped by `replaceEmbeddedBlock`** → deep-format never saw them → no Pro SQL, no Phase 1/2/3, no fallback warning, just verbatim passthrough.
+
+Fix: extended `isInsideCommentOrString` to skip `''` (and `""`) when inside a string of the same quote type. Now symmetric with `findClosingTagOutsideText`.
+
+Also added a defensive `console.warn` in the `canUsePro=false` else branch (Pro SQL checkbox on, but engine not ready) so users see why fallback occurred instead of silent verbatim.
+
+1 new e2e test: two consecutive cfqueries where the first has SQL doubled-quote escape; without the fix the second wouldn't be formatted. 88 tests total, green. `sw.js` `CACHE_VERSION` → `v2026-05-11-10`.
+
 ### Feat (Phase 3): WHERE hoisting + split-format-recombine — full Pro SQL backbone with cfif preserved
 
 When a cfquery body's cfif tree has every leaf branch starting with `where ` keyword, deep-format now hoists the WHERE keyword OUT of the cfif branches and places a single SQL-formatted `WHERE` before the tree. This unlocks full Pro SQL formatting (SELECT/FROM/WHERE keywords each on their own line, columns list-broken) on the OUTER SQL backbone while preserving the cfif structure as a sub-tree under WHERE.
