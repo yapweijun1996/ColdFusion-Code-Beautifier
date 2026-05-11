@@ -2,6 +2,45 @@
 
 ## v6 series (2026-05-11)
 
+### Feat (Phase 1): Lite Pro SQL on verbatim path — SQL keyword uppercasing
+
+When Pro SQL is enabled AND a cfquery body falls through to Tier 2 verbatim (typically WHERE-cfif where marker injection can't form valid SQL), deep-format now applies SQL keyword case normalization to the verbatim body — protectCFMLTokens → case-insensitive uppercase of SELECT/FROM/WHERE/AND/OR/JOIN/etc. → restore. Layout completely preserved; only keywords outside CFML tags and SQL string literals are cased.
+
+- New `PRO_SQL_KEYWORDS` array + `uppercaseSQLKeywordsInProtected(text)` helper in `js/deep-format.js`.
+- Multi-word keywords (`order by`, `inner join`, etc.) sorted longest-first so they match before shorter prefixes; internal whitespace normalized to single space.
+- 1 new e2e test (Pro SQL on, WHERE-cfif → uppercased keywords, layout preserved).
+- `sw.js` `CACHE_VERSION` → `v2026-05-11-7`.
+
+This closes the "Pro SQL toggle does nothing visible on WHERE-cfif" UX gap. Phase 2 (CFML tag/attr/operator normalization) and Phase 3 (WHERE hoisting + split-format-recombine) to follow as separate commits.
+
+### Feat: marker injection — full Pro SQL re-format + cfif structure preserved (SELECT-list cfif)
+
+When Pro SQL is enabled and a cfquery body contains structural CFML control-flow tags AND the user has typed hand-crafted indent, deep-format now uses a **marker-injection** strategy:
+- Replace each own-line `<cfif>` / `<cfelseif>` / `<cfelse>` / `<cfloop>` / `<cfswitch>` / `<cfcase>` / `<cfdefaultcase>` / corresponding close tags with column-friendly markers (`__cfm_N__,`) that sql-formatter treats as identifiers in a column list.
+- Run sql-formatter — produces full Pro SQL output (uppercase keywords, each column on its own line, normalized spacing) with markers cleanly placed at column-list indent.
+- Restore markers to their original CFML tags. Body lines between OPEN and CLOSE/SIBLING are indented +1 tab per nesting depth so cfif branches read as nested under cfif.
+- Marker round-trip is verified (orphan markers → depth balanced); on any failure, falls through to verbatim path (no regression risk).
+
+User-visible result for SELECT-list cfif:
+```cfml
+<cfquery>
+    SELECT
+        creditterm_sales_unique,
+        creditterm_sales_desc,
+        <cfif x>
+            delivmode_sales_unique,
+            delivmode_sales_desc,
+        </cfif>
+        var_25_004
+    FROM adm_cnt_main
+    WHERE companyfn = <cfqueryparam ...>
+</cfquery>
+```
+
+WHERE-clause cfif (where markers can't form valid SQL) silently falls through to Tier 2 verbatim — same correct behavior as before.
+
+New helpers in `js/deep-format.js`: `classifyStructuralCFMLTag`, `protectStructuralCFMLAsColumnMarkers`, `restoreStructuralCFMLMarkers`. 8 new unit tests + 1 end-to-end integration test (loads vendored sql-formatter into vm context). 60 tests total, all green. `sw.js` `CACHE_VERSION` → `v2026-05-11-6`. `docs/LIMITATIONS.md` rewritten as four-tier dispatch.
+
 ### Fix: preserve user-crafted multi-line subquery indent inside structural cfif
 
 Follow-up to the structural-cfif fix. The previous version trusted `beautifyCFML`'s post-pass body, which line-normalized continuation lines (e.g., multi-line `(SELECT ... FROM ... WHERE ...)` subqueries) to the same depth as the line above them — flattening the user's hand-crafted visual hierarchy.

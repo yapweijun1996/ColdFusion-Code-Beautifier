@@ -40,6 +40,148 @@ function bodyHasUserIndent(body) {
 	return false;
 }
 
+/* Phase 1 — Lite Pro SQL on verbatim path.
+ *
+ * uppercaseSQLKeywordsInProtected runs on text where protectCFMLTokens has
+ * already replaced strings, CFML tags, #vars#, and comments with opaque
+ * __CFTOKEN_N__ placeholders. That makes case-insensitive keyword regex
+ * safe — we cannot accidentally uppercase `where` inside a SQL string
+ * literal like 'select all where match' because the entire string is
+ * already hidden behind a placeholder.
+ *
+ * Multi-word keywords (`order by`, `inner join`, etc.) are matched with
+ * \s+ between tokens so any amount of whitespace is normalized to a
+ * single space when uppercased.
+ */
+var PRO_SQL_KEYWORDS = [
+	'inner join', 'left outer join', 'right outer join', 'full outer join',
+	'left join', 'right join', 'full join', 'cross join', 'outer join',
+	'group by', 'order by', 'union all', 'partition by',
+	'select', 'distinct', 'from', 'where', 'and', 'or', 'not',
+	'insert into', 'insert', 'into', 'values', 'update', 'set', 'delete', 'truncate',
+	'join', 'on', 'having', 'union', 'with',
+	'case', 'when', 'then', 'else', 'end',
+	'in', 'between', 'like', 'is', 'null', 'exists',
+	'asc', 'desc', 'limit', 'offset', 'returning',
+	'create', 'table', 'view', 'index', 'drop', 'alter', 'add', 'column',
+	'primary', 'key', 'foreign', 'references', 'constraint', 'default', 'unique',
+	'top', 'fetch', 'next', 'rows', 'only'
+];
+
+function uppercaseSQLKeywordsInProtected(text) {
+	if (typeof text !== 'string' || text === '') return text;
+	// Sort longest first so multi-word keywords (e.g. "left outer join")
+	// match before shorter prefixes (e.g. "left", "outer", "join").
+	var sorted = PRO_SQL_KEYWORDS.slice().sort(function(a, b) {
+		return b.length - a.length;
+	});
+	var alternatives = sorted.map(function(kw) {
+		return kw.replace(/\s+/g, '\\s+');
+	}).join('|');
+	var pattern = new RegExp('\\b(' + alternatives + ')\\b', 'gi');
+	return text.replace(pattern, function(match) {
+		// Normalize internal whitespace to a single space then uppercase.
+		return match.replace(/\s+/g, ' ').toUpperCase();
+	});
+}
+
+function classifyStructuralCFMLTag(tag) {
+	if (/^<cfif\b/i.test(tag))             return 'OPEN';
+	if (/^<cfloop\b/i.test(tag))           return 'OPEN';
+	if (/^<cfswitch\b/i.test(tag))         return 'OPEN';
+	if (/^<cfelseif\b/i.test(tag))         return 'SIBLING';
+	if (/^<cfelse\b/i.test(tag))           return 'SIBLING';
+	if (/^<cfcase\b/i.test(tag))           return 'SIBLING';
+	if (/^<cfdefaultcase\b/i.test(tag))    return 'SIBLING';
+	if (/^<\/cfif\b/i.test(tag))           return 'CLOSE';
+	if (/^<\/cfloop\b/i.test(tag))         return 'CLOSE';
+	if (/^<\/cfswitch\b/i.test(tag))       return 'CLOSE';
+	return 'UNKNOWN';
+}
+
+function protectStructuralCFMLAsColumnMarkers(body) {
+	// Replaces own-line CFML control-flow tags with column-friendly markers
+	// (`__cfm_N__,`) that sql-formatter happily treats as identifiers in a
+	// column list. After formatting, restoreStructuralCFMLMarkers swaps them
+	// back to their original tags and adds +1 tab to body lines so cfif
+	// branches read as nested under the cfif itself.
+	var lines = body.split('\n');
+	var markers = [];
+	var processed = [];
+	var pattern = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b[^>]*>$/i;
+	for (var i = 0; i < lines.length; i++) {
+		var trimmed = lines[i].trim();
+		if (pattern.test(trimmed)) {
+			var idx = markers.length;
+			markers.push({ tag: trimmed, kind: classifyStructuralCFMLTag(trimmed) });
+			processed.push('__cfm_' + idx + '__,');
+		} else {
+			processed.push(lines[i]);
+		}
+	}
+	return { code: processed.join('\n'), markers: markers };
+}
+
+function restoreStructuralCFMLMarkers(formatted, markers) {
+	// Walks the sql-formatter output line-by-line. Each `__cfm_N__,?` line
+	// is replaced with the original CFML tag (no trailing comma). Body lines
+	// between an OPEN marker and its matching CLOSE are indented +1 tab per
+	// open-depth so the SQL inside reads as nested inside the cfif.
+	//
+	// SIBLING markers (cfelseif, cfelse, cfcase, cfdefaultcase) sit at the
+	// parent OPEN's depth, then resume +1-tab body for the next branch.
+	//
+	// Returns null if any marker is orphaned, an unknown kind appears, or
+	// the depth tracker doesn't return to zero — the caller falls back to
+	// the verbatim path.
+	var lines = formatted.split('\n');
+	var bodyDepth = 0;
+	var result = [];
+	var consumed = [];
+	for (var i = 0; i < markers.length; i++) consumed.push(false);
+	var markerLine = /^(\s*)__cfm_(\d+)__,?\s*$/;
+
+	for (var i = 0; i < lines.length; i++) {
+		var line = lines[i];
+		var match = line.match(markerLine);
+		if (match) {
+			var indent = match[1];
+			var idx = parseInt(match[2], 10);
+			if (idx < 0 || idx >= markers.length) return null;
+			consumed[idx] = true;
+			var marker = markers[idx];
+			if (marker.kind === 'OPEN') {
+				result.push(indent + marker.tag);
+				bodyDepth++;
+			} else if (marker.kind === 'SIBLING') {
+				bodyDepth--;
+				if (bodyDepth < 0) return null;
+				result.push(indent + marker.tag);
+				bodyDepth++;
+			} else if (marker.kind === 'CLOSE') {
+				bodyDepth--;
+				if (bodyDepth < 0) return null;
+				result.push(indent + marker.tag);
+			} else {
+				return null;
+			}
+		} else {
+			if (bodyDepth > 0) {
+				var pad = '';
+				for (var p = 0; p < bodyDepth; p++) pad += '\t';
+				result.push(pad + line);
+			} else {
+				result.push(line);
+			}
+		}
+	}
+	for (var c = 0; c < consumed.length; c++) {
+		if (!consumed[c]) return null;
+	}
+	if (bodyDepth !== 0) return null;
+	return result.join('\n');
+}
+
 function extractAllCfqueryBodies(source) {
 	// Walks the original (pre-beautifyCFML) source and collects each
 	// <cfquery>'s body verbatim. Uses replaceEmbeddedBlock for tag-finding
@@ -80,19 +222,63 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 				var verbatimSource = (originalBodies[currentIndex] !== undefined)
 					? originalBodies[currentIndex]
 					: body;
-				// Only preserve original verbatim when the user typed
-				// hand-crafted indent. Flat-zero-indent input falls back
-				// to beautifyCFML's nested output, which auto-derives
-				// cfif depth and avoids leaving the cfif chain glued
-				// to the cfquery's left margin.
+
+				// Tier 1 — Marker-injection: when Pro SQL is enabled, replace
+				// own-line CFML control-flow tags with column-friendly markers,
+				// run sql-formatter, then restore. Produces full SQL re-format
+				// (uppercase keywords, list-broken columns) WITH cfif structure
+				// preserved AND body indented +1 inside cfif. Falls through
+				// to verbatim if marker round-trip can't be verified.
+				if (bodyHasUserIndent(verbatimSource)
+						&& sqlPro
+						&& typeof formatProSQLSync === 'function'
+						&& typeof isProSQLLoaded === 'function'
+						&& isProSQLLoaded()) {
+					try {
+						var verbatimCleanedForMarker = cleanEmbeddedBody(verbatimSource);
+						if (verbatimCleanedForMarker !== '') {
+							var marked = protectStructuralCFMLAsColumnMarkers(verbatimCleanedForMarker);
+							var protectedSQLM = protectCFMLTokens(marked.code);
+							var formattedSQLM = formatProSQLSync(protectedSQLM.code, sqlDialect);
+							var restoredCFMLM = restoreCFMLTokens(formattedSQLM, protectedSQLM.tokens);
+							restoredCFMLM = cleanRestoredCFMLTokenSpacing(restoredCFMLM);
+							var markerRestored = restoreStructuralCFMLMarkers(restoredCFMLM, marked.markers);
+							if (markerRestored !== null) {
+								return parentIndent + openTag + '\n'
+									+ indentEmbeddedBody(markerRestored, parentIndent) + '\n'
+									+ parentIndent + closeTag;
+							}
+						}
+					} catch (markerErr) {
+						// Marker approach threw — fall through to verbatim
+					}
+				}
+
+				// Tier 2 — Verbatim with user indent: preserve original layout.
+				// When Pro SQL is enabled, also apply SQL keyword uppercasing
+				// to the verbatim body via protectCFMLTokens → uppercase →
+				// restore. Layout is unchanged; only SQL keywords outside
+				// CFML tags and SQL strings get cased.
 				if (bodyHasUserIndent(verbatimSource)) {
 					var verbatimCleaned = cleanEmbeddedBody(verbatimSource);
 					if (verbatimCleaned !== '') {
+						var verbatimFinal = verbatimCleaned;
+						if (sqlPro) {
+							try {
+								var protectedV = protectCFMLTokens(verbatimCleaned);
+								var upperedV = uppercaseSQLKeywordsInProtected(protectedV.code);
+								verbatimFinal = restoreCFMLTokens(upperedV, protectedV.tokens);
+							} catch (upperErr) {
+								verbatimFinal = verbatimCleaned;
+							}
+						}
 						return parentIndent + openTag + '\n'
-							+ indentEmbeddedBody(verbatimCleaned, parentIndent) + '\n'
+							+ indentEmbeddedBody(verbatimFinal, parentIndent) + '\n'
 							+ parentIndent + closeTag;
 					}
 				}
+
+				// Tier 3 — Flat input: trust beautifyCFML's nested output.
 				return parentIndent + openTag + body + closeTag;
 			}
 

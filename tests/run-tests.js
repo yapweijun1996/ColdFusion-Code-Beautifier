@@ -420,6 +420,26 @@ assertEqual(
 );
 
 assertEqual(
+	'multi-line html tag indents continuation lines and aligns close tag',
+	runRouter(
+		'<cfif a>\n<cfif b>\n<div class="x"\ndata-uen="1"\ndata-padscale="0.02">\n</div>\n</cfif>\n</cfif>',
+		'cfml',
+		false
+	),
+	'<cfif a>\n\t<cfif b>\n\t\t<div class="x"\n\t\t\tdata-uen="1"\n\t\t\tdata-padscale="0.02">\n\t\t</div>\n\t</cfif>\n</cfif>'
+);
+
+assertEqual(
+	'multi-line cfqueryparam (cf inline) pops back to parent level after close',
+	runRouter(
+		'<cfquery name="q">\nselect * from t where id =\n<cfqueryparam value="#x#"\ncfsqltype="cf_sql_integer">\n</cfquery>',
+		'cfml',
+		false
+	),
+	'<cfquery name="q">\n\tselect * from t where id =\n\t<cfqueryparam value="#x#"\n\t\tcfsqltype="cf_sql_integer">\n</cfquery>'
+);
+
+assertEqual(
 	'html attribute with /* not treated as block comment',
 	runRouter('<div>\n<input type="file" accept="image/*">\n<button onclick="foo()">\n<span>ok</span>\n</button>\n</div>', 'cfml', false),
 	'<div>\n\t<input type="file" accept="image/*">\n\t<button onclick="foo()">\n\t\t<span>ok</span>\n\t</button>\n</div>'
@@ -442,6 +462,68 @@ assertEqual(
 	runRouter('<cfif x>\n<!--- example: <cfquery name="q">SELECT 1</cfquery> --->\n<cfset y = 2>\n</cfif>', 'cfml', true),
 	'<cfif x>\n\t<!--- example: <cfquery name="q">SELECT 1</cfquery> --->\n\t<cfset y = 2>\n</cfif>'
 );
+
+/* protectStructuralCFMLAsColumnMarkers + restoreStructuralCFMLMarkers
+ * Unit tests for the marker-injection round-trip. Verify each own-line
+ * CFML control-flow tag becomes a column-friendly marker and is restored
+ * with correct body indentation.
+ */
+(function runMarkerRoundTripTests() {
+	var ctx = makeContext('', 'sql').context;
+
+	var protect = ctx.protectStructuralCFMLAsColumnMarkers;
+	var restore = ctx.restoreStructuralCFMLMarkers;
+	assertEqual('protect helper exists', typeof protect, 'function');
+	assertEqual('restore helper exists', typeof restore, 'function');
+
+	var simpleBody = 'select a,\n<cfif x>\nb,\n</cfif>\nc';
+	var marked = protect(simpleBody);
+	assertEqual('protect produces 2 markers (open + close)', marked.markers.length, 2);
+	assertEqual('protect open kind', marked.markers[0].kind, 'OPEN');
+	assertEqual('protect close kind', marked.markers[1].kind, 'CLOSE');
+	assertEqual(
+		'protect replaces own-line tags with __cfm_N__,',
+		marked.code,
+		'select a,\n__cfm_0__,\nb,\n__cfm_1__,\nc'
+	);
+
+	// Simulate sql-formatter output (each line at 1-tab indent under SELECT)
+	var fakeFormatted = '\t__cfm_0__,\n\tb,\n\t__cfm_1__,\n\tc';
+	var restored = restore(fakeFormatted, marked.markers);
+	assertEqual(
+		'restore replaces markers and indents body +1 tab',
+		restored,
+		'\t<cfif x>\n\t\tb,\n\t</cfif>\n\tc'
+	);
+
+	// Chain test: cfif/cfelseif/cfelse/</cfif>
+	var chainBody = '<cfif a>\nx,\n<cfelseif b>\ny,\n<cfelse>\nz,\n</cfif>';
+	var chainMarked = protect(chainBody);
+	assertEqual('chain produces 4 markers', chainMarked.markers.length, 4);
+	assertEqual('chain open', chainMarked.markers[0].kind, 'OPEN');
+	assertEqual('chain elseif', chainMarked.markers[1].kind, 'SIBLING');
+	assertEqual('chain else', chainMarked.markers[2].kind, 'SIBLING');
+	assertEqual('chain close', chainMarked.markers[3].kind, 'CLOSE');
+
+	var chainFake = '\t__cfm_0__,\n\tx,\n\t__cfm_1__,\n\ty,\n\t__cfm_2__,\n\tz,\n\t__cfm_3__,';
+	var chainRestored = restore(chainFake, chainMarked.markers);
+	assertEqual(
+		'chain restore: cfelseif/cfelse stay at parent depth, body lines +1',
+		chainRestored,
+		'\t<cfif a>\n\t\tx,\n\t<cfelseif b>\n\t\ty,\n\t<cfelse>\n\t\tz,\n\t</cfif>'
+	);
+
+	// Failure case: orphan marker
+	var orphanFake = '\tselect a,\n\t__cfm_99__,\n\tb';
+	var orphanResult = restore(orphanFake, marked.markers);
+	assertEqual('orphan marker returns null', orphanResult, null);
+
+	// Failure case: unbalanced (missing close)
+	var unbalanced = protect('<cfif x>\na,\nb');
+	var unbalancedFake = '\t__cfm_0__,\n\ta,\n\tb';
+	var unbalancedResult = restore(unbalancedFake, unbalanced.markers);
+	assertEqual('unbalanced (no close) returns null', unbalancedResult, null);
+})();
 
 /* bodyHasStructuralCFMLControlFlow — gates whether deep-format runs on a
  * cfquery body. "Structural" = a CFML control-flow tag occupying its own
@@ -521,6 +603,105 @@ assertEqual(
 	),
 	'<cfquery name="q">\n\tselect *\n\tfrom t\n\t<cfif a>\n\t\twhere x = 1\n\t<!--- pin --->\n\t<cfelseif b>\n\t\twhere x = 2\n\t</cfif>\n</cfquery>'
 );
+
+/* End-to-end: marker approach with sql-formatter loaded — covers the
+ * "SELECT-list cfif" success case where Pro SQL achieves full re-format
+ * (uppercase keywords + each column on own line) WITH cfif structure
+ * preserved + body indented +1.
+ */
+(function runMarkerEndToEndTests() {
+	var vendorPath = 'vendor/sql-formatter.min.js';
+	if (!fs.existsSync(vendorPath)) {
+		console.log('SKIP marker e2e tests (vendor bundle missing): ' + vendorPath);
+		return;
+	}
+	var sqlFormatter = require('../' + vendorPath);
+	var proSrc = fs.readFileSync('js/pro-sql.js', 'utf8');
+	var browserCodeMarker = scripts.map(function(file) {
+		return fs.readFileSync(file, 'utf8');
+	}).join('\n');
+
+	var input = '<cfquery name="q">\n\t\tselect a,\n\t\t<cfif x>\n\t\tb,\n\t\t</cfif>\n\t\tc\n\t\tfrom t\n\t</cfquery>';
+	var elements = {
+		language: { value: 'cfml' },
+		split_html_tag: { checked: false },
+		auto_copy: { checked: false },
+		auto_clear: { checked: false },
+		auto_clear_output: { checked: false },
+		deep_sql: { checked: true },
+		deep_css: { checked: false },
+		deep_js: { checked: false },
+		pro_sql: { checked: true },
+		pro_sql_dialect: { value: 'mysql' },
+		input: { value: input },
+		output: { value: '', select: function() {} }
+	};
+	var ctx = {
+		console: { log: function() {} },
+		window: { sqlFormatter: sqlFormatter },
+		document: {
+			getElementById: function(id) { return elements[id]; },
+			execCommand: function() { return true; },
+			querySelector: function() { return { prepend: function() {}, textContent: '' }; },
+			createElement: function() { return { className: '', innerHTML: '', style: {setProperty: function(){}}, classList: {add:function(){},remove:function(){}}, addEventListener: function(){}, remove: function(){} }; },
+			addEventListener: function() {},
+			readyState: 'complete'
+		},
+		setTimeout: setTimeout,
+		clearTimeout: clearTimeout
+	};
+	vm.createContext(ctx);
+	vm.runInContext(proSrc + '\n' + browserCodeMarker, ctx);
+	ctx.beautifyCodes();
+
+	assertEqual(
+		'marker e2e: SELECT-list cfif gets full Pro SQL + body +1 indent',
+		elements.output.value,
+		'<cfquery name="q">\n\tSELECT\n\t\ta,\n\t\t<cfif x>\n\t\t\tb,\n\t\t</cfif>\n\t\tc\n\tFROM\n\t\tt\n</cfquery>'
+	);
+
+	/* Phase 1 — Lite Pro SQL on verbatim path: WHERE-cfif fallback path
+	 * (where marker injection can't form valid SQL) still gets SQL keyword
+	 * uppercased while layout is preserved verbatim.
+	 */
+	var inputWhereCfif = '<cfquery name="q">\n\t\tselect a, b\n\t\tfrom t\n\t\t\t<cfif x>\n\t\t\t\twhere a = 1\n\t\t\t<cfelse>\n\t\t\t\twhere a = 2\n\t\t\t</cfif>\n\t\t\tand b = 3\n\t</cfquery>';
+	var elements2 = {
+		language: { value: 'cfml' },
+		split_html_tag: { checked: false },
+		auto_copy: { checked: false },
+		auto_clear: { checked: false },
+		auto_clear_output: { checked: false },
+		deep_sql: { checked: true },
+		deep_css: { checked: false },
+		deep_js: { checked: false },
+		pro_sql: { checked: true },
+		pro_sql_dialect: { value: 'mysql' },
+		input: { value: inputWhereCfif },
+		output: { value: '', select: function() {} }
+	};
+	var ctx2 = {
+		console: { log: function() {} },
+		window: { sqlFormatter: sqlFormatter },
+		document: {
+			getElementById: function(id) { return elements2[id]; },
+			execCommand: function() { return true; },
+			querySelector: function() { return { prepend: function() {}, textContent: '' }; },
+			createElement: function() { return { className: '', innerHTML: '', style: {setProperty: function(){}}, classList: {add:function(){},remove:function(){}}, addEventListener: function(){}, remove: function(){} }; },
+			addEventListener: function() {},
+			readyState: 'complete'
+		},
+		setTimeout: setTimeout,
+		clearTimeout: clearTimeout
+	};
+	vm.createContext(ctx2);
+	vm.runInContext(proSrc + '\n' + browserCodeMarker, ctx2);
+	ctx2.beautifyCodes();
+	assertEqual(
+		'Phase 1 e2e: WHERE-cfif falls back to verbatim but keywords uppercased',
+		elements2.output.value,
+		'<cfquery name="q">\n\tSELECT a, b\n\tFROM t\n\t\t<cfif x>\n\t\t\tWHERE a = 1\n\t\t<cfelse>\n\t\t\tWHERE a = 2\n\t\t</cfif>\n\t\tAND b = 3\n</cfquery>'
+	);
+})();
 
 /* Pro SQL — vendor bundle integration smoke tests.
  * Loaded into its own VM context so it does not pollute the existing
