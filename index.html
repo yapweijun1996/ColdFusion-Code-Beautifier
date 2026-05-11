@@ -1,15 +1,31 @@
-<html>
+<!DOCTYPE html>
+<html lang="en">
 	<head>
 		<meta charset="UTF-8">
-		<meta name="viewport" content="width=device-width, initial-scale=1.0">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 		<title>ColdFusion Code Beautifier - Beautify Your Code Online</title>
 		<meta name="description" content="Use our ColdFusion Code Beautifier tool to quickly and easily format your code.">
 		<meta name="robots" content="index, follow">
+		<meta name="theme-color" content="#28a745" media="(prefers-color-scheme: light)">
+		<meta name="theme-color" content="#0e1116" media="(prefers-color-scheme: dark)">
+		<meta name="color-scheme" content="light dark">
+
+		<meta name="apple-mobile-web-app-capable" content="yes">
+		<meta name="mobile-web-app-capable" content="yes">
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+		<meta name="apple-mobile-web-app-title" content="CF Beautifier">
+		<meta name="format-detection" content="telephone=no">
+
 		<meta property="og:title" content="ColdFusion Code Beautifier">
 		<meta property="og:description" content="Beautify your ColdFusion code with our online tool.">
 		<meta property="og:type" content="website">
 		<meta property="og:url" content="https://yapweijun1996.github.io/ColdFusion-Code-Beautifier/">
 		<meta property="og:image" content="https://yapweijun1996.github.io/ColdFusion-Code-Beautifier/og_img.jpg">
+
+		<link rel="icon" type="image/svg+xml" href="./favicon.svg">
+		<link rel="apple-touch-icon" href="./favicon.svg">
+		<link rel="manifest" href="./manifest.webmanifest">
+
 		<link rel="stylesheet" href="./styles.css">
 	</head>
 	<body>
@@ -20,12 +36,12 @@
 			<div class="editor-grid">
 				<section class="pane">
 					<label class="pane-label" for="input">Input</label>
-					<textarea id="input" placeholder="Paste your code here..."></textarea>
+					<textarea id="input" placeholder="Paste your code here..." spellcheck="false" autocapitalize="off" autocorrect="off"></textarea>
 				</section>
 
 				<section class="pane">
 					<label class="pane-label" for="output">Output</label>
-					<textarea id="output" readonly placeholder="Your beautified code will appear here..."></textarea>
+					<textarea id="output" readonly placeholder="Your beautified code will appear here..." spellcheck="false"></textarea>
 				</section>
 			</div>
 
@@ -54,7 +70,7 @@
 			</div>
 		</div>
 		<footer>
-			<p>By <a href="https://github.com/yapweijun1996" target="_blank">yapweijun1996</a> @ <span class="at_year"></span></p>
+			<p>By <a href="https://github.com/yapweijun1996" target="_blank" rel="noopener">yapweijun1996</a> @ <span class="at_year"></span></p>
 		</footer>
 		<script src="./js/cf-tags.js"></script>
 		<script src="./js/sql-keywords.js"></script>
@@ -65,5 +81,6 @@
 		<script src="./js/clipboard.js"></script>
 		<script src="./js/beautifier.js"></script>
 		<script src="./js/app.js"></script>
+		<script src="./js/pwa.js" defer></script>
 	</body>
 </html>

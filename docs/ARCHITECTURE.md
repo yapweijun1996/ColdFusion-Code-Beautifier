@@ -16,7 +16,25 @@ js/toast.js            ← notification UI
 js/clipboard.js        ← copy_output_data / clear_data
 js/beautifier.js       ← beautifyCFML + detectLanguage + beautifyCodes (router)
 js/app.js              ← footer year
+js/pwa.js              ← service-worker registration + auto-update reload (deferred)
 ```
+
+## PWA layer
+
+```
+manifest.webmanifest   ← name, scope, display=standalone, theme color, SVG icon
+sw.js                  ← network-first for HTML, stale-while-revalidate for assets
+                         CACHE_VERSION constant — bump on release to evict
+                         skipWaiting() + clients.claim() so update is one-tab-reload away
+js/pwa.js              ← registers ./sw.js
+                         on 'updatefound' + 'installed' + existing controller
+                            → postMessage SKIP_WAITING
+                         on 'controllerchange' → location.reload() (once)
+                         calls reg.update() hourly + on visibilitychange
+```
+
+Release flow: edit code → bump `CACHE_VERSION` in `sw.js` → push `main` → GitHub Actions
+runs `node tests/run-tests.js` then deploys via `actions/deploy-pages@v4`.
 
 ## Pipeline
 

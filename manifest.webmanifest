@@ -1,0 +1,30 @@
+{
+  "name": "ColdFusion Code Beautifier",
+  "short_name": "CF Beautifier",
+  "description": "Beautify CFML / HTML / CSS / JS / SQL code in your browser. Works offline.",
+  "id": "/ColdFusion-Code-Beautifier/",
+  "start_url": "./?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "any",
+  "background_color": "#f5f5f5",
+  "theme_color": "#28a745",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["developer", "utilities", "productivity"],
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
+}

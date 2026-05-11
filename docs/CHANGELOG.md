@@ -1,5 +1,16 @@
 # Changelog
 
+## v6 series (2026-05-11)
+
+### PWA + iOS safe area + SVG favicon + GitHub Actions
+- Added `manifest.webmanifest` (standalone display, theme color `#28a745`, SVG icon).
+- Added `sw.js` service worker — network-first for HTML (always latest source), stale-while-revalidate for assets, cache version `v2026-05-11-1`.
+- Added `js/pwa.js` — registers SW, auto-updates on `visibilitychange` + hourly, force-reloads page once on `controllerchange` so users never get stuck on stale build.
+- Added `favicon.svg` (CF monogram on brand-green tile, scales for any density).
+- `index.html`: added `viewport-fit=cover`, `apple-mobile-web-app-*` meta, `theme-color` light/dark, `<link rel="icon" type="image/svg+xml">`, manifest link, SW registration script.
+- `styles.css`: full theming via CSS custom properties; `prefers-color-scheme: dark` palette; `prefers-reduced-motion` honored; `env(safe-area-inset-*)` on body + toast container for iOS notch / home-indicator; `--tap: 44px` minimum hit target on buttons & select; mobile textarea font lifted to 16px to suppress iOS zoom; native-themed checkbox via `accent-color`.
+- Added `.github/workflows/deploy.yml` — runs `node tests/run-tests.js` then publishes via `actions/deploy-pages@v4`. Requires repo Settings → Pages → Source = "GitHub Actions".
+
 ## v5 series (2026-04-24)
 
 ### `27aabc7` — Deep JS production upgrade
