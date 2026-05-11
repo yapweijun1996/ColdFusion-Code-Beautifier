@@ -443,6 +443,54 @@ assertEqual(
 	'<cfif x>\n\t<!--- example: <cfquery name="q">SELECT 1</cfquery> --->\n\t<cfset y = 2>\n</cfif>'
 );
 
+/* Pro SQL — vendor bundle integration smoke tests.
+ * Loaded into its own VM context so it does not pollute the existing
+ * sync harness with a real (CommonJS-resolved) sql-formatter.
+ */
+(function runProSQLTests() {
+	var vendorPath = 'vendor/sql-formatter.min.js';
+	if (!fs.existsSync(vendorPath)) {
+		console.log('SKIP Pro SQL tests (vendor bundle missing): ' + vendorPath);
+		return;
+	}
+	var sqlFormatter = require('../' + vendorPath);
+	var proSrc = fs.readFileSync('js/pro-sql.js', 'utf8');
+	var proCtx = {
+		window: { sqlFormatter: sqlFormatter },
+		console: { log: function() {} }
+	};
+	vm.createContext(proCtx);
+	vm.runInContext(proSrc, proCtx);
+
+	assertEqual('pro sql exposes 16 dialects', proCtx.PRO_SQL_DIALECTS.length, 16);
+	assertEqual('pro sql isLoaded true with stub', proCtx.isProSQLLoaded(), true);
+	assertEqual(
+		'pro sql mysql basic select',
+		proCtx.formatProSQLSync('select id, name from users where status=1', 'mysql'),
+		'SELECT\n\tid,\n\tname\nFROM\n\tusers\nWHERE\n\tstatus = 1'
+	);
+	assertEqual(
+		'pro sql postgresql order by 1',
+		proCtx.formatProSQLSync('select id from t order by 1', 'postgresql'),
+		'SELECT\n\tid\nFROM\n\tt\nORDER BY\n\t1'
+	);
+	assertEqual(
+		'pro sql falls back to standard for unknown dialect',
+		proCtx.formatProSQLSync('select 1', 'made-up-dialect'),
+		'SELECT\n\t1'
+	);
+	try {
+		var allDialectsOk = proCtx.PRO_SQL_DIALECTS.every(function(d) {
+			proCtx.formatProSQLSync('select 1 from t', d.id);
+			return true;
+		});
+		assertEqual('pro sql every shipped dialect accepts simple SELECT', allDialectsOk, true);
+	} catch (err) {
+		console.log('FAIL: pro sql dialect throws — ' + err.message);
+		process.exitCode = 1;
+	}
+})();
+
 if (!process.exitCode) {
 	console.log('All tests passed.');
 }

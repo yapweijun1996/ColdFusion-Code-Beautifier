@@ -16,8 +16,27 @@ js/toast.js            ← notification UI
 js/clipboard.js        ← copy_output_data / clear_data
 js/beautifier.js       ← beautifyCFML + detectLanguage + beautifyCodes (router)
 js/app.js              ← footer year
+js/pro-sql.js          ← lazy-loads vendor/sql-formatter.min.js on first Pro SQL use
 js/pwa.js              ← service-worker registration + auto-update reload (deferred)
 ```
+
+## Pro SQL (optional, opt-in)
+
+Default-on hand-written `sql-beautifier.js` covers the dual MySQL+Postgres
+dialect. When users need other dialects (T-SQL, PL/SQL, Snowflake, BigQuery,
+Spark, Trino, …) they tick the **Pro SQL** checkbox + pick a dialect.
+
+```
+vendor/sql-formatter.min.js  UMD bundle (~312KB), MIT, sql-formatter@15
+js/pro-sql.js                PRO_SQL_DIALECTS, ensureProSQL(), formatProSQLSync(), isProSQLLoaded()
+beautifier.js (sql branch)   if pro_sql && loaded → formatProSQLSync; else → beautifySQL
+deep-format.js (cfquery)     same routing inside <cfquery> body, after CFML token protection
+```
+
+The vendor bundle is **lazy-loaded** via dynamic `<script>` injection on the
+first Pro-SQL formatting call, then cached by the service worker so offline
+use works on subsequent loads. Users who never enable Pro SQL pay zero bytes
+for the feature.
 
 ## PWA layer
 

@@ -66,6 +66,27 @@
 					<label title="Formats SQL inside <cfquery>"><input type="checkbox" id="deep_sql" value="y" checked> Deep SQL</label>
 					<label title="Formats CSS inside <style>"><input type="checkbox" id="deep_css" value="y" checked> Deep CSS</label>
 					<label title="Formats JS inside <script> — strings, templates, regex, and for-loop semicolons all protected"><input type="checkbox" id="deep_js" value="y" checked> Deep JS</label>
+					<label class="pro-sql" title="Use the dialect-aware sql-formatter library (~312KB, lazy-loaded on first use). Falls back to built-in formatter if the bundle fails to load."><input type="checkbox" id="pro_sql" value="y"> Pro SQL</label>
+					<label class="pro-sql-dialect" title="SQL dialect for Pro SQL">
+						<select id="pro_sql_dialect" class="lang-select">
+							<option value="sql">Standard SQL</option>
+							<option value="mysql">MySQL</option>
+							<option value="mariadb">MariaDB</option>
+							<option value="postgresql">PostgreSQL</option>
+							<option value="sqlite">SQLite</option>
+							<option value="tsql">SQL Server (T-SQL)</option>
+							<option value="plsql">Oracle (PL/SQL)</option>
+							<option value="db2">IBM DB2</option>
+							<option value="redshift">Amazon Redshift</option>
+							<option value="snowflake">Snowflake</option>
+							<option value="bigquery">Google BigQuery</option>
+							<option value="hive">Apache Hive</option>
+							<option value="spark">Apache Spark</option>
+							<option value="trino">Trino / Presto</option>
+							<option value="n1ql">Couchbase N1QL</option>
+							<option value="singlestoredb">SingleStoreDB</option>
+						</select>
+					</label>
 				</div>
 			</div>
 		</div>
@@ -79,6 +100,7 @@
 		<script src="./js/tag-utils.js"></script>
 		<script src="./js/toast.js"></script>
 		<script src="./js/clipboard.js"></script>
+		<script src="./js/pro-sql.js"></script>
 		<script src="./js/beautifier.js"></script>
 		<script src="./js/app.js"></script>
 		<script src="./js/pwa.js" defer></script>

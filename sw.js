@@ -4,7 +4,7 @@
  *   - JS / CSS / SVG / manifest: stale-while-revalidate
  *   - Bump CACHE_VERSION on every release to evict old assets
  */
-const CACHE_VERSION = 'v2026-05-11-1';
+const CACHE_VERSION = 'v2026-05-11-2';
 const CACHE_NAME    = 'cfbeautifier-' + CACHE_VERSION;
 
 const PRECACHE_URLS = [
@@ -20,9 +20,11 @@ const PRECACHE_URLS = [
   './js/tag-utils.js',
   './js/toast.js',
   './js/clipboard.js',
+  './js/pro-sql.js',
   './js/beautifier.js',
   './js/app.js',
-  './js/pwa.js'
+  './js/pwa.js',
+  './vendor/sql-formatter.min.js'
 ];
 
 self.addEventListener('install', (event) => {

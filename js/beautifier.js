@@ -218,32 +218,65 @@ function beautifyCodes() {
 	var deep_sql = document.getElementById('deep_sql').checked;
 	var deep_css = document.getElementById('deep_css').checked;
 	var deep_js = document.getElementById('deep_js').checked;
+	var proSqlEl = document.getElementById('pro_sql');
+	var pro_sql = proSqlEl ? proSqlEl.checked : false;
+	var dialectEl = document.getElementById('pro_sql_dialect');
+	var pro_sql_dialect = dialectEl ? dialectEl.value : 'sql';
 	var rawCode = document.getElementById('input').value;
 	var output = document.getElementById('output');
 	var language = document.getElementById('language').value;
-	var copied = false;
 
 	if(language == 'auto'){
 		language = detectLanguage(rawCode);
 	}
 
-	if(language == 'sql'){
-		output.value = beautifySQL(rawCode);
-	}else{
-		var result = beautifyCFML(rawCode, split_html_tag);
-		if(deep_sql || deep_css || deep_js){
-			result = deepFormatEmbedded(result, {sql: deep_sql, css: deep_css, js: deep_js});
+	function finishOutput() {
+		var copied = false;
+		if(auto_copy == true){
+			copied = copy_output_data();
 		}
-		output.value = result;
+		if(auto_clear == true){
+			document.getElementById('input').value = '';
+		}
+		if(auto_clear_output == true && (auto_copy != true || copied == true)){
+			output.value = '';
+		}
 	}
 
-	if(auto_copy == true){
-		copied = copy_output_data();
+	function runFormat() {
+		if(language == 'sql'){
+			if (pro_sql && typeof formatProSQLSync === 'function' && typeof isProSQLLoaded === 'function' && isProSQLLoaded()) {
+				try {
+					output.value = formatProSQLSync(rawCode, pro_sql_dialect);
+				} catch (err) {
+					output.value = beautifySQL(rawCode);
+				}
+			} else {
+				output.value = beautifySQL(rawCode);
+			}
+		}else{
+			var result = beautifyCFML(rawCode, split_html_tag);
+			if(deep_sql || deep_css || deep_js){
+				result = deepFormatEmbedded(result, {
+					sql: deep_sql,
+					css: deep_css,
+					js: deep_js,
+					sqlPro: pro_sql,
+					sqlDialect: pro_sql_dialect
+				});
+			}
+			output.value = result;
+		}
+		finishOutput();
 	}
-	if(auto_clear == true){
-		document.getElementById('input').value = '';
+
+	if (pro_sql && typeof ensureProSQL === 'function' && (!(typeof isProSQLLoaded === 'function') || !isProSQLLoaded())) {
+		ensureProSQL().then(runFormat).catch(function(err) {
+			console.warn('[pro-sql] load failed, falling back to built-in formatter:', err);
+			runFormat();
+		});
+		return;
 	}
-	if(auto_clear_output == true && (auto_copy != true || copied == true)){
-		output.value = '';
-	}
+
+	runFormat();
 }

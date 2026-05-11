@@ -2,6 +2,15 @@
 
 ## v6 series (2026-05-11)
 
+### Pro SQL — opt-in multi-dialect formatter
+- Vendored `sql-formatter@15.7.3` (MIT) UMD bundle to `vendor/sql-formatter.min.js` (~312KB). Loaded lazily via dynamic `<script>` injection only when the user ticks "Pro SQL".
+- Added `js/pro-sql.js` — `PRO_SQL_DIALECTS` (16 dialects), `ensureProSQL()` (idempotent loader returning a cached Promise), `formatProSQLSync()` (wrapper with sane defaults: keywordCase upper, dataTypeCase upper, useTabs, tabWidth 4).
+- `index.html` adds **Pro SQL** checkbox + **dialect** select (Standard, MySQL, MariaDB, PostgreSQL, SQLite, T-SQL, PL/SQL, DB2, Redshift, Snowflake, BigQuery, Hive, Spark, Trino, N1QL, SingleStoreDB).
+- `styles.css` uses `:has(#pro_sql:checked)` to reveal the dialect select only when Pro SQL is on.
+- `js/beautifier.js` and `js/deep-format.js` route to `formatProSQLSync` when Pro SQL is enabled, falling back to the built-in `beautifySQL` if the bundle fails to load or the dialect parser throws — guarantees zero regression for existing users.
+- `sw.js` precaches `./vendor/sql-formatter.min.js` and `./js/pro-sql.js`; `CACHE_VERSION` bumped to `v2026-05-11-2`.
+- `tests/run-tests.js` adds 6 Pro SQL smoke tests (dialect count, MySQL select, PostgreSQL order by, unknown-dialect fallback, all 16 dialects accept simple SELECT). All green.
+
 ### PWA + iOS safe area + SVG favicon + GitHub Actions
 - Added `manifest.webmanifest` (standalone display, theme color `#28a745`, SVG icon).
 - Added `sw.js` service worker — network-first for HTML (always latest source), stale-while-revalidate for assets, cache version `v2026-05-11-1`.

@@ -201,6 +201,16 @@ button:focus-visible { outline: 2px solid var(--brand-2); outline-offset: 2px; }
 	accent-color: var(--brand);
 }
 
+.toolbar-options .pro-sql-dialect { display: none; }
+.toolbar-options:has(#pro_sql:checked) .pro-sql-dialect { display: flex; }
+.toolbar-options:has(#pro_sql:checked) .pro-sql { color: var(--brand); font-weight: 600; }
+.toolbar-options .pro-sql-dialect .lang-select {
+	min-width: 0;
+	min-height: 32px;
+	padding: 4px 8px;
+	font-size: 13px;
+}
+
 footer {
 	text-align: center;
 	font-size: 12px;

@@ -16,6 +16,13 @@ Real cases where the formatter does not produce ideal output. None of these corr
 - **`CASE` in rare non-list contexts** — formatter assumes CASE appears in a SELECT list or boolean condition. Unusual placements may produce extra blank lines.
 - **Semicolon-separated multi-statement SQL** — `SELECT 1; SELECT 2;` is treated as one run; the formatter does not introduce a blank line between statements.
 
+## Pro SQL (vendored sql-formatter)
+
+- **First use is async** — the ~312KB UMD bundle is fetched once, so the first Beautify click after toggling Pro SQL has a small delay. Subsequent calls are instant; offline use works after the service worker has precached the bundle (i.e., after one online visit).
+- **`<cfqueryparam>` and other CFML tags inside `<cfquery>`** — protected as opaque tokens before being handed to sql-formatter, then restored. Output spacing around the tokens is normalized but may differ from the built-in formatter's style.
+- **Dialect-specific quirks** — sql-formatter parses each dialect strictly. Mixing dialect-specific syntax with the wrong dialect setting (e.g., T-SQL `[brackets]` while dialect is set to `mysql`) may throw a parse error; the wrapper catches it and falls back to the built-in formatter rather than producing a broken result.
+- **Bundle size impact on PWA precache** — enabling Pro SQL adds ~312KB to the service worker's precached payload (only after first online use). Disabling it does not evict the cached bundle until the next `CACHE_VERSION` bump.
+
 ## JavaScript (Deep JS)
 
 - **Nested parens are not reformatted** — `protectBraceCodeParens` protects every `(…)` so `for(;;)` and function arguments stay intact. The tradeoff: `(function(){ body })()` IIFE bodies are kept on the same line inside the paren.

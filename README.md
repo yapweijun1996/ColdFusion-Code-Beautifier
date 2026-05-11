@@ -19,6 +19,8 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. N
 - **Auto-copy / auto-clear input / auto-clear output** independent toggles (copy-success guards the output clear).
 - **Force-split `<tag><tag>`** option for dense HTML.
 - **Fullscreen layout** with side-by-side input / output on desktop, stacked on mobile.
+- **Pro SQL** (opt-in) — vendored [sql-formatter](https://github.com/sql-formatter-org/sql-formatter) (MIT) for 16 dialects: MySQL, MariaDB, PostgreSQL, SQLite, T-SQL, PL/SQL, DB2, Redshift, Snowflake, BigQuery, Hive, Spark, Trino, N1QL, SingleStoreDB, Standard. Lazy-loaded on first use (zero cost when off), falls back to the built-in formatter if the bundle fails.
+- **PWA** — installable, offline-capable via service worker. HTML uses network-first so users always pick up the latest source code on next page load; assets use stale-while-revalidate.
 
 ## Usage
 

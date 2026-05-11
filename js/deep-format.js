@@ -4,11 +4,22 @@ function deepFormatEmbedded(cfmlCode, opts) {
 	var doSql = options.sql !== false;
 	var doCss = options.css !== false;
 	var doJs = options.js === true;
+	var sqlPro = options.sqlPro === true;
+	var sqlDialect = options.sqlDialect || 'sql';
 
 	if (doSql) {
 		out = replaceEmbeddedBlock(out, 'cfquery', function(parentIndent, openTag, body, closeTag) {
 			var protectedSQL = protectCFMLTokens(cleanEmbeddedBody(body));
-			var formattedSQL = beautifySQL(protectedSQL.code);
+			var formattedSQL;
+			if (sqlPro && typeof formatProSQLSync === 'function' && typeof isProSQLLoaded === 'function' && isProSQLLoaded()) {
+				try {
+					formattedSQL = formatProSQLSync(protectedSQL.code, sqlDialect);
+				} catch (err) {
+					formattedSQL = beautifySQL(protectedSQL.code);
+				}
+			} else {
+				formattedSQL = beautifySQL(protectedSQL.code);
+			}
 			var restoredSQL = restoreCFMLTokens(formattedSQL, protectedSQL.tokens);
 			restoredSQL = cleanRestoredCFMLTokenSpacing(restoredSQL);
 
