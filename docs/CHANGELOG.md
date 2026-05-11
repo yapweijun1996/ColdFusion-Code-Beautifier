@@ -2,6 +2,32 @@
 
 ## v6 series (2026-05-11)
 
+### Feat (Phase 2): CFML normalization layer — tag/attr lowercase, operator uppercase, function camelCase
+
+When Pro SQL is enabled, every cfquery output path runs through a string-aware CFML normalizer that produces consistent CFML style:
+
+- **Tag names lowercased**: `<CFQUERYPARAM>` → `<cfqueryparam>`, `</CFIF>` → `</cfif>`
+- **Attribute names lowercased**: `VALUE=` → `value=`, `CFSQLTYPE=` → `cfsqltype=`
+- **cfsqltype CF_SQL_* values lowercased**: `CF_SQL_VARCHAR` → `cf_sql_varchar`
+- **Multi-space between attrs → single space**: `<cfqueryparam  value=` → `<cfqueryparam value=`
+- **CFML operators uppercased in expression tags** (cfif/cfelseif/cfset/cfreturn): `is`/`or`/`and`/`eq`/`neq`/`lt`/`gt`/`lte`/`gte`/`not`/`mod`/`xor`/`eqv`/`imp`/`contains`/`does not contain`/`is not` → `IS`/`OR`/`AND`/...
+- **CFML built-in functions camelCased**: `isdefined` → `isDefined`, `arraylen` → `arrayLen`, `structkeyexists` → `structKeyExists`, `findnocase` → `findNoCase`, `dateformat` → `dateFormat`, `preservesinglequotes` → `PreserveSingleQuotes`, etc. (~50 functions in the lookup table; extensible)
+
+Implementation is **string-aware**: a SQL string literal containing literal text like `'<CFIF>'` is NOT normalized — only real CFML tags outside strings/comments get transformed.
+
+New helpers in `js/deep-format.js`:
+- `CFML_OPERATORS` array + `CFML_BUILTIN_FUNCS` table
+- `protectExpressionStrings` / `restoreProtectedExpressionStrings`
+- `uppercaseCFMLOperators`, `camelCaseCFMLFunctions`
+- `normalizeCFMLExpression`, `normalizeCFMLAttributes`
+- `normalizeCFMLTagInternals` (single-tag transformer)
+- `normalizeCFMLTagsInSafeText` (string-aware text walker)
+- `maybeNormalizeCFMLTags` (cfquery handler wrapper)
+
+12 new unit tests covering tag/attr/value case, multi-space, operator uppercase, function camelCase, string-aware safety. 73 tests total, green. `sw.js` `CACHE_VERSION` → `v2026-05-11-8`.
+
+Phase 3 (WHERE hoisting + split-format-recombine) to follow.
+
 ### Feat (Phase 1): Lite Pro SQL on verbatim path — SQL keyword uppercasing
 
 When Pro SQL is enabled AND a cfquery body falls through to Tier 2 verbatim (typically WHERE-cfif where marker injection can't form valid SQL), deep-format now applies SQL keyword case normalization to the verbatim body — protectCFMLTokens → case-insensitive uppercase of SELECT/FROM/WHERE/AND/OR/JOIN/etc. → restore. Layout completely preserved; only keywords outside CFML tags and SQL string literals are cased.

@@ -463,6 +463,103 @@ assertEqual(
 	'<cfif x>\n\t<!--- example: <cfquery name="q">SELECT 1</cfquery> --->\n\t<cfset y = 2>\n</cfif>'
 );
 
+/* Phase 2 — CFML normalization layer unit tests.
+ * normalizeCFMLTagInternals: lowercase tag/attr names, lowercase cfsqltype
+ * values, normalize attribute spacing, uppercase CFML operators in
+ * expression tags, camelCase CFML built-in functions.
+ */
+(function runCFMLNormalizationTests() {
+	var ctx = makeContext('', 'sql').context;
+	var norm = ctx.normalizeCFMLTagInternals;
+	var normText = ctx.normalizeCFMLTagsInSafeText;
+	assertEqual('normalizeCFMLTagInternals exists', typeof norm, 'function');
+	assertEqual('normalizeCFMLTagsInSafeText exists', typeof normText, 'function');
+
+	// Tag name lowercase
+	assertEqual(
+		'lowercase tag name + attr names',
+		norm('<CFQUERYPARAM VALUE="#x#" CFSQLTYPE="CF_SQL_VARCHAR">'),
+		'<cfqueryparam value="#x#" cfsqltype="cf_sql_varchar">'
+	);
+
+	// Multi-space normalization
+	assertEqual(
+		'multi-space between attrs collapses to single space',
+		norm('<cfqueryparam  value="a"  cfsqltype="b">'),
+		'<cfqueryparam value="a" cfsqltype="b">'
+	);
+
+	// cfsqltype CF_SQL_* value lowercase
+	assertEqual(
+		'cfsqltype CF_SQL_INTEGER value lowercased',
+		norm('<cfqueryparam value="1" cfsqltype="CF_SQL_INTEGER">'),
+		'<cfqueryparam value="1" cfsqltype="cf_sql_integer">'
+	);
+
+	// cfif expression — operator uppercase
+	assertEqual(
+		'cfif uppercases is/or/and operators',
+		norm('<cfif x is "y" and z or w eq 1>'),
+		'<cfif x IS "y" AND z OR w EQ 1>'
+	);
+
+	// cfif expression — preserve strings (operator-name inside string not touched)
+	assertEqual(
+		'cfif preserves operator-name substring inside string',
+		norm('<cfif x is "is_active">'),
+		'<cfif x IS "is_active">'
+	);
+
+	// cfif expression — built-in function camelCase
+	assertEqual(
+		'cfif camelCases isdefined/structkeyexists',
+		norm('<cfif isdefined("foo") and structkeyexists(session, "x")>'),
+		'<cfif isDefined("foo") AND structKeyExists(session, "x")>'
+	);
+
+	// cfelseif also gets expression treatment
+	assertEqual(
+		'cfelseif uppercases operators + camelCases functions',
+		norm('<cfelseif arraylen(x) gte 1 and isnumeric(y)>'),
+		'<cfelseif arrayLen(x) GTE 1 AND isNumeric(y)>'
+	);
+
+	// Closing tags
+	assertEqual(
+		'lowercase closing tag name',
+		norm('</CFIF>'),
+		'</cfif>'
+	);
+
+	// CFML markup comments untouched
+	assertEqual(
+		'cfml markup comment preserved verbatim',
+		norm('<!--- CFQUERYPARAM untouched --->'),
+		'<!--- CFQUERYPARAM untouched --->'
+	);
+
+	// String-aware walker: cfif inside SQL string is NOT normalized
+	assertEqual(
+		'cfif text inside SQL string is not normalized',
+		normText("select '<cfif y>' from t"),
+		"select '<cfif y>' from t"
+	);
+
+	// String-aware walker: real cfif outside string IS normalized
+	assertEqual(
+		'real cfif outside string is normalized',
+		normText('select x from t <cfif Y IS "z">where id=1</cfif>'),
+		'select x from t <cfif Y IS "z">where id=1</cfif>'
+	);
+
+	// String-aware walker: mixed — string with cfif text + real cfif
+	assertEqual(
+		'mixed string-cfif + real-cfif: only real one normalized',
+		normText("select '<CFIF>' from t <cfif x IS \"y\">where id=1</cfif>"),
+		"select '<CFIF>' from t <cfif x IS \"y\">where id=1</cfif>"
+	);
+})();
+
 /* protectStructuralCFMLAsColumnMarkers + restoreStructuralCFMLMarkers
  * Unit tests for the marker-injection round-trip. Verify each own-line
  * CFML control-flow tag becomes a column-friendly marker and is restored

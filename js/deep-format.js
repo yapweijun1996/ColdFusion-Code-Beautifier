@@ -40,6 +40,267 @@ function bodyHasUserIndent(body) {
 	return false;
 }
 
+/* Phase 2 — CFML normalization layer.
+ *
+ * When Pro SQL is enabled, all CFML tags inside the cfquery body get
+ * normalized:
+ *   - Tag names lowercased (CFQUERYPARAM → cfqueryparam)
+ *   - Attribute names lowercased (CFSQLTYPE= → cfsqltype=)
+ *   - cfsqltype values lowercased (CF_SQL_VARCHAR → cf_sql_varchar)
+ *   - Multi-space between attrs → single space
+ *   - CFML expression tags (cfif/cfelseif/cfset/cfreturn) get their
+ *     CFML operators uppercased (is → IS, and → AND, eq → EQ, ...)
+ *     and built-in functions camelCased (isdefined → isDefined).
+ *
+ * String content inside expressions is protected so an operator-name
+ * substring (e.g., 'is_active') is never touched.
+ */
+var CFML_OPERATORS = [
+	'does not contain', 'contains',
+	'is not', 'is',
+	'eqv', 'imp', 'xor', 'mod',
+	'gte', 'lte', 'neq', 'eq',
+	'lt', 'gt',
+	'and', 'or', 'not'
+];
+
+var CFML_BUILTIN_FUNCS = {
+	'isdefined': 'isDefined', 'isnumeric': 'isNumeric', 'isvalid': 'isValid',
+	'isarray': 'isArray', 'isstruct': 'isStruct', 'isquery': 'isQuery',
+	'isobject': 'isObject', 'isboolean': 'isBoolean', 'isdate': 'isDate',
+	'isnull': 'isNull', 'issimplevalue': 'isSimpleValue', 'isstring': 'isString',
+	'arraylen': 'arrayLen', 'arrayisempty': 'arrayIsEmpty',
+	'arrayappend': 'arrayAppend', 'arrayprepend': 'arrayPrepend',
+	'arraydelete': 'arrayDelete', 'arrayfind': 'arrayFind',
+	'arraytolist': 'arrayToList', 'listtoarray': 'listToArray',
+	'listlen': 'listLen', 'listappend': 'listAppend',
+	'listcontains': 'listContains', 'listfind': 'listFind',
+	'listfirst': 'listFirst', 'listlast': 'listLast', 'listgetat': 'listGetAt',
+	'structkeyexists': 'structKeyExists', 'structnew': 'structNew',
+	'structcount': 'structCount', 'structkeylist': 'structKeyList',
+	'structkeyarray': 'structKeyArray',
+	'ltrim': 'lTrim', 'rtrim': 'rTrim', 'lcase': 'lCase', 'ucase': 'uCase',
+	'findnocase': 'findNoCase', 'replacenocase': 'replaceNoCase',
+	'dateformat': 'dateFormat', 'timeformat': 'timeFormat',
+	'datediff': 'dateDiff', 'dateadd': 'dateAdd', 'numberformat': 'numberFormat',
+	'createodbcdate': 'createODBCDate', 'createodbctime': 'createODBCTime',
+	'createodbcdatetime': 'createODBCDateTime',
+	'serializejson': 'serializeJSON', 'deserializejson': 'deserializeJSON',
+	'preservesinglequotes': 'PreserveSingleQuotes',
+	'urlencodedformat': 'urlEncodedFormat'
+};
+
+function protectExpressionStrings(text) {
+	var tokens = [];
+	var output = '';
+	var i = 0;
+	while (i < text.length) {
+		var c = text[i];
+		if (c === '"' || c === "'") {
+			var quote = c;
+			var start = i;
+			i++;
+			while (i < text.length) {
+				if (text[i] === '\\') { i += 2; continue; }
+				if (text[i] === quote) {
+					if (text[i + 1] === quote) { i += 2; continue; }
+					i++;
+					break;
+				}
+				i++;
+			}
+			tokens.push(text.slice(start, i));
+			output += '__CFEXPSTR_' + (tokens.length - 1) + '__';
+		} else {
+			output += c;
+			i++;
+		}
+	}
+	return { code: output, tokens: tokens };
+}
+
+function restoreProtectedExpressionStrings(text, tokens) {
+	for (var i = 0; i < tokens.length; i++) {
+		text = text.split('__CFEXPSTR_' + i + '__').join(tokens[i]);
+	}
+	return text;
+}
+
+function uppercaseCFMLOperators(text) {
+	var sorted = CFML_OPERATORS.slice().sort(function(a, b) {
+		return b.length - a.length;
+	});
+	var alternatives = sorted.map(function(op) {
+		return op.replace(/\s+/g, '\\s+');
+	}).join('|');
+	var pattern = new RegExp('\\b(' + alternatives + ')\\b', 'gi');
+	return text.replace(pattern, function(match) {
+		return match.replace(/\s+/g, ' ').toUpperCase();
+	});
+}
+
+function camelCaseCFMLFunctions(text) {
+	var funcNames = Object.keys(CFML_BUILTIN_FUNCS);
+	funcNames.sort(function(a, b) { return b.length - a.length; });
+	var pattern = new RegExp('\\b(' + funcNames.join('|') + ')\\b', 'gi');
+	return text.replace(pattern, function(match) {
+		var key = match.toLowerCase();
+		return CFML_BUILTIN_FUNCS[key] || match;
+	});
+}
+
+function normalizeCFMLExpression(content) {
+	if (typeof content !== 'string' || content === '') return content;
+	var protectedExpr = protectExpressionStrings(content);
+	var transformed = uppercaseCFMLOperators(protectedExpr.code);
+	transformed = camelCaseCFMLFunctions(transformed);
+	// Collapse multi-whitespace to single space, but preserve leading space.
+	var leading = (transformed.match(/^\s*/) || [''])[0];
+	transformed = (leading.length > 0 ? ' ' : '') + transformed.replace(/\s+/g, ' ').trim();
+	return restoreProtectedExpressionStrings(transformed, protectedExpr.tokens);
+}
+
+function normalizeCFMLAttributes(content) {
+	if (typeof content !== 'string' || content === '') return content;
+	var result = '';
+	var i = 0;
+	while (i < content.length) {
+		while (i < content.length && /\s/.test(content[i])) i++;
+		if (i >= content.length) break;
+		var nameStart = i;
+		while (i < content.length && /[A-Za-z_0-9]/.test(content[i])) i++;
+		if (i === nameStart) break;
+		var attrName = content.slice(nameStart, i).toLowerCase();
+		while (i < content.length && /\s/.test(content[i])) i++;
+		if (content[i] !== '=') {
+			result += ' ' + attrName;
+			continue;
+		}
+		i++; // consume =
+		while (i < content.length && /\s/.test(content[i])) i++;
+		var value = '';
+		if (content[i] === '"' || content[i] === "'") {
+			var quote = content[i];
+			var valStart = i;
+			i++;
+			while (i < content.length) {
+				if (content[i] === '\\') { i += 2; continue; }
+				if (content[i] === quote) {
+					if (content[i + 1] === quote) { i += 2; continue; }
+					i++;
+					break;
+				}
+				i++;
+			}
+			value = content.slice(valStart, i);
+		} else {
+			var valStart = i;
+			while (i < content.length && !/\s/.test(content[i])) i++;
+			value = content.slice(valStart, i);
+		}
+		// Lowercase cfsqltype CF_SQL_* values
+		if (attrName === 'cfsqltype') {
+			value = value.replace(/(["'])(cf_sql_\w+)(["'])/i, function(m, q1, v, q2) {
+				return q1 + v.toLowerCase() + q2;
+			});
+		}
+		result += ' ' + attrName + '=' + value;
+	}
+	return result;
+}
+
+function normalizeCFMLTagInternals(tag) {
+	if (typeof tag !== 'string') return tag;
+	// Skip CFML markup comments
+	if (/^<!---/.test(tag)) return tag;
+	var match = tag.match(/^(<\/?)(cf\w+)([\s\S]*)$/i);
+	if (!match) return tag;
+	var slash = match[1];
+	var tagName = match[2].toLowerCase();
+	var rest = match[3];
+	// Find the closing >
+	var closeIdx = rest.lastIndexOf('>');
+	if (closeIdx === -1) return slash + tagName + rest;
+	var content = rest.slice(0, closeIdx);
+	var suffix = rest.slice(closeIdx);
+	var isExpressionTag = (tagName === 'cfif' || tagName === 'cfelseif' || tagName === 'cfset' || tagName === 'cfreturn');
+	if (isExpressionTag) {
+		content = normalizeCFMLExpression(content);
+	} else {
+		content = normalizeCFMLAttributes(content);
+	}
+	return slash + tagName + content + suffix;
+}
+
+function normalizeCFMLTagsInSafeText(text) {
+	// Walks the text safely, normalizing CFML tags but skipping over
+	// SQL strings (', ", `), SQL block/line comments, and CFML markup
+	// comments. This is needed because, post-restore, the text contains
+	// both CFML tags AND SQL strings — and a SQL string might contain
+	// literal text that looks like a CFML tag.
+	if (typeof text !== 'string' || text === '') return text;
+	var output = '';
+	var i = 0;
+	while (i < text.length) {
+		var char = text[i];
+		// SQL string
+		if (char === "'" || char === '"' || char === '`') {
+			var quote = char;
+			var start = i;
+			i++;
+			while (i < text.length) {
+				if (text[i] === '\\') { i += 2; continue; }
+				if (text[i] === quote) {
+					if (text[i + 1] === quote) { i += 2; continue; }
+					i++;
+					break;
+				}
+				i++;
+			}
+			output += text.slice(start, i);
+			continue;
+		}
+		// SQL block comment
+		if (char === '/' && text[i + 1] === '*') {
+			var start = i;
+			i += 2;
+			while (i < text.length - 1 && !(text[i] === '*' && text[i + 1] === '/')) i++;
+			if (i < text.length - 1) i += 2;
+			output += text.slice(start, i);
+			continue;
+		}
+		// SQL line comment
+		if (char === '-' && text[i + 1] === '-') {
+			var start = i;
+			while (i < text.length && text[i] !== '\n') i++;
+			output += text.slice(start, i);
+			continue;
+		}
+		// CFML markup comment — preserve verbatim
+		if (char === '<' && text.slice(i, i + 5) === '<!---') {
+			var start = i;
+			var end = text.indexOf('--->', i + 5);
+			if (end === -1) end = text.length;
+			else end += 4;
+			output += text.slice(start, end);
+			i = end;
+			continue;
+		}
+		// CFML tag
+		if (char === '<' && /^<\/?cf\w/i.test(text.slice(i, i + 12))) {
+			var tagMatch = text.slice(i).match(/^<\/?cf\w+\b[^>]*\/?>/i);
+			if (tagMatch) {
+				output += normalizeCFMLTagInternals(tagMatch[0]);
+				i += tagMatch[0].length;
+				continue;
+			}
+		}
+		output += char;
+		i++;
+	}
+	return output;
+}
+
 /* Phase 1 — Lite Pro SQL on verbatim path.
  *
  * uppercaseSQLKeywordsInProtected runs on text where protectCFMLTokens has
@@ -207,6 +468,18 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 	var originalBodies = extractAllCfqueryBodies(originalSource);
 	var cfqueryIndex = 0;
 
+	function maybeNormalizeCFMLTags(text) {
+		// Apply Phase 2 CFML normalization when Pro SQL is enabled.
+		// String-aware walker so a SQL string containing literal '<cfif>'
+		// text is not touched.
+		if (!sqlPro) return text;
+		try {
+			return normalizeCFMLTagsInSafeText(text);
+		} catch (err) {
+			return text;
+		}
+	}
+
 	if (doSql) {
 		out = replaceEmbeddedBlock(out, 'cfquery', function(parentIndent, openTag, body, closeTag) {
 			var currentIndex = cfqueryIndex++;
@@ -244,9 +517,11 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 							restoredCFMLM = cleanRestoredCFMLTokenSpacing(restoredCFMLM);
 							var markerRestored = restoreStructuralCFMLMarkers(restoredCFMLM, marked.markers);
 							if (markerRestored !== null) {
-								return parentIndent + openTag + '\n'
+								return maybeNormalizeCFMLTags(
+									parentIndent + openTag + '\n'
 									+ indentEmbeddedBody(markerRestored, parentIndent) + '\n'
-									+ parentIndent + closeTag;
+									+ parentIndent + closeTag
+								);
 							}
 						}
 					} catch (markerErr) {
@@ -272,14 +547,16 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 								verbatimFinal = verbatimCleaned;
 							}
 						}
-						return parentIndent + openTag + '\n'
+						return maybeNormalizeCFMLTags(
+							parentIndent + openTag + '\n'
 							+ indentEmbeddedBody(verbatimFinal, parentIndent) + '\n'
-							+ parentIndent + closeTag;
+							+ parentIndent + closeTag
+						);
 					}
 				}
 
 				// Tier 3 — Flat input: trust beautifyCFML's nested output.
-				return parentIndent + openTag + body + closeTag;
+				return maybeNormalizeCFMLTags(parentIndent + openTag + body + closeTag);
 			}
 
 			var protectedSQL = protectCFMLTokens(cleanEmbeddedBody(body));
@@ -300,7 +577,7 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 			var restoredSQL = restoreCFMLTokens(formattedSQL, protectedSQL.tokens);
 			restoredSQL = cleanRestoredCFMLTokenSpacing(restoredSQL);
 
-			return parentIndent + openTag + '\n' + indentEmbeddedBody(restoredSQL, parentIndent) + '\n' + parentIndent + closeTag;
+			return maybeNormalizeCFMLTags(parentIndent + openTag + '\n' + indentEmbeddedBody(restoredSQL, parentIndent) + '\n' + parentIndent + closeTag);
 		});
 	}
 
