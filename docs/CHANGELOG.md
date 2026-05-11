@@ -2,6 +2,68 @@
 
 ## v6 series (2026-05-11)
 
+### Feat: auto-split adjacent CFML tags on the same source line — multi-`<cfset>` + comment-jammed legacy code now formats cleanly
+
+Real-world legacy CFML often has lines like:
+
+```cfml
+<cfset layer_pos_top = 858><!---<cfset layer_pos_top = 758>---><cfset layer_pos_top = 849>
+<cfset layer_left = "470px"><cfset layer_left = "478px">    <cfset layer_left = "323px">
+<cfif x><cfinclude template="foo.cfm"></cfif>
+```
+
+The beautifier preserved these as-is — visually noisy and impossible to skim. New `splitAdjacentCFMLTags(code)` runs as the first pass inside `beautifyCFML` and inserts newlines at every tag-to-tag boundary so each CFML tag lives on its own line:
+
+```cfml
+<cfset layer_pos_top = 858>
+<!---<cfset layer_pos_top = 758>--->
+<cfset layer_pos_top = 849>
+<cfset layer_left = "470px">
+<cfset layer_left = "478px">
+<cfset layer_left = "323px">
+<cfif x>
+    <cfinclude template="foo.cfm">
+</cfif>
+```
+
+The split is **default-on, no checkbox** — there is no legitimate visual or semantic reason to glue two `<cfset>` tags together on one line.
+
+### Safety rules
+
+Trigger requires BOTH:
+1. Next non-whitespace is `<cf...`, `</cf...`, `<!---` or `<!--` (CFML tag, CFML comment, or HTML comment).
+2. Last non-whitespace character on the OUTPUT line is `>` (i.e., we're at a tag-to-tag boundary).
+
+Rule (2) is what protects inline patterns from being broken:
+
+```cfml
+<cfif x>1<cfelse>0</cfif>          ← stays on one line (between `1` and `<cfelse>` is content, not `>`)
+```
+
+### Opaque blocks (parser is fully transparent — no splitting inside)
+
+- CFML markup comments `<!--- ... --->`
+- HTML comments `<!-- ... -->`
+- `<script>...</script>` (JS strings can contain anything)
+- `<style>...</style>` (CSS)
+- `<cfquery>...</cfquery>` (SQL body — `<cfqueryparam>` stays inline)
+- Single/double-quoted strings (with SQL `''`/`""` doubled-quote escape)
+
+### Excluded tags (legitimately inline)
+
+- `<cfqueryparam>` — designed to live inline inside SQL
+- `<cfargument>` — designed to chain inside `<cffunction>` body
+
+### Validation
+
+- All 90 existing tests still pass.
+- 8 new e2e tests for the splitter (T1: simple multi-cfset; T2: cfset + comment + cfset; T3: cfif/cfinclude/cfif close; T4: inline cfif preserved; T5: script block opaque; T6: cfquery+cfqueryparam preserved; T7: cfparam+cfinclude; T8: nested cfif fully split).
+- 14-file corpus (1.9 MB / 30,518 lines / 114 cfqueries): zero warnings, zero throws, all 11 sal_inv_view185 cfqueries still FULL_REFORMAT, all Pro SQL verdict counts unchanged.
+- Performance: 467ms → 1091ms on full corpus (+624ms for splitter pass on 1.9 MB ≈ 3 MB/s — acceptable for offline format).
+- Visual inspection of `sal_inv_view185.beautified.cfm` confirms the screenshot's problem lines (`<cfset layer_pos_top = 858>...` and `<cfset layer_left = "470px">...`) are now properly split.
+
+`sw.js` `CACHE_VERSION` → `v2026-05-11-13`. 98 tests total, green.
+
 ### Feat: PRO_SQL_KEYWORDS now covers `AS`, `USING`, `CAST`, `OVER`, `INTERSECT`, `EXCEPT`, `WITHIN GROUP`, `NATURAL JOIN`, etc. — Tier 2 Lite uppercase pass is no longer half-applied
 
 When a `<cfquery>` body contains structural CFML control flow (cfif/cfloop), deep-format takes the **Tier 2 verbatim** path: layout is preserved, but SQL keywords still get uppercased via the Lite pass (`uppercaseSQLKeywordsInProtected`). Until now this list was missing several common SQL keywords — most notably `AS`, the column/table aliasing keyword. Real-world cfqueries like
