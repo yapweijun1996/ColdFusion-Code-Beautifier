@@ -301,6 +301,159 @@ function normalizeCFMLTagsInSafeText(text) {
 	return output;
 }
 
+/* Phase 3 — WHERE hoisting + split-format-recombine.
+ *
+ * For cfquery bodies where every leaf branch of the structural cfif tree
+ * starts with `where ` keyword, we can hoist the `where` OUT of the cfif
+ * branches and place a single WHERE keyword before the tree. This unlocks
+ * full Pro SQL formatting (SELECT/FROM/WHERE keywords on their own lines,
+ * columns list-broken) on the OUTER SQL backbone while preserving the
+ * cfif structure as a sub-tree under WHERE.
+ *
+ * Algorithm:
+ *   1. splitCfqueryBodyAtCfifTree — slice body into {pre, treeLines, post}
+ *   2. detectAllLeavesStartWithWhere — verify every non-tag tree line
+ *      starts with `where ` keyword
+ *   3. stripWhereFromLeaves — strip the `where ` prefix from each leaf
+ *   4. Format PRE + synthesized `where` via sql-formatter
+ *   5. Format TREE via formatStrippedTree (cfif depth tracking + keyword
+ *      uppercase on body lines)
+ *   6. Format POST via uppercaseSQLKeywordsInProtected
+ *   7. Assemble with correct indent
+ *
+ * If any precondition fails or sql-formatter throws, falls through to
+ * Tier 1 marker → Tier 2 verbatim — zero regression risk.
+ */
+function splitCfqueryBodyAtCfifTree(body) {
+	if (typeof body !== 'string') return null;
+	var lines = body.split('\n');
+	var openIdx = -1;
+	var closeIdx = -1;
+	var depth = 0;
+	var openP = /^<(?:cfif|cfloop|cfswitch)\b[^>]*>$/i;
+	var closeP = /^<\/(?:cfif|cfloop|cfswitch)>$/i;
+	for (var i = 0; i < lines.length; i++) {
+		var t = lines[i].trim();
+		if (closeP.test(t)) {
+			if (depth > 0) {
+				depth--;
+				if (depth === 0 && openIdx !== -1) {
+					closeIdx = i;
+					break;
+				}
+			}
+		} else if (openP.test(t)) {
+			if (openIdx === -1) openIdx = i;
+			depth++;
+		}
+	}
+	if (openIdx === -1 || closeIdx === -1) return null;
+	return {
+		pre: lines.slice(0, openIdx).join('\n'),
+		treeLines: lines.slice(openIdx, closeIdx + 1),
+		post: lines.slice(closeIdx + 1).join('\n')
+	};
+}
+
+function detectAllLeavesStartWithWhere(treeLines) {
+	var structural = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b[^>]*>$/i;
+	var seenLeaf = false;
+	for (var i = 0; i < treeLines.length; i++) {
+		var t = treeLines[i].trim();
+		if (t === '' || structural.test(t)) continue;
+		if (!/^where\b/i.test(t)) return false;
+		seenLeaf = true;
+	}
+	return seenLeaf;
+}
+
+function stripWhereFromLeaves(treeLines) {
+	var structural = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b[^>]*>$/i;
+	return treeLines.map(function(line) {
+		var t = line.trim();
+		if (t === '' || structural.test(t)) return line;
+		return line.replace(/^(\s*)where\s+/i, '$1');
+	});
+}
+
+function repeatTab(n) {
+	var s = '';
+	for (var i = 0; i < n; i++) s += '\t';
+	return s;
+}
+
+function normalizeSQLEqualsSpacing(text) {
+	// Walks `text` char-by-char inserting space around standalone `=`.
+	// Compound operators `<=`, `>=`, `!=`, `:=`, `==`, `<>` are preserved
+	// untouched. Called only on protectCFMLTokens-protected text so SQL
+	// strings and CFML tag attribute `=` are already opaque placeholders
+	// and cannot be matched.
+	if (typeof text !== 'string' || text === '') return text;
+	var out = '';
+	var i = 0;
+	while (i < text.length) {
+		var c = text[i];
+		var prev = i > 0 ? text[i - 1] : '';
+		var next = i + 1 < text.length ? text[i + 1] : '';
+		if (c === '=' && next !== '=' && '<>!:='.indexOf(prev) === -1) {
+			out = out.replace(/\s+$/, '') + ' = ';
+			i++;
+			while (i < text.length && /[ \t]/.test(text[i])) i++;
+		} else {
+			out += c;
+			i++;
+		}
+	}
+	return out;
+}
+
+function formatStrippedTree(treeLines) {
+	// Walks treeLines with cfif depth tracking. Each line is output at
+	// its semantic depth (cfif at parent's depth, body at depth+1) using
+	// pure tab indentation starting at depth 1 (the WHERE body level).
+	// Body lines also get SQL keyword uppercased + `=` spacing normalized
+	// via Phase 1/3 helpers (token-protection-aware).
+	var openP = /^<(?:cfif|cfloop|cfswitch)\b[^>]*>$/i;
+	var sibP = /^<(?:cfelseif|cfelse|cfcase|cfdefaultcase)\b[^>]*>$/i;
+	var closeP = /^<\/(?:cfif|cfloop|cfswitch)>$/i;
+	var result = [];
+	var depth = 1;
+	for (var i = 0; i < treeLines.length; i++) {
+		var trimmed = treeLines[i].trim();
+		if (trimmed === '') { result.push(''); continue; }
+		if (closeP.test(trimmed)) {
+			depth--;
+			if (depth < 1) depth = 1;
+			result.push(repeatTab(depth) + trimmed);
+		} else if (sibP.test(trimmed)) {
+			depth--;
+			if (depth < 1) depth = 1;
+			result.push(repeatTab(depth) + trimmed);
+			depth++;
+		} else if (openP.test(trimmed)) {
+			result.push(repeatTab(depth) + trimmed);
+			depth++;
+		} else {
+			// Body line — apply Phase 1 keyword uppercase + `=` spacing
+			// normalization via token protection (CFML tags + SQL strings
+			// already protected so their internal `=` won't match).
+			try {
+				var prot = protectCFMLTokens(trimmed);
+				var uppered = uppercaseSQLKeywordsInProtected(prot.code);
+				var spaced = normalizeSQLEqualsSpacing(uppered);
+				var rest = restoreCFMLTokens(spaced, prot.tokens);
+				result.push(repeatTab(depth) + rest);
+			} catch (e) {
+				result.push(repeatTab(depth) + trimmed);
+				if (typeof console !== 'undefined' && console.warn) {
+					console.warn('[deep-format] Phase 3 tree-body normalization failed on line, keeping verbatim. Error:', e && e.message);
+				}
+			}
+		}
+	}
+	return result.join('\n');
+}
+
 /* Phase 1 — Lite Pro SQL on verbatim path.
  *
  * uppercaseSQLKeywordsInProtected runs on text where protectCFMLTokens has
@@ -476,6 +629,9 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 		try {
 			return normalizeCFMLTagsInSafeText(text);
 		} catch (err) {
+			if (typeof console !== 'undefined' && console.warn) {
+				console.warn('[deep-format] Phase 2 CFML normalization failed, leaving text unchanged. Error:', err && err.message);
+			}
 			return text;
 		}
 	}
@@ -526,6 +682,73 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 						}
 					} catch (markerErr) {
 						// Marker approach threw — fall through to verbatim
+						if (typeof console !== 'undefined' && console.warn) {
+							console.warn('[deep-format] Tier 1 marker injection failed (cfquery #' + currentIndex + '), falling back to next tier. Error:', markerErr && markerErr.message, '\nDialect:', sqlDialect, '\nSQL excerpt:', String(verbatimSource).slice(0, 300));
+						}
+					}
+				}
+
+				// Phase 3 — WHERE hoisting + split-format-recombine.
+				// When every leaf in the cfif tree starts with `where`, hoist
+				// the WHERE keyword out of the branches, format the SELECT/FROM
+				// + synthesized WHERE prefix with sql-formatter, then append the
+				// cfif tree (with `where` stripped from leaves + body keyword
+				// uppercased) and any trailing AND clauses. Achieves full Pro
+				// SQL backbone formatting with cfif structure preserved as a
+				// sub-tree under the (now hoisted) WHERE keyword.
+				if (bodyHasUserIndent(verbatimSource)
+						&& sqlPro
+						&& typeof formatProSQLSync === 'function'
+						&& typeof isProSQLLoaded === 'function'
+						&& isProSQLLoaded()) {
+					try {
+						var cleanedForHoist = cleanEmbeddedBody(verbatimSource);
+						var split = splitCfqueryBodyAtCfifTree(cleanedForHoist);
+						if (split && detectAllLeavesStartWithWhere(split.treeLines)) {
+							var strippedTree = stripWhereFromLeaves(split.treeLines);
+							var preTrimmed = split.pre.replace(/\s+$/, '');
+							var preToFormat = preTrimmed + (preTrimmed ? '\n' : '') + 'where';
+							var protectedPre = protectCFMLTokens(preToFormat);
+							var formattedPre = formatProSQLSync(protectedPre.code, sqlDialect);
+							var restoredPre = restoreCFMLTokens(formattedPre, protectedPre.tokens);
+							restoredPre = cleanRestoredCFMLTokenSpacing(restoredPre);
+							restoredPre = restoredPre.replace(/\s+$/, '');
+
+							var treeFormatted = formatStrippedTree(strippedTree);
+
+							var postTrimmed = split.post.trim();
+							var formattedPost = '';
+							if (postTrimmed !== '') {
+								try {
+									var postProt = protectCFMLTokens(postTrimmed);
+									var postUppered = uppercaseSQLKeywordsInProtected(postProt.code);
+									var postSpaced = normalizeSQLEqualsSpacing(postUppered);
+									formattedPost = restoreCFMLTokens(postSpaced, postProt.tokens);
+									formattedPost = '\t' + formattedPost.replace(/\n/g, '\n\t');
+								} catch (postErr) {
+									formattedPost = '\t' + postTrimmed;
+									if (typeof console !== 'undefined' && console.warn) {
+										console.warn('[deep-format] Phase 3 post-cfif clause uppercase failed (cfquery #' + currentIndex + '), keeping verbatim. Error:', postErr && postErr.message);
+									}
+								}
+							}
+
+							var assembled = restoredPre + '\n' + treeFormatted;
+							if (formattedPost !== '') {
+								assembled += '\n' + formattedPost;
+							}
+
+							return maybeNormalizeCFMLTags(
+								parentIndent + openTag + '\n'
+								+ indentEmbeddedBody(assembled, parentIndent) + '\n'
+								+ parentIndent + closeTag
+							);
+						}
+					} catch (hoistErr) {
+						// Phase 3 failed — fall through to Tier 2
+						if (typeof console !== 'undefined' && console.warn) {
+							console.warn('[deep-format] Phase 3 WHERE hoisting failed (cfquery #' + currentIndex + '), falling back to Tier 2 verbatim. Error:', hoistErr && hoistErr.message, '\nDialect:', sqlDialect);
+						}
 					}
 				}
 
@@ -545,6 +768,9 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 								verbatimFinal = restoreCFMLTokens(upperedV, protectedV.tokens);
 							} catch (upperErr) {
 								verbatimFinal = verbatimCleaned;
+								if (typeof console !== 'undefined' && console.warn) {
+									console.warn('[deep-format] Tier 2 keyword uppercase failed (cfquery #' + currentIndex + '), leaving body verbatim. Error:', upperErr && upperErr.message);
+								}
 							}
 						}
 						return maybeNormalizeCFMLTags(
@@ -569,6 +795,9 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 				try {
 					formattedSQL = formatProSQLSync(protectedSQL.code, sqlDialect);
 				} catch (err) {
+					if (typeof console !== 'undefined' && console.warn) {
+						console.warn('[deep-format] Pro SQL formatter threw on cfquery #' + currentIndex + ', falling back to built-in beautifySQL. This is why your output lacks list-break / cfqueryparam lowercasing. Error:', err && err.message, '\nDialect:', sqlDialect, '\nProtected SQL excerpt:', protectedSQL.code.slice(0, 400));
+					}
 					formattedSQL = beautifySQL(protectedSQL.code);
 				}
 			} else {

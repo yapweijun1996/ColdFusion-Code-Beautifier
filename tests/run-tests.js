@@ -463,6 +463,91 @@ assertEqual(
 	'<cfif x>\n\t<!--- example: <cfquery name="q">SELECT 1</cfquery> --->\n\t<cfset y = 2>\n</cfif>'
 );
 
+/* Phase 3 — WHERE hoisting + split-format-recombine unit tests.
+ *   - splitCfqueryBodyAtCfifTree: slice {pre, treeLines, post}
+ *   - detectAllLeavesStartWithWhere: precondition for hoisting
+ *   - stripWhereFromLeaves: strip `where ` from leaf code lines
+ *   - formatStrippedTree: cfif depth tracking + body keyword uppercase
+ *   - normalizeSQLEqualsSpacing: ` = ` around standalone `=`, skip <=>=!=
+ */
+(function runPhase3UnitTests() {
+	var ctx = makeContext('', 'sql').context;
+	var split = ctx.splitCfqueryBodyAtCfifTree;
+	var detect = ctx.detectAllLeavesStartWithWhere;
+	var strip = ctx.stripWhereFromLeaves;
+	var fmtTree = ctx.formatStrippedTree;
+	var normEq = ctx.normalizeSQLEqualsSpacing;
+
+	assertEqual('splitCfqueryBodyAtCfifTree exists', typeof split, 'function');
+	assertEqual('detectAllLeavesStartWithWhere exists', typeof detect, 'function');
+	assertEqual('stripWhereFromLeaves exists', typeof strip, 'function');
+	assertEqual('formatStrippedTree exists', typeof fmtTree, 'function');
+	assertEqual('normalizeSQLEqualsSpacing exists', typeof normEq, 'function');
+
+	// splitCfqueryBodyAtCfifTree
+	var splitResult = split('select a\nfrom t\n<cfif x>\nwhere a = 1\n<cfelse>\nwhere a = 2\n</cfif>\nand b = 3');
+	assertEqual('split: pre captured', splitResult.pre, 'select a\nfrom t');
+	assertEqual('split: post captured', splitResult.post, 'and b = 3');
+	assertEqual('split: tree line count', String(splitResult.treeLines.length), '5');
+
+	// no cfif → null
+	assertEqual('split: no cfif returns null', split('select 1'), null);
+
+	// detectAllLeavesStartWithWhere — true case
+	assertEqual(
+		'detect: all leaves start with where → true',
+		detect(['<cfif x>', 'where a = 1', '<cfelse>', 'where b = 2', '</cfif>']),
+		true
+	);
+	// false case — one leaf without `where`
+	assertEqual(
+		'detect: one leaf without where → false',
+		detect(['<cfif x>', 'where a = 1', '<cfelse>', 'and b = 2', '</cfif>']),
+		false
+	);
+	// empty leaves → false
+	assertEqual(
+		'detect: no leaves at all → false',
+		detect(['<cfif x>', '<cfelse>', '</cfif>']),
+		false
+	);
+
+	// stripWhereFromLeaves
+	var stripped = strip(['<cfif x>', '\twhere a = 1', '<cfelse>', '\twhere b = 2', '</cfif>']);
+	assertEqual('strip: leaf 1 where removed', stripped[1], '\ta = 1');
+	assertEqual('strip: leaf 2 where removed', stripped[3], '\tb = 2');
+	assertEqual('strip: cfif tag unchanged', stripped[0], '<cfif x>');
+
+	// formatStrippedTree
+	var treeOut = fmtTree(['<cfif x>', 'a = 1', '<cfelseif y>', 'b = 2', '<cfelse>', 'c = 3', '</cfif>']);
+	assertEqual(
+		'formatStrippedTree: cfif/cfelseif/cfelse at depth 1, body at depth 2, body keywords uppercased',
+		treeOut,
+		'\t<cfif x>\n\t\ta = 1\n\t<cfelseif y>\n\t\tb = 2\n\t<cfelse>\n\t\tc = 3\n\t</cfif>'
+	);
+
+	// formatStrippedTree with nested cfif
+	var nestedOut = fmtTree(['<cfif a>', '<cfif b>', 'x = 1', '</cfif>', '</cfif>']);
+	assertEqual(
+		'formatStrippedTree: nested cfif gets depth 1/2/3 indent',
+		nestedOut,
+		'\t<cfif a>\n\t\t<cfif b>\n\t\t\tx = 1\n\t\t</cfif>\n\t</cfif>'
+	);
+
+	// normalizeSQLEqualsSpacing
+	assertEqual('normEq: a=b → a = b', normEq('a=b'), 'a = b');
+	assertEqual('normEq: a = b unchanged', normEq('a = b'), 'a = b');
+	assertEqual('normEq: a<=b unchanged', normEq('a<=b'), 'a<=b');
+	assertEqual('normEq: a>=b unchanged', normEq('a>=b'), 'a>=b');
+	assertEqual('normEq: a!=b unchanged', normEq('a!=b'), 'a!=b');
+	assertEqual('normEq: a==b unchanged', normEq('a==b'), 'a==b');
+	assertEqual(
+		'normEq: WHERE x=1 AND y=2 → spaces around both',
+		normEq('WHERE x=1 AND y=2'),
+		'WHERE x = 1 AND y = 2'
+	);
+})();
+
 /* Phase 2 — CFML normalization layer unit tests.
  * normalizeCFMLTagInternals: lowercase tag/attr names, lowercase cfsqltype
  * values, normalize attribute spacing, uppercase CFML operators in
@@ -793,10 +878,13 @@ assertEqual(
 	vm.createContext(ctx2);
 	vm.runInContext(proSrc + '\n' + browserCodeMarker, ctx2);
 	ctx2.beautifyCodes();
+	// Phase 3 now activates on this input (all leaves start with `where`):
+	// WHERE is hoisted out of cfif branches, SELECT/FROM/WHERE on own lines,
+	// cfif preserved under WHERE with body indented +1.
 	assertEqual(
-		'Phase 1 e2e: WHERE-cfif falls back to verbatim but keywords uppercased',
+		'Phase 3 e2e: WHERE-cfif with all-where leaves gets hoisted + full Pro SQL backbone',
 		elements2.output.value,
-		'<cfquery name="q">\n\tSELECT a, b\n\tFROM t\n\t\t<cfif x>\n\t\t\tWHERE a = 1\n\t\t<cfelse>\n\t\t\tWHERE a = 2\n\t\t</cfif>\n\t\tAND b = 3\n</cfquery>'
+		'<cfquery name="q">\n\tSELECT\n\t\ta,\n\t\tb\n\tFROM\n\t\tt\n\tWHERE\n\t\t<cfif x>\n\t\t\ta = 1\n\t\t<cfelse>\n\t\t\ta = 2\n\t\t</cfif>\n\t\tAND b = 3\n</cfquery>'
 	);
 })();
 

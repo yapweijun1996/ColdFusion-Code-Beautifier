@@ -2,6 +2,41 @@
 
 ## v6 series (2026-05-11)
 
+### Feat (Phase 3): WHERE hoisting + split-format-recombine — full Pro SQL backbone with cfif preserved
+
+When a cfquery body's cfif tree has every leaf branch starting with `where ` keyword, deep-format now hoists the WHERE keyword OUT of the cfif branches and places a single SQL-formatted `WHERE` before the tree. This unlocks full Pro SQL formatting (SELECT/FROM/WHERE keywords each on their own line, columns list-broken) on the OUTER SQL backbone while preserving the cfif structure as a sub-tree under WHERE.
+
+Algorithm:
+1. `splitCfqueryBodyAtCfifTree` slices body into `{pre, treeLines, post}` at the outermost structural cfif boundary.
+2. `detectAllLeavesStartWithWhere` verifies every non-tag tree line starts with `where ` — precondition for safe hoisting.
+3. `stripWhereFromLeaves` strips the `where ` prefix from each leaf.
+4. Format `pre + synthesized 'where'` via sql-formatter (produces uppercase `SELECT`/`FROM`/`WHERE` on own lines).
+5. `formatStrippedTree` walks the cfif tree with depth tracking; each cfif at WHERE-body depth, each body line at +1 deeper, with keyword uppercase + `=` spacing normalization applied via `protectCFMLTokens` round-trip.
+6. Post-cfif `AND` clauses get keyword uppercase + spacing normalization.
+7. Assembled output flows through Phase 2 CFML normalization (tag/attr lowercase, operator uppercase, function camelCase).
+
+If hoisting precondition fails (mixed leaves, not all start with where) or sql-formatter throws, falls through cleanly to Tier 1 marker → Tier 2 verbatim — zero regression risk.
+
+New helpers in `js/deep-format.js`:
+- `splitCfqueryBodyAtCfifTree`
+- `detectAllLeavesStartWithWhere`
+- `stripWhereFromLeaves`
+- `formatStrippedTree`
+- `normalizeSQLEqualsSpacing` (adds ` = ` around standalone `=`, leaves `<=`, `>=`, `!=`, `==` untouched)
+- `repeatTab`
+
+Result on the canonical user sample (cfquery with deeply nested cfif chain dispatching different `WHERE uniquenum_pri = ...` per branch + trailing `AND tag_table_usage`):
+- SELECT/FROM/WHERE keywords each on own line
+- All 4 columns list-broken
+- WHERE hoisted out of cfif tree
+- 3 levels of cfif/cfelseif/cfelse preserved with body indented +1 per depth
+- `=` spaced around all standalone occurrences (`uniquenum_pri = <cfqueryparam ...>`)
+- Phase 2 normalization on top: `IS`/`AND`/`OR`/`EQ`/`NEQ`/`isDefined`/etc.
+
+14 new Phase 3 unit tests (split/detect/strip/formatStrippedTree/normEq) + 1 e2e test (WHERE-cfif hoisting on a 3-branch cfif). 87 tests total, green. `sw.js` `CACHE_VERSION` → `v2026-05-11-9`.
+
+Phase 3 completes the 3-phase Pro SQL expansion (Phase 1 = lite verbatim uppercase, Phase 2 = CFML normalization, Phase 3 = WHERE hoisting). Users now get end-to-end Pro SQL formatting on CFML+SQL templates including WHERE-cfif patterns that were previously impossible.
+
 ### Feat (Phase 2): CFML normalization layer — tag/attr lowercase, operator uppercase, function camelCase
 
 When Pro SQL is enabled, every cfquery output path runs through a string-aware CFML normalizer that produces consistent CFML style:
