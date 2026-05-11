@@ -15,7 +15,7 @@ js/tag-utils.js        ← get_tag_name / start / end
 js/toast.js            ← notification UI
 js/clipboard.js        ← copy_output_data / clear_data
 js/beautifier.js       ← beautifyCFML + detectLanguage + beautifyCodes (router)
-js/app.js              ← footer year
+js/app.js              ← footer year + Pro SQL prefs persistence (localStorage) + bundle pre-warm
 js/pro-sql.js          ← lazy-loads vendor/sql-formatter.min.js on first Pro SQL use
 js/pwa.js              ← service-worker registration + auto-update reload (deferred)
 ```
