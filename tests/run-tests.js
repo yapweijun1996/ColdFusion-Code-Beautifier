@@ -502,6 +502,26 @@ assertEqual(
 	'<cfquery name="q">\n\tselect *\n\tfrom t\n\t<cfif a>\n\t\t<cfif b>\n\t\t\twhere x = 1\n\t\t</cfif>\n\t</cfif>\n</cfquery>'
 );
 
+assertEqual(
+	'cfquery with hand-crafted subquery indent preserves the user verbatim layout',
+	runRouter(
+		'<cfquery name="q">\n\t\tselect *\n\t\tfrom t\n\t\t<cfif a>\n\t\t\twhere x = (\tselect id\n\t\t\t\t\t\tfrom u\n\t\t\t\t\t\t\twhere u.id = t.uid\n\t\t\t\t\t\t\tand u.active = 1)\n\t\t<cfelse>\n\t\t\twhere x = 0\n\t\t</cfif>\n\t</cfquery>',
+		'cfml',
+		true
+	),
+	'<cfquery name="q">\n\tselect *\n\tfrom t\n\t<cfif a>\n\t\twhere x = (\tselect id\n\t\t\t\t\tfrom u\n\t\t\t\t\t\twhere u.id = t.uid\n\t\t\t\t\t\tand u.active = 1)\n\t<cfelse>\n\t\twhere x = 0\n\t</cfif>\n</cfquery>'
+);
+
+assertEqual(
+	'cfquery with cfml comment between cfif siblings stays aligned',
+	runRouter(
+		'<cfquery name="q">\n\tselect *\n\tfrom t\n\t<cfif a>\n\t\twhere x = 1\n\t<!--- pin --->\n\t<cfelseif b>\n\t\twhere x = 2\n\t</cfif>\n</cfquery>',
+		'cfml',
+		true
+	),
+	'<cfquery name="q">\n\tselect *\n\tfrom t\n\t<cfif a>\n\t\twhere x = 1\n\t<!--- pin --->\n\t<cfelseif b>\n\t\twhere x = 2\n\t</cfif>\n</cfquery>'
+);
+
 /* Pro SQL — vendor bundle integration smoke tests.
  * Loaded into its own VM context so it does not pollute the existing
  * sync harness with a real (CommonJS-resolved) sql-formatter.

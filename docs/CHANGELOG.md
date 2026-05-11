@@ -2,6 +2,22 @@
 
 ## v6 series (2026-05-11)
 
+### Fix: preserve user-crafted multi-line subquery indent inside structural cfif
+
+Follow-up to the structural-cfif fix. The previous version trusted `beautifyCFML`'s post-pass body, which line-normalized continuation lines (e.g., multi-line `(SELECT ... FROM ... WHERE ...)` subqueries) to the same depth as the line above them — flattening the user's hand-crafted visual hierarchy.
+
+- New: `deepFormatEmbedded` accepts a 3rd `originalSource` argument; `js/beautifier.js` now passes `rawCode`.
+- New helpers in `js/deep-format.js`:
+  - `extractAllCfqueryBodies(source)` — collects every cfquery body from the original (pre-beautifyCFML) source via `replaceEmbeddedBlock`'s tag-aware extractor.
+  - `bodyHasUserIndent(body)` — true if any non-empty body line has any leading whitespace.
+- cfquery handler now branches three ways:
+  1. **structural cfif + user indent** → take the original body verbatim, only adjust leading common whitespace.
+  2. **structural cfif + flat input** → fall back to `beautifyCFML`'s nested output (auto-derives cfif depth — keeps existing test passing).
+  3. **inline cfif or no cfif** → original deep-format path (SQL keyword-casing, list-break, etc.).
+- 3 new tests: hand-crafted subquery indent preserved, cfml-comment between cfif siblings stays aligned, plus the existing flat-input test still passes.
+- `sw.js` `CACHE_VERSION` → `v2026-05-11-5`.
+- `docs/LIMITATIONS.md` rewritten for the three modes.
+
 ### Fix: structural CFML control flow inside `<cfquery>` no longer scrambled
 - Both `beautifySQL` (tokenizer) and `formatProSQLSync` (AST) treat protected CFML placeholders as plain identifiers and would inline `<cfif>`/`<cfelseif>`/`<cfelse>`/`</cfif>` onto random SQL lines, breaking the conditional layout.
 - Added `bodyHasStructuralCFMLControlFlow` in `js/deep-format.js`: detects CFML control-flow tags occupying their own line (line-based regex). When detected in a cfquery body, deep-format **skips the SQL formatter entirely** and returns the body verbatim, trusting `beautifyCFML`'s outer indentation pass which correctly handles CFML conditional nesting.

@@ -20,7 +20,41 @@ function bodyHasStructuralCFMLControlFlow(body) {
 	return false;
 }
 
-function deepFormatEmbedded(cfmlCode, opts) {
+function bodyHasUserIndent(body) {
+	// Returns true when the cfquery body shows any non-zero leading
+	// whitespace on at least one non-empty line — i.e., the user has
+	// hand-crafted indent. Used to decide between two recovery paths
+	// for structural CFML control flow:
+	//   - hasUserIndent === true  → preserve original body verbatim
+	//     (subquery continuations and inline comments keep their
+	//     relative indent)
+	//   - hasUserIndent === false → trust beautifyCFML's nested output
+	//     (auto-derives cfif depth for users who typed flat code)
+	if (typeof body !== 'string') return false;
+	var lines = body.split('\n');
+	for (var i = 0; i < lines.length; i++) {
+		if (lines[i].trim() === '') continue;
+		var match = lines[i].match(/^[ \t]+/);
+		if (match && match[0].length > 0) return true;
+	}
+	return false;
+}
+
+function extractAllCfqueryBodies(source) {
+	// Walks the original (pre-beautifyCFML) source and collects each
+	// <cfquery>'s body verbatim. Uses replaceEmbeddedBlock for tag-finding
+	// (which already skips <cfquery> inside comments / strings) but discards
+	// the rebuilt string — only the side-effect collection matters.
+	var bodies = [];
+	if (typeof source !== 'string') return bodies;
+	replaceEmbeddedBlock(source, 'cfquery', function(parentIndent, openTag, body, closeTag) {
+		bodies.push(body);
+		return parentIndent + openTag + body + closeTag;
+	});
+	return bodies;
+}
+
+function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 	var out = cfmlCode;
 	var options = opts || {};
 	var doSql = options.sql !== false;
@@ -28,13 +62,37 @@ function deepFormatEmbedded(cfmlCode, opts) {
 	var doJs = options.js === true;
 	var sqlPro = options.sqlPro === true;
 	var sqlDialect = options.sqlDialect || 'sql';
+	var originalBodies = extractAllCfqueryBodies(originalSource);
+	var cfqueryIndex = 0;
 
 	if (doSql) {
 		out = replaceEmbeddedBlock(out, 'cfquery', function(parentIndent, openTag, body, closeTag) {
+			var currentIndex = cfqueryIndex++;
+
 			// Structural CFML control flow inside <cfquery> is incompatible
 			// with SQL formatters that normalize whitespace around tokens.
-			// Trust the outer beautifyCFML pass and return the body verbatim.
+			// Use the ORIGINAL (pre-beautifyCFML) body verbatim — only adjust
+			// the leading common whitespace to match the new parent depth.
+			// This preserves the user's hand-crafted relative indent for
+			// multi-line subqueries and inline CFML comments, which the
+			// outer beautifyCFML pass would otherwise flatten.
 			if (bodyHasStructuralCFMLControlFlow(body)) {
+				var verbatimSource = (originalBodies[currentIndex] !== undefined)
+					? originalBodies[currentIndex]
+					: body;
+				// Only preserve original verbatim when the user typed
+				// hand-crafted indent. Flat-zero-indent input falls back
+				// to beautifyCFML's nested output, which auto-derives
+				// cfif depth and avoids leaving the cfif chain glued
+				// to the cfquery's left margin.
+				if (bodyHasUserIndent(verbatimSource)) {
+					var verbatimCleaned = cleanEmbeddedBody(verbatimSource);
+					if (verbatimCleaned !== '') {
+						return parentIndent + openTag + '\n'
+							+ indentEmbeddedBody(verbatimCleaned, parentIndent) + '\n'
+							+ parentIndent + closeTag;
+					}
+				}
 				return parentIndent + openTag + body + closeTag;
 			}
 

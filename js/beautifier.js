@@ -268,7 +268,7 @@ function beautifyCodes() {
 					js: deep_js,
 					sqlPro: pro_sql,
 					sqlDialect: pro_sql_dialect
-				});
+				}, rawCode);
 			}
 			output.value = result;
 		}
