@@ -75,4 +75,4 @@ tests/run-tests.js      Node VM harness + assertEqual cases
 
 ## License
 
-See [LICENSE](LICENSE). Project by [yapweijun1996](https://github.com/yapweijun1996).
+[MIT](LICENSE) © [yapweijun1996](https://github.com/yapweijun1996). Free for personal and commercial use; keep the copyright notice in copies or substantial portions.
