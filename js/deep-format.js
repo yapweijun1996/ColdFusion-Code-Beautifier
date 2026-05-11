@@ -1,3 +1,25 @@
+function bodyHasStructuralCFMLControlFlow(body) {
+	// "Structural" = a CFML control-flow tag that occupies its own line
+	// in the input. Both built-in beautifySQL (tokenizer-based) and the
+	// Pro SQL engine (full AST) cannot understand CFML conditionals,
+	// so they treat protected tokens as opaque identifiers and crush
+	// the conditional structure when reformatting. When such structural
+	// tags are present, the cfquery body is left untouched by deep-format
+	// and trusted to beautifyCFML's outer-pass indentation, which already
+	// handles cfif/cfloop/cfswitch nesting correctly.
+	//
+	// Inline cases like  WHERE x = 1 <cfif y>AND z = 2</cfif>  are NOT
+	// considered structural and continue to flow through deep-format so
+	// the surrounding SQL gets keyword-cased and aligned as before.
+	if (typeof body !== 'string') return false;
+	var lines = body.split('\n');
+	var pattern = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b[^>]*>$/i;
+	for (var i = 0; i < lines.length; i++) {
+		if (pattern.test(lines[i].trim())) return true;
+	}
+	return false;
+}
+
 function deepFormatEmbedded(cfmlCode, opts) {
 	var out = cfmlCode;
 	var options = opts || {};
@@ -9,9 +31,20 @@ function deepFormatEmbedded(cfmlCode, opts) {
 
 	if (doSql) {
 		out = replaceEmbeddedBlock(out, 'cfquery', function(parentIndent, openTag, body, closeTag) {
+			// Structural CFML control flow inside <cfquery> is incompatible
+			// with SQL formatters that normalize whitespace around tokens.
+			// Trust the outer beautifyCFML pass and return the body verbatim.
+			if (bodyHasStructuralCFMLControlFlow(body)) {
+				return parentIndent + openTag + body + closeTag;
+			}
+
 			var protectedSQL = protectCFMLTokens(cleanEmbeddedBody(body));
 			var formattedSQL;
-			if (sqlPro && typeof formatProSQLSync === 'function' && typeof isProSQLLoaded === 'function' && isProSQLLoaded()) {
+			var canUsePro = sqlPro
+				&& typeof formatProSQLSync === 'function'
+				&& typeof isProSQLLoaded === 'function'
+				&& isProSQLLoaded();
+			if (canUsePro) {
 				try {
 					formattedSQL = formatProSQLSync(protectedSQL.code, sqlDialect);
 				} catch (err) {

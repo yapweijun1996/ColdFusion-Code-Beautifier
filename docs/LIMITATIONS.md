@@ -7,7 +7,10 @@ Real cases where the formatter does not produce ideal output. None of these corr
 - **`##` hash escape inside SQL string literals** — a bare `##` is protected as a literal, but a surrounding single-quoted SQL string plus a nearby `#var#` in the same expression can produce slightly off spacing. Tracked as `FEAT-CFML-HASH-ESCAPE` (low priority).
 - **Non-standard comment markers** with stray whitespace like `< ! --- … --->` are not recognized; use the standard `<!--- … --->` form.
 - **`<cfoutput>` wrapping the whole file** — everything inside gets one extra indent level. This is the correct behavior; callers sometimes expect pages to stay flush-left.
-- **Dynamic SQL built with `<cfif>` inside `<cfquery>`** — the tags are protected, but text between them is still real SQL and may format independently, producing awkward wrapping around the `<cfif>` boundaries.
+- **Dynamic SQL built with `<cfif>` inside `<cfquery>` — handled in two modes:**
+  - **Structural** (each `<cfif>` / `<cfelseif>` / `<cfelse>` / `</cfif>` on its own line in the input): deep-format **skips the SQL formatter entirely** for that cfquery body and trusts `beautifyCFML`'s outer indentation, which correctly preserves CFML conditional nesting. Trade-off: SQL keywords inside the conditional branches are NOT uppercased or list-broken; the user's original SQL layout is kept verbatim. This is the only safe behavior since both the built-in `beautifySQL` (tokenizer) and the Pro `sql-formatter` (AST) treat protected CFML placeholders as plain identifiers and would crush the conditional structure into one logical flow.
+  - **Inline** (e.g., `WHERE x = 1 <cfif y>AND z = 2</cfif>` on a single line): deep-format runs as before — the inline tag is protected, surrounding SQL is keyword-cased, and the tag is restored in place.
+  - Detector: `bodyHasStructuralCFMLControlFlow` in `js/deep-format.js` — line-based regex matching CFML control-flow tags occupying their own line.
 
 ## SQL
 

@@ -2,6 +2,15 @@
 
 ## v6 series (2026-05-11)
 
+### Fix: structural CFML control flow inside `<cfquery>` no longer scrambled
+- Both `beautifySQL` (tokenizer) and `formatProSQLSync` (AST) treat protected CFML placeholders as plain identifiers and would inline `<cfif>`/`<cfelseif>`/`<cfelse>`/`</cfif>` onto random SQL lines, breaking the conditional layout.
+- Added `bodyHasStructuralCFMLControlFlow` in `js/deep-format.js`: detects CFML control-flow tags occupying their own line (line-based regex). When detected in a cfquery body, deep-format **skips the SQL formatter entirely** and returns the body verbatim, trusting `beautifyCFML`'s outer indentation pass which correctly handles CFML conditional nesting.
+- Inline cases (e.g., `WHERE x = 1 <cfif y>AND z = 2</cfif>` on one line) are NOT considered structural and continue through deep-format unchanged.
+- Same detector also gates direct SQL mode (`Language=SQL` + Pro SQL on) — falls back to built-in `beautifySQL` if structural CFML control flow is pasted as raw SQL.
+- Tests: 11 new structural-control-flow detector unit tests + 2 end-to-end router tests covering nested cfif preservation. Total now 51, all green.
+- `sw.js` `CACHE_VERSION` bumped to `v2026-05-11-4`.
+- `docs/LIMITATIONS.md` rewritten for this case to document the structural vs inline split.
+
 ### Pro SQL — opt-in multi-dialect formatter
 - Vendored `sql-formatter@15.7.3` (MIT) UMD bundle to `vendor/sql-formatter.min.js` (~312KB). Loaded lazily via dynamic `<script>` injection only when the user ticks "Pro SQL".
 - Added `js/pro-sql.js` — `PRO_SQL_DIALECTS` (16 dialects), `ensureProSQL()` (idempotent loader returning a cached Promise), `formatProSQLSync()` (wrapper with sane defaults: keywordCase upper, dataTypeCase upper, useTabs, tabWidth 4).

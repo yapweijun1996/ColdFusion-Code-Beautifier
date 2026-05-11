@@ -245,7 +245,12 @@ function beautifyCodes() {
 
 	function runFormat() {
 		if(language == 'sql'){
-			if (pro_sql && typeof formatProSQLSync === 'function' && typeof isProSQLLoaded === 'function' && isProSQLLoaded()) {
+			var canUseProDirect = pro_sql
+				&& typeof formatProSQLSync === 'function'
+				&& typeof isProSQLLoaded === 'function'
+				&& isProSQLLoaded()
+				&& !(typeof bodyHasStructuralCFMLControlFlow === 'function' && bodyHasStructuralCFMLControlFlow(rawCode));
+			if (canUseProDirect) {
 				try {
 					output.value = formatProSQLSync(rawCode, pro_sql_dialect);
 				} catch (err) {

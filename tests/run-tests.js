@@ -443,6 +443,65 @@ assertEqual(
 	'<cfif x>\n\t<!--- example: <cfquery name="q">SELECT 1</cfquery> --->\n\t<cfset y = 2>\n</cfif>'
 );
 
+/* bodyHasStructuralCFMLControlFlow — gates whether deep-format runs on a
+ * cfquery body. "Structural" = a CFML control-flow tag occupying its own
+ * line in the input, which the SQL formatters cannot preserve.
+ *
+ * Inline conditionals (e.g.,  WHERE x = 1 <cfif y>AND z = 2</cfif> )
+ * are NOT considered structural and continue through deep-format.
+ */
+(function runStructuralControlFlowDetectorTests() {
+	var ctx = makeContext('', 'sql');
+	var fn = ctx.context.bodyHasStructuralCFMLControlFlow;
+	assertEqual('structural detector exists', typeof fn, 'function');
+
+	// Structural cases — own-line CFML control-flow tags
+	assertEqual('detects <cfif> on own line',
+		fn('select 1\n<cfif x>\nwhere a=1\n</cfif>'), true);
+	assertEqual('detects nested <cfelseif> chain on own lines',
+		fn('select 1\n<cfif a>\nwhere x=1\n<cfelseif b>\nwhere x=2\n<cfelse>\nwhere x=3\n</cfif>'), true);
+	assertEqual('detects </cfif> on own line',
+		fn('select 1\nwhere a=1\n</cfif>'), true);
+	assertEqual('detects <cfloop> on own line',
+		fn('select 1\n<cfloop list="x" index="i">\nor x=#i#\n</cfloop>'), true);
+	assertEqual('detects <cfswitch> + <cfcase> on own lines',
+		fn('select 1\n<cfswitch expression="#x#">\n<cfcase value="a">\nwhere y=1\n</cfcase>\n</cfswitch>'), true);
+	assertEqual('detects with surrounding whitespace',
+		fn('select 1\n    <cfif x>\nwhere a=1\n    </cfif>'), true);
+
+	// Inline cases — must NOT trigger
+	assertEqual('inline <cfif> in same line as SQL is not structural',
+		fn('select * from t <cfif x>where a=1</cfif>'), false);
+	assertEqual('inline <cfif> with content trailing is not structural',
+		fn('where x = 1 <cfif y>and z = 2</cfif>'), false);
+	assertEqual('plain SQL is clean',
+		fn('select * from t where x = 1'), false);
+	assertEqual('cfqueryparam is not control flow',
+		fn('where id = <cfqueryparam value="#id#" cfsqltype="cf_sql_integer">'), false);
+	assertEqual('non-string input handled',
+		fn(undefined), false);
+})();
+
+assertEqual(
+	'cfquery with structural cfif chain is left to beautifyCFML (no SQL re-format)',
+	runRouter(
+		'<cfquery name="q">\nselect *\nfrom t\n<cfif a>\nwhere x = 1\n<cfelseif b>\nwhere x = 2\n<cfelse>\nwhere x = 3\n</cfif>\n</cfquery>',
+		'cfml',
+		true
+	),
+	'<cfquery name="q">\n\tselect *\n\tfrom t\n\t<cfif a>\n\t\twhere x = 1\n\t<cfelseif b>\n\t\twhere x = 2\n\t<cfelse>\n\t\twhere x = 3\n\t</cfif>\n</cfquery>'
+);
+
+assertEqual(
+	'cfquery with nested cfif preserves three-level indentation',
+	runRouter(
+		'<cfquery name="q">\nselect *\nfrom t\n<cfif a>\n<cfif b>\nwhere x = 1\n</cfif>\n</cfif>\n</cfquery>',
+		'cfml',
+		true
+	),
+	'<cfquery name="q">\n\tselect *\n\tfrom t\n\t<cfif a>\n\t\t<cfif b>\n\t\t\twhere x = 1\n\t\t</cfif>\n\t</cfif>\n</cfquery>'
+);
+
 /* Pro SQL — vendor bundle integration smoke tests.
  * Loaded into its own VM context so it does not pollute the existing
  * sync harness with a real (CommonJS-resolved) sql-formatter.
