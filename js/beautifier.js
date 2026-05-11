@@ -12,6 +12,8 @@ function beautifyCFML(rawCode, split_html_tag) {
 	var inBlockComment = false;
 	var commentOrigPrefix = "";
 	var commentNewPrefix = "";
+	var inMultiLineTag = false;
+	var multiLineTagName = "";
 
 	function applyIndent() {
 		if(indentLevel != 0 && indentSize != 0){
@@ -30,6 +32,29 @@ function beautifyCFML(rawCode, split_html_tag) {
 		}
 		var line = lines[i].trim();
 		var line_data = line.toLowerCase();
+
+		// Multi-line opening tag continuation: lines after a tag like
+		// `<div class="..."` whose `>` is on a later line. Continuation
+		// lines (including the line containing the closing `>`) sit at
+		// indentLevel = openingLineLevel + 1. After the closing `>`:
+		//   - self-close (`/>`), HTML void, or CF inline tag → pop back
+		//     to parent level so siblings align with the opener.
+		//   - block/regular tag → keep indentLevel at +1 so the tag's
+		//     children indent under it; the matching `</tag>` decrements
+		//     back to the opener's level via existing logic.
+		if (inMultiLineTag) {
+			applyIndent();
+			if (line.indexOf('>') !== -1) {
+				var selfClose = /\/\s*>/.test(line);
+				inMultiLineTag = false;
+				if (selfClose || HTML_VOID_TAGS.indexOf(multiLineTagName) !== -1 || CF_TAGS.inline.indexOf(multiLineTagName) !== -1) {
+					indentLevel -= 1;
+				}
+				multiLineTagName = "";
+			}
+			continue;
+		}
+
 		var opensMarkupComment = line_data.includes('<!---') || line_data.includes('<!--');
 		var closesMarkupComment = line_data.includes('--->') || line_data.includes('-->');
 		var opensBlockComment = line_data.startsWith('/*') && !line_data.endsWith('*/');
@@ -103,6 +128,20 @@ function beautifyCFML(rawCode, split_html_tag) {
 		var tag_name        = get_tag_name(line_data);
 		var maintain_yn     = "n";
 		/* Initial [end  ]   */
+
+		// Multi-line opening tag entry: `<tag attr=...` with no `>` on
+		// this line. Apply indent at current level, then bump
+		// indentLevel by 1 so continuation lines (handled at the top
+		// of the next iteration via inMultiLineTag) sit one level
+		// deeper than the opener. Skip comment openers — they have
+		// their own handling above.
+		if (line_data.startsWith("<") && !line_data.includes(">") && tag_name && !line_data.startsWith('<!')) {
+			applyIndent();
+			multiLineTagName = tag_name;
+			inMultiLineTag = true;
+			indentLevel += 1;
+			continue;
+		}
 
 		if (line_data.startsWith("<") && line_data.includes(">")) { // Handle HTML Coldfusion
 			/* Maintain [start] */
