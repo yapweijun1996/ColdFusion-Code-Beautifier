@@ -293,6 +293,9 @@ function beautifyCodes() {
 				try {
 					output.value = formatProSQLSync(rawCode, pro_sql_dialect);
 				} catch (err) {
+					if (typeof console !== 'undefined' && console.warn) {
+						console.warn('[beautifier] Pro SQL direct mode threw, falling back to built-in beautifySQL. Error:', err && err.message, '\nDialect:', pro_sql_dialect, '\nSQL excerpt:', rawCode.slice(0, 400));
+					}
 					output.value = beautifySQL(rawCode);
 				}
 			} else {
