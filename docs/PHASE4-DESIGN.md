@@ -1,195 +1,239 @@
-# Phase 4 — Split-Format-Recombine for Multi-Level cfif Trees
+# Phase 4 — AND-Leaves Hoisting (Phase 3's Dual)
 
-**Status:** DESIGN (pre-implementation)
+**Status:** DESIGN v2 — algorithm REWRITTEN after corpus reality check
 **Branch:** `phase4-split-format-recombine`
 **Author:** Claude + yapweijun1996@gmail.com
 **Date:** 2026-05-11
+**Prior version:** Per-leaf split-format-recombine (over-engineered, replaced)
 
-## Problem statement
+## Reality check — what the corpus actually contains
 
-Today, `<cfquery>` bodies with **structural CFML control flow** are dispatched
-through 4 tiers in `js/deep-format.js`:
+Audited 13 real-world `.cfm` files (1.7 MB, 27,612 lines, 103 cfqueries
+total). Tier 2 verbatim falls only on **8 cfqueries** that fall into 4
+distinct patterns:
 
-| Tier | Trigger | Output quality |
-|------|---------|----------------|
-| 1 — Marker injection | cfif tags own-line in column-list position | Full Pro SQL re-format ✅ |
-| 1.5 — WHERE hoisting (Phase 3) | All cfif leaves start with `where ` AND tree is single-level | Full Pro SQL backbone, cfif preserved as sub-tree under WHERE ✅ |
-| 2 — Verbatim with Lite uppercase | Has user indent | Layout preserved, keywords uppercased ⚠️ |
-| 3 — Flat fallback | No user indent | Trust beautifyCFML's nested output ⚠️ |
+### Pattern A — "AND-leaves" (6 of 8 targets, 75%)
 
-The **canonical pain point** is `qs_result_main` (sample/test.cfm cfquery #2):
+The dominant real-world case. Backbone `WHERE base_condition AND base_condition`
+is FULLY OUTSIDE the cfif tree. Each cfif/cfelseif/cfelse leaf merely
+**appends optional `and xxx`** clauses:
 
 ```cfml
-<cfquery name="qs_result_main">
-  SELECT *
-  FROM scm_sal_main
-  <cfif frommode IS "new">                      ← LEVEL 1
-    <cfif prelim_fromsource_yn IS "y">          ← LEVEL 2
-      <cfif fromtrans IS "sal_soc" OR ...>      ← LEVEL 3
-        WHERE uniquenum_pri = <cfqueryparam value="c#uniquenum_pri#" cfsqltype="cf_sql_varchar">
-      <cfelseif fromtrans IS "sal_inv" AND ...>
-        WHERE uniquenum_pri = (SELECT uniquenum_pri FROM trans_tab_data WHERE ...)
-      <cfelseif fromtrans IS "stk_do" AND ...>
-        WHERE uniquenum_pri IN (SELECT DISTINCT scd.uniquenum_pri FROM scm_sal_data scd WHERE ...)
-      <cfelse>
-        WHERE uniquenum_pri = <cfqueryparam value="#uniquenum_pri#" cfsqltype="cf_sql_varchar">
-      </cfif>
-    <cfelse>
-      <cfif fromtrans IS "sal_soe" AND ...>
-        WHERE uniquenum_pri = <cfqueryparam value="#fmi_mainSO_unique#" cfsqltype="cf_sql_varchar">
-      <cfelse>
-        WHERE uniquenum_pri = <cfqueryparam value="tnosys" cfsqltype="cf_sql_varchar">
-      </cfif>
-    </cfif>
-  <cfelse>
-    WHERE uniquenum_pri = <cfqueryparam value="#print_group_uniquenum_pri#" cfsqltype="cf_sql_varchar">
+WHERE base.col1 = ?
+  AND base.col2 = ?
+  AND base.date BETWEEN ? AND ?
+<cfif filter_a>
+  and base.x = '#a#'
+</cfif>
+<cfif filter_b is "y">
+  and base.y = 'y'
+<cfelseif filter_b is "n">
+  and base.y = 'n'
+</cfif>
+GROUP BY ...
+ORDER BY ...
+```
+
+Targets matching this pattern:
+- `fr_fg_vari_qty.cfm` #1 (qs_result, 48 lines)
+- `fr_fg_vari_qty.cfm` #2 (qs_result_rm_std, 55 lines)
+- `fr_fg_vari_qty.cfm` #3 (qs_result_rm_act, 55 lines)
+- `fr_fg_vari_qty.cfm` #4 (qs_result_mw, 63 lines)
+- `fin_mod_view295_01.cfm` #5 (qs_gst_general, 10 lines)
+- `inc_entp_pcertap_view092.cfm` #19 (qs_tab_omis_order, 54 lines)
+
+### Pattern B — "OR-in-paren" (1 of 8)
+
+cfif lives inside a parenthesized OR chain in the WHERE clause:
+
+```cfml
+WHERE (uniquenum_pri = ? OR uniquenum_uniq = ?
+       <cfif x>
+         OR uniquenum_uniq = ?
+         OR uniquenum_pri = ?
+       </cfif>)
+  AND tag_table_usage = ?
+```
+
+Targets:
+- `inc_entp_pcertap_view092.cfm` #2 (qs_result_revision)
+
+### Pattern D — "UNION cfif" (1 of 8)
+
+Entire second SELECT is conditionally appended via cfif → UNION:
+
+```cfml
+SELECT ...
+FROM ...
+WHERE ...
+GROUP BY ...
+<cfif x>
+union
+SELECT ...
+FROM ...
+WHERE ...
+ORDER BY ...
+</cfif>
+```
+
+Targets:
+- `fr_mthly_sales_cust.cfm` #2 (qs_result_00, 152 lines)
+
+### Pattern C (no targets — covered by Tier 1)
+
+Empty in this corpus.
+
+## Phase 4 v2 algorithm — AND-leaves hoisting
+
+**Scope:** Pattern A only. Patterns B and D explicitly fall back to Tier 2.
+
+### Detection precondition (all must hold)
+
+1. cfquery body has structural cfif AND it is NOT in column-list position
+   (Tier 1 marker injection didn't fire).
+2. There is a contiguous "pre-tree" segment ending in `WHERE [conditions]`
+   BEFORE the first structural cfif. The pre-tree must contain `SELECT`,
+   `FROM`, AND `WHERE`.
+3. **Every non-empty, non-tag, non-comment line inside the cfif tree starts
+   with `and ` or `or `** (case-insensitive). This is the "AND-leaves
+   precondition" — the cfif tree only contributes appendable boolean
+   clauses, never restructures the SQL shape.
+4. Optional "post-tree" segment (e.g., `GROUP BY ...`, `ORDER BY ...`,
+   trailing `AND ...`) AFTER the last `</cfif>` matching the outermost cfif.
+
+If ANY precondition fails → fall through to existing Tier 2 verbatim
+(zero-regression guarantee).
+
+### Algorithm
+
+```
+splitBody(body) → { pre, treeLines, post }
+  pre       = lines from start to (first '<cfif>' line - 1)
+  treeLines = lines from first cfif tag to matching '</cfif>'
+  post      = lines after matching '</cfif>' to end of body
+
+phase4Format(body, sqlDialect):
+    1. (pre, treeLines, post) = splitBody(body)
+    2. checkPrecondition(pre, treeLines) or return null  // null = fall back to Tier 2
+
+    3. preProtected      = protectCFMLTokens(pre)
+    4. preFormatted      = formatProSQL(preProtected.code, sqlDialect)
+    5. preRestored       = restoreCFMLTokens(preFormatted, preProtected.tokens)
+
+    6. treeFormatted     = formatTreeLines(treeLines)
+       // Walk tree: cfif tags re-indented to depth (relative to WHERE block).
+       // Body lines (the `and xxx` parts) get protectCFMLTokens →
+       // uppercaseSQLKeywordsInProtected → restoreCFMLTokens.
+
+    7. postFormatted = post.trim() === '' ? '' : formatPostFragment(post, sqlDialect)
+       // Post-tree often contains GROUP BY / ORDER BY which sql-formatter
+       // can re-format if synthesized as `SELECT 1 FROM t WHERE 1=1
+       // <postLines>`. Extract just the post-WHERE part.
+
+    8. return assemble(preRestored, treeFormatted, postFormatted, parentIndent)
+```
+
+**Why this is much simpler than v1:**
+- v1 ran sql-formatter ONCE per leaf with synthetic full SELECT → at most
+  N calls per cfquery, each doing duplicate work.
+- v2 runs sql-formatter ~2 times per cfquery (pre + post). Tree itself
+  doesn't go through sql-formatter at all — only Lite uppercase, because
+  the cfif structure must stay intact.
+
+**Why this is safer than v1:**
+- Pre-tree is a complete `SELECT ... FROM ... WHERE base...` — sql-formatter
+  is well-defined on it.
+- Tree is left structurally intact; only string-content of leaf lines is
+  touched (token-protect → uppercase → restore).
+- Post-tree synthesized into a complete SELECT for safe formatting.
+
+### Visual example
+
+Input:
+```
+SELECT a, b FROM t WHERE x = 1
+<cfif foo>
+  and y = 2
+<cfelseif bar>
+  and y = 3
+</cfif>
+GROUP BY a
+```
+
+After Phase 4:
+```
+SELECT
+  a,
+  b
+FROM
+  t
+WHERE
+  x = 1
+  <cfif foo>
+    AND y = 2
+  <cfelseif bar>
+    AND y = 3
   </cfif>
-</cfquery>
+GROUP BY
+  a
 ```
 
-**Why Phase 3 (WHERE hoisting) doesn't fire:**
-- Tree is multi-level (3 levels), not single
-- Some leaves have `WHERE x = (SUBQUERY)` not just `WHERE x = ?` — hoisting `WHERE`
-  out and putting subquery as the body would create syntactically valid SQL but
-  visually confusing output
+The cfif tree is preserved bit-for-bit structurally, sitting INSIDE the
+WHERE block at depth +1, with each leaf's `and` uppercased.
 
-**Today's behavior:** Tier 2 verbatim — output looks identical to input. SAFE
-but doesn't help the user with formatting.
+## Edge cases & risk register (v2)
 
-**Phase 4 goal:** Format **the SQL inside each leaf branch independently** so
-that each WHERE clause / subquery looks like proper Pro SQL, while preserving
-the cfif tree structure exactly.
+| # | Edge case | Handling |
+|---|-----------|----------|
+| 1 | Pre-tree has no WHERE (e.g., simple SELECT FROM with cfif on JOIN) | Precondition fails → Tier 2 |
+| 2 | Tree leaf starts with `where ` (Phase 3 territory) | Phase 3 already handles, runs first |
+| 3 | Tree leaf starts with neither `and` nor `or` (e.g., raw `union`) | Precondition fails → Tier 2 |
+| 4 | Tree contains nested cfif | OK — depth tracking handles arbitrary nesting |
+| 5 | Tree leaf is multi-line (e.g., `and (lower(x) LIKE '...'\nor lower(y) LIKE '...')`) | First non-empty line check; subsequent lines must NOT start with `<cf` |
+| 6 | Empty cfif body (e.g., `<cfelse>\n</cfif>`) | Skip the empty leaf, allow |
+| 7 | Comment lines `<!--- foo --->` inside tree | Treat as transparent |
+| 8 | Pre-tree contains hash interpolation `'#x#'` | protectCFMLTokens already handles |
+| 9 | Post-tree is just whitespace | Skip, no format call |
+| 10 | sql-formatter throws on pre-tree | Catch → return null → Tier 2 |
+| 11 | sql-formatter throws on post-tree | Use unformatted post, log warn |
+| 12 | parentIndent reconstruction loses tab consistency | Use existing `indentEmbeddedBody` helper |
 
----
+## Test corpus (build BEFORE implementation)
 
-## Algorithm: Split-Format-Recombine (per-leaf)
+10 progressive e2e tests. Each test runs through `runRouter(input, 'cfml', true)`
+with Pro SQL on (load vendor sql-formatter into vm context).
 
-### Definitions
-
-- **Pre-tree**: tokens before the first structural cfif tag (typically the
-  `SELECT cols FROM table [JOINs]` portion).
-- **Post-tree**: tokens after the last `</cfif>` matching the outermost cfif
-  tag (typically trailing `AND foo = bar` clauses).
-- **CFIF tree**: nested `<cfif>...<cfelseif>...<cfelse>...</cfif>` structure.
-- **Leaf branch**: a branch (between two consecutive cfif/cfelseif/cfelse
-  tags) that contains SQL content but **no nested cfif** inside it.
-- **Inner branch**: a branch that contains nested cfif (recurses).
-
-### Steps
-
-```
-phase4Format(body):
-    1. (pre, treeRoot, post) = parseCfifTree(body)
-    2. preFormatted  = formatProSQL(pre)              // SELECT/FROM/JOINs only
-    3. tree2         = formatTreeRecursively(treeRoot, preFormatted)
-    4. postFormatted = formatPostFragment(post)       // trailing AND clauses
-    5. return assemble(preFormatted, tree2, postFormatted)
-
-formatTreeRecursively(branch, pre):
-    if branch has nested cfif:
-        for each sub-branch in branch.children:
-            formatTreeRecursively(sub-branch, pre)
-        return  (structure preserved)
-    else:                                          // leaf branch
-        leafSQL = branch.sqlContent
-        if leafSQL.trim() == '':
-            return                                  // empty branch, leave alone
-        # Synthesize a complete SELECT for the formatter to chew on:
-        synthetic = pre + leafSQL                   // pre is a string ending in FROM ...
-        formatted = formatProSQL(protectCFMLTokens(synthetic))
-        # Extract the WHERE-and-after part from formatted output:
-        whereFragment = extractAfterFrom(formatted, preLineCount)
-        branch.sqlContent = restoreCFMLTokens(whereFragment)
-
-extractAfterFrom(formattedSql, preLineCount):
-    # The formatter outputs SELECT...FROM... on first N lines (predictable
-    # layout because we trust sql-formatter's deterministic output).
-    # Everything after line N is the WHERE/AND fragment.
-    return formattedSql.split('\n').slice(preLineCount).join('\n')
-```
-
-### Why this works
-
-1. **Each leaf is a standalone, complete SELECT** when prefixed with `pre` →
-   sql-formatter never sees partial SQL → no parse errors.
-2. **CFML expression conditions** (`fmi_mainSO_unique NEQ ""`) live in
-   `<cfif>`/`<cfelseif>` tags themselves, never in the formatted SQL — they
-   pass through untouched.
-3. **Subqueries inside WHERE** get full Pro SQL formatting because they're
-   part of the synthetic complete SELECT.
-4. **Tree structure is preserved** because we only replace leaf-content
-   strings, never restructure the cfif tree.
-
-### What this does NOT change
-
-- The cfif tree structure (no flattening, no branch reordering).
-- CFML expression tags (cfif conditions, cfqueryparam attributes).
-- `<!--- comments --->` in the tree.
-
----
-
-## Edge cases & risk register
-
-| # | Edge case | Mitigation |
-|---|-----------|------------|
-| 1 | Leaf is empty (`<cfelse> </cfif>`) | Skip format, leave verbatim. |
-| 2 | Leaf has only CFML, no SQL | Skip format. |
-| 3 | Leaf SQL parses fail (unbalanced quotes after CFTOKEN replacement) | Catch error, fall back to Tier 2 verbatim for that leaf only. |
-| 4 | Pre-tree has no FROM (e.g., `INSERT INTO t (cols) <cfif>VALUES (...)<cfelse>SELECT ...</cfif>`) | Detect: only enable Phase 4 when pre-tree contains FROM. |
-| 5 | Trailing `</cfif> AND foo = bar` (post-tree) | Synthesize `pre + 'WHERE 1=1 ' + post` and format separately. |
-| 6 | Cfelseif condition contains string with `<cfif>` substring | Use existing `findClosingTagOutsideText` semantics. |
-| 7 | Nested cfif inside a leaf's SUBQUERY (very rare) | Defer — fall back to Tier 2 for that leaf. |
-| 8 | Pre-tree has CFML expression tags (cfset/cfqueryparam mid-FROM) | Phase 4 declines, falls to Tier 2. |
-| 9 | Leaf has trailing `OR clause` instead of `WHERE clause` | Detect leaf-prefix; if not (`where`, `and`, `or`, ` `, `--`), fall back. |
-| 10 | sql-formatter throws on synthetic SELECT | Fall back per-leaf to verbatim. |
-| 11 | Multiple cfqueryparam tokens collide in protect/restore | Already handled by existing `protectCFMLTokens` — UUID-style numbering. |
-| 12 | Indent depth in output doesn't match parent cfif depth | Re-indent output of each leaf to match `parentDepth + 1`. |
-
-**Hard-fail safety:** If ANY step throws or produces empty/null output for the
-whole body, return UNCHANGED original body (Tier 2 already runs). Phase 4 is
-purely additive — failure must equal "no Phase 4 today".
-
----
-
-## Test strategy (build BEFORE implementation)
-
-10 progressive e2e tests in `tests/run-tests.js`, each with explicit input
-and expected output. **Tests must FAIL on current main** (proves they exercise
-new code path) and PASS after Phase 4 lands.
-
-| # | Description | Difficulty |
-|---|-------------|------------|
-| T1 | Simple cfif with 2 leaves, both `WHERE x = ?` | trivial |
-| T2 | cfif/cfelseif/cfelse 3 leaves, each different `WHERE x = ?` | easy |
-| T3 | cfif with leaf containing `WHERE x = (SELECT ... FROM ... WHERE ...)` | moderate |
-| T4 | 2-level nested cfif, leaves on both levels with WHERE | moderate |
-| T5 | cfif tree + post-tree `</cfif> AND tag = 'x'` | moderate |
-| T6 | Leaves contain `<cfqueryparam value="#x#" cfsqltype="cf_sql_varchar">` | moderate |
-| T7 | 3-level nested cfif (qs_result_main shape, simplified) | hard |
-| T8 | Leaf with `WHERE x IN (#PreserveSingleQuotes(arr)#)` | hard |
-| T9 | Leaf SQL parse failure → falls back to Tier 2 for that leaf only | safety |
-| T10 | Whole body Phase 4 path throws → falls back to Tier 2 entirely | safety |
-
----
-
-## Out of scope for Phase 4
-
-- `<cfloop>` inside cfquery (loops over data, not control flow on SQL shape).
-- `<cfswitch>` inside cfquery.
-- Re-formatting the CFML expression conditions themselves
-  (those go through `normalizeCFMLExpression` already).
-- Auto-fixing user source bugs like `'#var#'and` (missing space).
-
----
+| # | Pattern | Description |
+|---|---------|-------------|
+| T1 | A | Single cfif, single `and` leaf |
+| T2 | A | cfif/cfelse, both leaves `and ...` |
+| T3 | A | cfif/cfelseif/cfelse, all `and ...` |
+| T4 | A | Multiple sibling cfif blocks (5+) |
+| T5 | A | cfif body has multi-line `and (...)` continuation |
+| T6 | A | Tree has `<!--- comment --->` inside |
+| T7 | A | post-tree has GROUP BY + ORDER BY |
+| T8 | A | Real-world fr_fg_vari_qty #1 shape |
+| T9 | B/D | OR-in-paren must FALL BACK to Tier 2 (verify no false dispatch) |
+| T10 | safety | sql-formatter throw → output bit-identical to Tier 2 |
 
 ## Acceptance criteria
 
-1. All existing 90 tests still pass (no regression).
-2. New T1–T10 all pass.
-3. `sample/test.cfm` qs_result_main (cfquery #2) shows
-   formatted SQL inside each cfif branch, while cfif tree shape is identical
-   to input. (Visual diff review by user.)
-4. Performance: full sample/test.cfm (1241 lines, 21 cfqueries) formats in
-   <500ms (current is ~140ms; budget +250%).
-5. Pure additive: if Phase 4 disabled or fails, output is **bit-identical**
-   to current Tier 2 verbatim output.
+1. All existing 90 tests still pass.
+2. T1–T10 all pass.
+3. The 6 Pattern-A targets in the corpus produce output where the cfif
+   tree sits formatted under the WHERE block, with `and` uppercased.
+4. The 1 Pattern-B and 1 Pattern-D targets produce output bit-identical
+   to current Tier 2 verbatim (zero regression).
+5. Performance: full corpus (103 cfqueries, 27,612 lines) formats in
+   <1000ms (current 415ms; budget +140%).
+6. Pure additive: any failure path returns to Tier 2 verbatim output.
+
+## Out of scope
+
+- Pattern B (OR-in-paren) — would need recursive WHERE-clause AST splitting.
+  Defer to Phase 5 if user demand emerges.
+- Pattern D (UNION cfif) — would need treating each UNION arm as an
+  independent SELECT. Defer to Phase 6.
+- Re-formatting CFML expression conditions (`is`, `eq`, `neq`, etc.) —
+  Phase 2 normalization already covers this.
+- Auto-fixing user source bugs like missing space around `'#var#'and`.
