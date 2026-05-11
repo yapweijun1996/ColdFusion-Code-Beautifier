@@ -1077,6 +1077,139 @@ assertEqual(
 	}
 })();
 
+/* ===========================================================================
+ * Phase 4 — AND-leaves hoisting test corpus (T1–T10)
+ *
+ * These tests pin the EXPECTED behavior after Phase 4 lands. Before Phase 4
+ * is implemented they will all FAIL — that is intentional. The failing
+ * outputs prove they actually exercise the code path Phase 4 will fix.
+ *
+ * Pattern A target: cfquery body has SELECT/FROM/WHERE backbone OUTSIDE the
+ * cfif tree, and every cfif leaf merely appends `and xxx` (or `or xxx`)
+ * clauses. Phase 4 formats the backbone via sql-formatter, leaves the cfif
+ * tree structurally intact, and uppercases keywords inside leaves.
+ *
+ * Each test loads vendor sql-formatter into its own vm context (same
+ * pattern as runProSQLTests / runMarkerEndToEndTests above).
+ * =========================================================================== */
+(function runPhase4AndLeavesTests() {
+	var fs2 = require('fs');
+	var vendorPath = 'vendor/sql-formatter.min.js';
+	if (!fs2.existsSync(vendorPath)) {
+		console.log('SKIP Phase 4 tests (vendor bundle missing): ' + vendorPath);
+		return;
+	}
+	var sqlFormatter2 = require('../' + vendorPath);
+	var proSrc2 = fs2.readFileSync('js/pro-sql.js', 'utf8');
+	var browserCode2 = scripts.map(function(file) { return fs2.readFileSync(file, 'utf8'); }).join('\n');
+
+	function runProSQL(input, dialect) {
+		var elements = {
+			language: { value: 'cfml' },
+			split_html_tag: { checked: false },
+			auto_copy: { checked: false }, auto_clear: { checked: false }, auto_clear_output: { checked: false },
+			deep_sql: { checked: true }, deep_css: { checked: false }, deep_js: { checked: false },
+			pro_sql: { checked: true }, pro_sql_dialect: { value: dialect || 'mysql' },
+			input: { value: input }, output: { value: '', select: function() {} }
+		};
+		var ctx = {
+			console: { log: function() {}, warn: function() {} },
+			window: { sqlFormatter: sqlFormatter2 },
+			document: {
+				getElementById: function(id) { return elements[id]; },
+				execCommand: function() { return true; },
+				querySelector: function() { return { prepend: function() {}, textContent: '' }; },
+				createElement: function() { return { className: '', innerHTML: '', style:{setProperty:function(){}}, classList:{add:function(){},remove:function(){}}, addEventListener:function(){}, remove:function(){} }; },
+				addEventListener: function() {}, readyState: 'complete'
+			},
+			setTimeout: setTimeout, clearTimeout: clearTimeout
+		};
+		vm.createContext(ctx);
+		vm.runInContext(proSrc2 + '\n' + browserCode2, ctx);
+		ctx.beautifyCodes();
+		return elements.output.value;
+	}
+
+	// T1 — Single cfif, single `and` leaf — the simplest Pattern A.
+	assertEqual(
+		'Phase4 T1: single cfif with single AND leaf',
+		runProSQL('<cfquery name="q">\nSELECT a FROM t WHERE x = 1\n<cfif y>\nand z = 2\n</cfif>\n</cfquery>'),
+		'<cfquery name="q">\n\tSELECT\n\t\ta\n\tFROM\n\t\tt\n\tWHERE\n\t\tx = 1\n\t\t<cfif y>\n\t\t\tAND z = 2\n\t\t</cfif>\n</cfquery>'
+	);
+
+	// T2 — cfif/cfelse, both leaves AND.
+	assertEqual(
+		'Phase4 T2: cfif/cfelse with both AND leaves',
+		runProSQL('<cfquery name="q">\nSELECT a FROM t WHERE x = 1\n<cfif y>\nand z = 2\n<cfelse>\nand z = 3\n</cfif>\n</cfquery>'),
+		'<cfquery name="q">\n\tSELECT\n\t\ta\n\tFROM\n\t\tt\n\tWHERE\n\t\tx = 1\n\t\t<cfif y>\n\t\t\tAND z = 2\n\t\t<cfelse>\n\t\t\tAND z = 3\n\t\t</cfif>\n</cfquery>'
+	);
+
+	// T3 — cfif/cfelseif/cfelse with all AND.
+	assertEqual(
+		'Phase4 T3: cfif/cfelseif/cfelse with three AND leaves',
+		runProSQL('<cfquery name="q">\nSELECT a FROM t WHERE x = 1\n<cfif y EQ 1>\nand z = 2\n<cfelseif y EQ 2>\nand z = 3\n<cfelse>\nand z = 4\n</cfif>\n</cfquery>'),
+		'<cfquery name="q">\n\tSELECT\n\t\ta\n\tFROM\n\t\tt\n\tWHERE\n\t\tx = 1\n\t\t<cfif y EQ 1>\n\t\t\tAND z = 2\n\t\t<cfelseif y EQ 2>\n\t\t\tAND z = 3\n\t\t<cfelse>\n\t\t\tAND z = 4\n\t\t</cfif>\n</cfquery>'
+	);
+
+	// T4 — Multiple sibling cfif blocks at the same depth.
+	assertEqual(
+		'Phase4 T4: three sibling cfif blocks each appending one AND',
+		runProSQL('<cfquery name="q">\nSELECT a FROM t WHERE x = 1\n<cfif y1>\nand a = 1\n</cfif>\n<cfif y2>\nand b = 2\n</cfif>\n<cfif y3>\nand c = 3\n</cfif>\n</cfquery>'),
+		'<cfquery name="q">\n\tSELECT\n\t\ta\n\tFROM\n\t\tt\n\tWHERE\n\t\tx = 1\n\t\t<cfif y1>\n\t\t\tAND a = 1\n\t\t</cfif>\n\t\t<cfif y2>\n\t\t\tAND b = 2\n\t\t</cfif>\n\t\t<cfif y3>\n\t\t\tAND c = 3\n\t\t</cfif>\n</cfquery>'
+	);
+
+	// T5 — Multi-line `and (...)` continuation. The leaf body has 2 lines:
+	// first starts with `and`, second with `or`. Both pass precondition.
+	assertEqual(
+		'Phase4 T5: leaf body with multi-line AND/OR continuation',
+		runProSQL("<cfquery name=\"q\">\nSELECT a FROM t WHERE x = 1\n<cfif y>\nand (lower(a) LIKE '%x%'\nor lower(b) LIKE '%y%')\n</cfif>\n</cfquery>"),
+		"<cfquery name=\"q\">\n\tSELECT\n\t\ta\n\tFROM\n\t\tt\n\tWHERE\n\t\tx = 1\n\t\t<cfif y>\n\t\t\tAND (LOWER(a) LIKE '%x%'\n\t\t\tOR LOWER(b) LIKE '%y%')\n\t\t</cfif>\n</cfquery>"
+	);
+
+	// T6 — Tree contains <!--- comment --->. Comment passes through verbatim.
+	assertEqual(
+		'Phase4 T6: tree with CFML markup comment between cfif and AND leaf',
+		runProSQL('<cfquery name="q">\nSELECT a FROM t WHERE x = 1\n<cfif y>\n<!--- a note --->\nand z = 2\n</cfif>\n</cfquery>'),
+		'<cfquery name="q">\n\tSELECT\n\t\ta\n\tFROM\n\t\tt\n\tWHERE\n\t\tx = 1\n\t\t<cfif y>\n\t\t\t<!--- a note --->\n\t\t\tAND z = 2\n\t\t</cfif>\n</cfquery>'
+	);
+
+	// T7 — post-tree segment with GROUP BY + ORDER BY. Both must be re-formatted.
+	assertEqual(
+		'Phase4 T7: post-tree GROUP BY + ORDER BY both formatted',
+		runProSQL('<cfquery name="q">\nSELECT a, count(*) FROM t WHERE x = 1\n<cfif y>\nand z = 2\n</cfif>\nGROUP BY a\nORDER BY a desc\n</cfquery>'),
+		'<cfquery name="q">\n\tSELECT\n\t\ta,\n\t\tCOUNT(*)\n\tFROM\n\t\tt\n\tWHERE\n\t\tx = 1\n\t\t<cfif y>\n\t\t\tAND z = 2\n\t\t</cfif>\n\tGROUP BY\n\t\ta\n\tORDER BY\n\t\ta DESC\n</cfquery>'
+	);
+
+	// T8 — Real-world fr_fg_vari_qty #1 shape (simplified): pre-tree has
+	// base WHERE conditions, multiple cfif blocks (one with cfelseif), then
+	// GROUP BY + ORDER BY post-tree.
+	assertEqual(
+		'Phase4 T8: real-world shape — base WHERE + 2 cfif blocks + GROUP/ORDER',
+		runProSQL("<cfquery name=\"q\">\nSELECT a, sum(b) AS total FROM t WHERE companyfn = 'x'\nand date_trans between '2020-01-01' and '2020-12-31'\n<cfif rec_code is \"final\">\nand tag_app = 'y'\n<cfelseif rec_code is \"draft\">\nand tag_app = 'n'\n</cfif>\n<cfif filter_unique neq \"\">\nand (filter = 'foo')\n</cfif>\nGROUP BY a\nORDER BY lower(a)\n</cfquery>"),
+		"<cfquery name=\"q\">\n\tSELECT\n\t\ta,\n\t\tSUM(b) AS total\n\tFROM\n\t\tt\n\tWHERE\n\t\tcompanyfn = 'x'\n\t\tAND date_trans BETWEEN '2020-01-01' AND '2020-12-31'\n\t\t<cfif rec_code IS \"final\">\n\t\t\tAND tag_app = 'y'\n\t\t<cfelseif rec_code IS \"draft\">\n\t\t\tAND tag_app = 'n'\n\t\t</cfif>\n\t\t<cfif filter_unique NEQ \"\">\n\t\t\tAND (filter = 'foo')\n\t\t</cfif>\n\tGROUP BY\n\t\ta\n\tORDER BY\n\t\tLOWER(a)\n</cfquery>"
+	);
+
+	// T9 — Indented input with all-WHERE leaves (Phase 3 territory).
+	// Phase 3 should fire BEFORE Phase 4 evaluates. Verifies Phase 4
+	// doesn't interfere with the existing Phase 3 hoist behavior.
+	assertEqual(
+		'Phase4 T9: all-WHERE leaves still go through Phase 3, not Phase 4',
+		runProSQL('<cfquery name="q">\n\tSELECT a\n\tFROM t\n\t<cfif y>\n\t\twhere x = 1\n\t<cfelse>\n\t\twhere x = 2\n\t</cfif>\n\tand b = 3\n</cfquery>'),
+		'<cfquery name="q">\n\tSELECT\n\t\ta\n\tFROM\n\t\tt\n\tWHERE\n\t\t<cfif y>\n\t\t\tx = 1\n\t\t<cfelse>\n\t\t\tx = 2\n\t\t</cfif>\n\t\tAND b = 3\n</cfquery>'
+	);
+
+	// T10 — Safety: leaf contains `union select` (Pattern D — cfif appends
+	// a whole UNION arm). Phase 4 precondition fails (leaves don't all
+	// start with and/or). MUST fall back to Tier 2 verbatim with Lite
+	// uppercase. Indented input so Tier 2 fires (not Tier 3 flat).
+	// This is the zero-regression guarantee.
+	assertEqual(
+		'Phase4 T10: union-cfif leaf falls back to Tier 2 verbatim (no Phase 4 dispatch)',
+		runProSQL('<cfquery name="q">\n\tSELECT a FROM t WHERE x = 1\n\t<cfif y>\n\t\tunion\n\t\tSELECT b FROM u WHERE z = 2\n\t</cfif>\n</cfquery>'),
+		'<cfquery name="q">\n\tSELECT a FROM t WHERE x = 1\n\t<cfif y>\n\t\tUNION\n\t\tSELECT b FROM u WHERE z = 2\n\t</cfif>\n</cfquery>'
+	);
+})();
+
 if (!process.exitCode) {
 	console.log('All tests passed.');
 }
