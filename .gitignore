@@ -1,0 +1,9 @@
+# local-only test fixtures (not part of the published demo)
+sample/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/

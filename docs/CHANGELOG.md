@@ -2,6 +2,25 @@
 
 ## v6 series (2026-05-11)
 
+### Fix: CFML strings no longer treat `\"` as an escape — Windows-path strings stop swallowing the closing quote
+
+**Root cause of "13 cfqueries in sample/test.cfm — all skipped, no warning":**
+`isInsideCommentOrString` and `findClosingTagOutsideText` both treated `\` as a C/JS-style escape character inside `"..."` strings. CFML / HTML strings do **not** use backslash escapes — `\` is a literal character. A real-world line like
+
+```cfml
+<cfset p = replace("..\..\..\#mainstorefld#\contentstore\#cookie.cookcfnunique#\","\\", "\\\\", "ALL")>
+```
+
+ends its first string with `\"` — the parser swallowed the closing `"` as "escaped", then continued scanning. Parser parity went off-by-one starting at line 478 and stayed off for the remaining **3868 lines** of the file. Every later `<cfquery>` opener was reported "inside a string" by `replaceEmbeddedBlock`, so it was silently skipped — no Pro SQL, no Lite uppercase, no Phase 2 normalization, not even a console.warn (the catch path is never reached because the dispatch never enters).
+
+Diagnosed by walking quote-state across the actual sample file and finding the longest non-normal run started at line 478 and extended to EOF.
+
+Fix: removed the `if (c == '\\') { i++; continue; }` block from both `isInsideCommentOrString` and `findClosingTagOutsideText`. Both already handle the SQL `''` / `""` doubled-quote escape, which is the only escape mechanism used in CFML/HTML/SQL strings.
+
+After the fix the same 4346-line file now formats all 13 cfqueries through full Pro SQL (PostgreSQL dialect) — SELECT/FROM/WHERE on own lines, columns list-broken, `<cfqueryparam>` lowercased + `cfsqltype` values lowercased.
+
+1 new e2e test pinning the Windows-path pattern (`replace("..\\..\\#x#\\", ...)` followed by a cfquery that must still be deep-formatted). 89 tests total, green. `sw.js` `CACHE_VERSION` → `v2026-05-11-11`.
+
 ### Fix: SQL doubled-quote escape (`''`) no longer flips isInsideCommentOrString parity for the rest of the file
 
 **Root cause of "cfquery in 4000-line file doesn't get Pro SQL formatted, but same cfquery alone does":**

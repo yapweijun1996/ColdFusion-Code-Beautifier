@@ -905,7 +905,12 @@ function isInsideCommentOrString(code, pos) {
 			continue;
 		}
 		if (quote != "") {
-			if (c == '\\') { i++; continue; }
+			// CFML / HTML strings do NOT use backslash escapes — `\` is a literal
+			// character. Treating `\"` as an escape (C/JS-style) would swallow the
+			// closing quote of strings like
+			//   "..\..\..\#mainstorefld#\contentstore\#cookie.cookcfnunique#\"
+			// and leave parser parity off-by-one for the rest of the file, which
+			// silently skips every subsequent <cfquery> as "inside a string".
 			if (c == quote) {
 				// SQL standard escape: doubled quote = literal quote inside string.
 				// Without this, a body containing 'it''s OK' would close the string
@@ -952,12 +957,10 @@ function findClosingTagOutsideText(code, tagName, startIndex) {
 		}
 
 		if (quote != "") {
-			if (char == '\\') {
-				i++;
-				continue;
-			}
+			// CFML / HTML strings do NOT use backslash escapes (`\` is literal).
+			// Mirrors the same fix in isInsideCommentOrString — see comment there.
 			if (char == quote) {
-				if (quote == "'" && nextChar == "'") {
+				if ((quote == "'" || quote == '"') && nextChar == quote) {
 					i++;
 					continue;
 				}

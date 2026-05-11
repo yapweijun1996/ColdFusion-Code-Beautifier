@@ -229,6 +229,23 @@ assertEqual(
 );
 
 assertEqual(
+	'CFML string with backslash before closing quote (Windows path) does NOT swallow the closer — subsequent cfquery still parses',
+	// CFML strings do NOT use C/JS-style backslash escapes. A literal Windows
+	// path like "..\..\..\#x#\" ends with `\"` — if the parser treats `\"`
+	// as an escaped quote, the closing `"` is consumed, parser parity goes
+	// off-by-one for the rest of the file, and every later <cfquery> is
+	// silently skipped as "inside a string". This test covers the real-world
+	// regression where a 4000-line .cfm file had its cfqueries un-formatted
+	// because of one upstream cfset using replace() with backslash arguments.
+	runRouter(
+		"<cfset p = replace(\"..\\..\\..\\#x#\\\",\"\\\\\", \"\\\\\\\\\", \"ALL\")>\n<cfquery name=\"q\">\nselect id from t\n</cfquery>",
+		'cfml',
+		true
+	),
+	"<cfset p = replace(\"..\\..\\..\\#x#\\\",\"\\\\\", \"\\\\\\\\\", \"ALL\")>\n<cfquery name=\"q\">\n\tSELECT id\n\tFROM t\n</cfquery>"
+);
+
+assertEqual(
 	'deep style css',
 	runRouter('<style>\nbody{margin:0;color:red}.btn{padding:10px}\n</style>', 'cfml', true),
 	'<style>\n\tbody{margin:0;color:red}\n\t.btn{padding:10px}\n</style>'
