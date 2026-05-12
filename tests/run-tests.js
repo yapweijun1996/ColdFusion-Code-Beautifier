@@ -319,6 +319,24 @@ assertEqual(
 );
 
 assertEqual(
+	'auto-split: stray </cfif> after text — closes outer cfif from prior line, must split off (Rule D)',
+	runRouter('<cfif outer>\n\t<cfif inner>Foo</cfif> :&nbsp;</cfif>', 'cfml', false),
+	'<cfif outer>\n\t<cfif inner>Foo</cfif> :&nbsp;\n</cfif>'
+);
+
+assertEqual(
+	'auto-split: inline <cfif x>1<cfelse>0</cfif> stays intact even with Rule D active (opens == closes balanced inline)',
+	runRouter('<cfif x>1<cfelse>0</cfif>', 'cfml', false),
+	'<cfif x>1<cfelse>0</cfif>'
+);
+
+assertEqual(
+	'auto-split: real-world serialnum pattern — <cfif set_language is \'english\'>Serial Number</cfif> :&nbsp;</cfif> peels trailing close',
+	runRouter('<cfif qs_sr_nums.recordcount GT 0>\n\t<br>\n\t<cfif set_language is \'english\'>Serial Number</cfif> :&nbsp;</cfif>\n\t<cfset qcnt=0>', 'cfml', false),
+	'<cfif qs_sr_nums.recordcount GT 0>\n\t<br>\n\t<cfif set_language is \'english\'>Serial Number</cfif> :&nbsp;\n</cfif>\n<cfset qcnt=0>'
+);
+
+assertEqual(
 	'auto-split: real-world numberToEnglish pattern — <td>...&nbsp;<script>JS</script><cfif>x</cfif>.</td>',
 	runRouter(
 		'<cfif disp_numberToEnglishProper EQ "y">\n\t<td #style_padding#>desc: &nbsp;<script Language="JavaScript">\n\tdocument.write(numberToEnglish(\'#amount_forex#\'));\n</script>\n\t<cfif set_language is \'english\'>Only</cfif>.</td>\n</cfif>',

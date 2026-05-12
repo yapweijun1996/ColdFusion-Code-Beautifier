@@ -120,6 +120,55 @@ function splitAdjacentCFMLTags(code) {
 			return true;
 		}
 
+		// (D) Stray CFML close — `</cfXXX>` that closes a block opened on a
+		// PRIOR line (no matching `<cfXXX>` on the current output line).
+		// Fires even when preceded by text content (the `>` requirement of
+		// Rule C would otherwise skip these).
+		//
+		// Real-world trigger:
+		//   <cfif outer>
+		//     <cfif inner>Foo</cfif> bar</cfif>   ← trailing </cfif> is stray
+		//
+		// Discriminator: position-sensitive stack simulation of opens/closes
+		// for the SAME cf tag name on the current output line tail.
+		//   - open found → push
+		//   - close found:
+		//       stack non-empty → pop (matches an inline open)
+		//       stack empty    → ignore (matches a phantom prior-line open)
+		// After walking the tail, if stack is non-empty, our pending close
+		// has an inline partner → do NOT split. If stack is empty, no
+		// inline partner exists → split.
+		//
+		// Examples (pending close is `</cfif>`, tail shown):
+		//   `<cfif x>1<cfelse>0`            → stack=[cfif] → don't split (inline)
+		//   `<cfif a>foo</cfif>`            → stack=[]     → split (stray)
+		//   `</cfif>foo<cfif b>bar`         → stack=[cfif] → don't split (matches inline cfif b)
+		//   `<cfif set_lang>X</cfif> :&nbsp;` → stack=[]   → split (real-world bug fix)
+		var strayCfClose = slice.match(/^<\/(cf[a-z][a-z0-9]*)\b/i);
+		if (strayCfClose) {
+			var cfTag = strayCfClose[1].toLowerCase();
+			// Skip non-block / always-inline tags.
+			if (cfTag !== 'cfqueryparam' && cfTag !== 'cfargument') {
+				var pairRe = new RegExp('<(/?)' + cfTag + '\\b', 'gi');
+				var depth = 0;
+				var pm;
+				while ((pm = pairRe.exec(outLineTail)) !== null) {
+					if (pm[1] === '/') {
+						if (depth > 0) depth--;  // matches inline open
+						// else: ignore (matches phantom prior-line open)
+					} else {
+						depth++;  // open pushed onto stack
+					}
+				}
+				if (depth === 0) {
+					// No inline open waiting → pending close is stray.
+					out += '\n' + leadingWsOfInputLine(pos);
+					i = j;
+					return true;
+				}
+			}
+		}
+
 		// (C) Open tag / CFML close / comment — splits at `>` boundary.
 		// HTML close tags (`</td>`, `</tr>`, etc.) deliberately omitted
 		// here to preserve `<td></td>` and `</td></tr>` inline.
