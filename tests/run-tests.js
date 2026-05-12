@@ -283,9 +283,9 @@ assertEqual(
 );
 
 assertEqual(
-	'auto-split: <script> mid-line gets pulled onto own line + JS body re-indents to script depth +1',
+	'auto-split: <script> mid-line gets pulled onto own line + JS body re-indents to script depth +1; stray </td> peels (Rule D)',
 	runRouter("<td>foo&nbsp;<script>doIt();</script>bar</td>", 'cfml', false),
-	'<td>foo&nbsp;\n\t<script>doIt();</script>bar</td>'
+	'<td>foo&nbsp;\n\t<script>doIt();</script>bar\n</td>'
 );
 
 assertEqual(
@@ -328,6 +328,24 @@ assertEqual(
 	'auto-split: inline <cfif x>1<cfelse>0</cfif> stays intact even with Rule D active (opens == closes balanced inline)',
 	runRouter('<cfif x>1<cfelse>0</cfif>', 'cfml', false),
 	'<cfif x>1<cfelse>0</cfif>'
+);
+
+assertEqual(
+	'auto-split: stray </b> after inline cfif — Rule D peels HTML close when no inline open on line',
+	runRouter('<b>\n\t<cfif x>GST<cfelse>VAT</cfif></b>', 'cfml', false),
+	'<b>\n\t<cfif x>GST<cfelse>VAT</cfif>\n</b>'
+);
+
+assertEqual(
+	'auto-split: inline <p>Hello <b>world</b>.</p> stays intact — Rule D sees matching <b> on line',
+	runRouter('<p>Hello <b>world</b>.</p>', 'cfml', false),
+	'<p>Hello <b>world</b>.</p>'
+);
+
+assertEqual(
+	'auto-split: real-world GST cfif pattern — <cfif>GST<cfelseif>VAT<cfelse>Sales Tax</cfif></b> peels </b>',
+	runRouter('<b>\n\t<cfif comain_gst_name EQ "GST">GST<cfelseif comain_gst_name EQ "VAT">VAT<cfelse>Sales Tax</cfif></b>', 'cfml', false),
+	'<b>\n\t<cfif comain_gst_name EQ "GST">GST<cfelseif comain_gst_name EQ "VAT">VAT<cfelse>Sales Tax</cfif>\n</b>'
 );
 
 assertEqual(

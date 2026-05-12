@@ -120,17 +120,19 @@ function splitAdjacentCFMLTags(code) {
 			return true;
 		}
 
-		// (D) Stray CFML close — `</cfXXX>` that closes a block opened on a
-		// PRIOR line (no matching `<cfXXX>` on the current output line).
-		// Fires even when preceded by text content (the `>` requirement of
-		// Rule C would otherwise skip these).
+		// (D) Stray close — `</TAG>` (CFML or HTML) that closes a block
+		// opened on a PRIOR line (no matching `<TAG>` on the current
+		// output line). Fires even when preceded by text content
+		// (the `>` requirement of Rule C would otherwise skip these).
 		//
-		// Real-world trigger:
+		// Real-world triggers:
 		//   <cfif outer>
-		//     <cfif inner>Foo</cfif> bar</cfif>   ← trailing </cfif> is stray
+		//     <cfif inner>Foo</cfif> bar</cfif>     ← stray </cfif>
+		//   <b>
+		//     <cfif x>GST<cfelse>VAT</cfif></b>     ← stray </b>
 		//
 		// Discriminator: position-sensitive stack simulation of opens/closes
-		// for the SAME cf tag name on the current output line tail.
+		// for the SAME tag name on the current output line tail.
 		//   - open found → push
 		//   - close found:
 		//       stack non-empty → pop (matches an inline open)
@@ -139,17 +141,19 @@ function splitAdjacentCFMLTags(code) {
 		// has an inline partner → do NOT split. If stack is empty, no
 		// inline partner exists → split.
 		//
-		// Examples (pending close is `</cfif>`, tail shown):
-		//   `<cfif x>1<cfelse>0`            → stack=[cfif] → don't split (inline)
-		//   `<cfif a>foo</cfif>`            → stack=[]     → split (stray)
-		//   `</cfif>foo<cfif b>bar`         → stack=[cfif] → don't split (matches inline cfif b)
-		//   `<cfif set_lang>X</cfif> :&nbsp;` → stack=[]   → split (real-world bug fix)
-		var strayCfClose = slice.match(/^<\/(cf[a-z][a-z0-9]*)\b/i);
-		if (strayCfClose) {
-			var cfTag = strayCfClose[1].toLowerCase();
-			// Skip non-block / always-inline tags.
-			if (cfTag !== 'cfqueryparam' && cfTag !== 'cfargument') {
-				var pairRe = new RegExp('<(/?)' + cfTag + '\\b', 'gi');
+		// Examples (pending close shown first, then output-line tail):
+		//   </cfif>  `<cfif x>1<cfelse>0`            → stack=[cfif] → keep inline
+		//   </cfif>  `<cfif a>foo</cfif>`            → stack=[]     → split (stray)
+		//   </cfif>  `</cfif>foo<cfif b>bar`         → stack=[cfif] → keep inline
+		//   </b>     `<p>Hello <b>world`             → stack=[b]    → keep inline
+		//   </b>     `<cfif x>X</cfif>`              → stack=[]     → split (stray)
+		//   </td>    `<td>x</td>y`                   → stack=[]     → split (stray)
+		var strayClose = slice.match(/^<\/([a-z][a-z0-9]*)\b/i);
+		if (strayClose) {
+			var closeTag = strayClose[1].toLowerCase();
+			// cfqueryparam/cfargument have no meaningful close form; skip.
+			if (closeTag !== 'cfqueryparam' && closeTag !== 'cfargument') {
+				var pairRe = new RegExp('<(/?)' + closeTag + '\\b', 'gi');
 				var depth = 0;
 				var pm;
 				while ((pm = pairRe.exec(outLineTail)) !== null) {
