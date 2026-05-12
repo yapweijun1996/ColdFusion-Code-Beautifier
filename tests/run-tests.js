@@ -319,6 +319,32 @@ assertEqual(
 );
 
 assertEqual(
+	'auto-split: real-world disp_pym1amt pattern — badly-indented multi-tag glued line gets fully aligned',
+	runRouter(
+		'<cfif use_split_payment_yn EQ "y" AND split_payment_used EQ "y">\n' +
+		'\t\t\t\t\t\t\t\t\t\t\t\t<table width="100%" border="#bdtk#" class="#default_font#" cellspacing="0" cellpadding="0">\n' +
+		'\t\t\t\t\t\t\t\t\t\t\t\t\t<tr height=10><td></td></tr>\n' +
+		'\t\t\t\t\t\t\t\t\t\t\t\t\t<cfif disp_pym1amt GT 0><tr height="#ht_ft_total#"><td width="#wd_ft04to05_01#" #style_padding#>&nbsp;</td><td width="#wd_ft04to05_02#" align="right" #style_padding#>\n' +
+		'\t\t\t\t\t\t\t\t\t\t\t\t\t\t<cfif set_language is \'english\'>Paid by</cfif> #vle_pym1_desc#\n' +
+		'\t\t\t\t\t\t\t\t\t\t\t\t\t</td></tr></cfif>',
+		'cfml', false
+	),
+	'<cfif use_split_payment_yn EQ "y" AND split_payment_used EQ "y">\n' +
+	'\t<table width="100%" border="#bdtk#" class="#default_font#" cellspacing="0" cellpadding="0">\n' +
+	'\t\t<tr height=10>\n' +
+	'\t\t\t<td></td>\n' +
+	'\t\t</tr>\n' +
+	'\t\t<cfif disp_pym1amt GT 0>\n' +
+	'\t\t\t<tr height="#ht_ft_total#">\n' +
+	'\t\t\t\t<td width="#wd_ft04to05_01#" #style_padding#>&nbsp;</td>\n' +
+	'\t\t\t\t<td width="#wd_ft04to05_02#" align="right" #style_padding#>\n' +
+	'\t\t\t\t\t<cfif set_language is \'english\'>Paid by</cfif> #vle_pym1_desc#\n' +
+	'\t\t\t\t</td>\n' +
+	'\t\t\t</tr>\n' +
+	'\t\t</cfif>'
+);
+
+assertEqual(
 	'auto-split: stray </cfif> after text — closes outer cfif from prior line, must split off (Rule D)',
 	runRouter('<cfif outer>\n\t<cfif inner>Foo</cfif> :&nbsp;</cfif>', 'cfml', false),
 	'<cfif outer>\n\t<cfif inner>Foo</cfif> :&nbsp;\n</cfif>'

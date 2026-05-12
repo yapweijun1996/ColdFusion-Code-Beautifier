@@ -18,10 +18,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout (tracked files only — sample/ is gitignored)
         uses: actions/checkout@v4
 
-      - name: Run regression tests (Node, no install)
+      - name: Assert no private corpus leaked into repo
+        run: |
+          if [ -d sample ] && find sample -name '*.cfm' -type f | grep -q .; then
+            echo "::error::Private .cfm corpus appears under sample/ — sample/ is gitignored but a file slipped through. Fix .gitignore or remove the file."
+            exit 1
+          fi
+
+      - name: Run regression tests (Node, no install, no network)
         run: node tests/run-tests.js
 
       - name: Setup Pages

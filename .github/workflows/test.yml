@@ -1,0 +1,34 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Privacy guarantee: this workflow runs ONLY tracked files. The `sample/`
+# directory is gitignored (private user-supplied .cfm corpus) and is NEVER
+# cloned by `actions/checkout`. Every regression test below uses synthetic
+# / sanitized inputs hard-coded into tests/run-tests.js.
+
+permissions:
+  contents: read
+
+jobs:
+  regression-tests:
+    name: Run regression suite (synthetic inputs only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (tracked files only — sample/ is gitignored)
+        uses: actions/checkout@v4
+
+      - name: Assert no private corpus leaked into repo
+        run: |
+          if [ -d sample ] && find sample -name '*.cfm' -type f | grep -q .; then
+            echo "::error::Private .cfm corpus appears under sample/ — sample/ is gitignored but a file slipped through. Fix .gitignore or remove the file."
+            exit 1
+          fi
+
+      - name: Run all regression tests (no install, no network)
+        run: node tests/run-tests.js
