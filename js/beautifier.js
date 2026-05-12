@@ -34,6 +34,15 @@ function splitAdjacentCFMLTags(code) {
 	//   <cfset a = 1><!---<cfset b = 2>---><cfset c = 3>
 	// becomes 3 lines with the comment as a standalone middle line.
 	var SPLITTABLE_RE = /^<(\/?cf(?!queryparam\b|argument\b)[a-z]+\b|!---|!--)/i;
+	// Always-split: <script>/<style> + their closers. Fires when output
+	// line has any non-ws content, regardless of preceding char. Real-
+	// world: `<td>...&nbsp;<script>` should split between `&nbsp;` and
+	// `<script>` even though `&nbsp;` ends with `;` not `>`.
+	var ALWAYS_SPLIT_BEFORE_RE = /^<\/?(?:script|style)\b/i;
+	// HTML close-block tags: split-before only when current output line
+	// already contains a CFML close tag. Preserves inline `<td>x</td>`.
+	var HTML_CLOSE_BLOCK_RE = /^<\/(?:td|tr|table|div|li|ul|ol|p|section|article|header|footer|nav|main|aside|form)\b/i;
+	var LINE_HAS_CFML_CLOSE_RE = /<\/cf(?!queryparam\b|argument\b)[a-z]+>/i;
 	var lower = code.toLowerCase();
 	var out = '';
 	var i = 0;
@@ -58,23 +67,48 @@ function splitAdjacentCFMLTags(code) {
 	}
 
 	function maybeSplitBefore(pos) {
-		// Split at pos ONLY when:
-		//   1. pos (after optional whitespace) starts with a SPLITTABLE_RE
-		//      pattern (CFML tag open / close / comment open).
-		//   2. The current OUTPUT line's last non-whitespace character is `>`
-		//      — i.e., we're at a tag-to-tag boundary, NOT mid-content.
-		// Rule (2) is what protects inline patterns like
-		//   <cfif x>1<cfelse>0</cfif>
-		// from being split: at the position of `<cfelse>`, the prev non-ws
-		// in output is `1`, not `>`, so no split.
+		// Three split rules with different gating:
+		//
+		//   (A) ALWAYS-SPLIT — <script>/<style> open + close. Splits when
+		//       output line has any non-ws content. No "preceding `>`"
+		//       requirement (so `&nbsp;<script>` correctly splits).
+		//
+		//   (B) HTML-CLOSE-BLOCK + LINE-HAS-CFML-CLOSE — </td>/</tr>/etc.
+		//       Splits only if the current output line already contains a
+		//       CFML close tag. Signal: this is mixed CFML+HTML content
+		//       where the HTML close should be visually separated.
+		//       Preserves inline `<td>x</td>` (no CFML close in line).
+		//
+		//   (C) CFML-TAG (default) — <cfXXX>/</cfXXX>/<!---/<!--. Splits
+		//       only when last non-ws char on output line is `>`. Protects
+		//       inline `<cfif x>1<cfelse>0</cfif>` (`<cfelse>` preceded
+		//       by `1` not `>` → no split).
 		var j = pos;
 		while (j < code.length && (code[j] === ' ' || code[j] === '\t')) j++;
 		if (j >= code.length || code[j] !== '<') return false;
-		if (!SPLITTABLE_RE.test(code.slice(j))) return false;
+		var slice = code.slice(j);
 		var outLastNl = out.lastIndexOf('\n');
 		var outLineTail = outLastNl === -1 ? out : out.slice(outLastNl + 1);
 		var trimmed = outLineTail.replace(/[ \t]+$/, '');
-		if (trimmed === '' || !trimmed.endsWith('>')) return false;
+		if (trimmed === '') return false;
+
+		// (A) script/style — always split when line has content
+		if (ALWAYS_SPLIT_BEFORE_RE.test(slice)) {
+			out += '\n' + leadingWsOfInputLine(pos);
+			i = j;
+			return true;
+		}
+
+		// (B) HTML close-block + line has CFML close earlier
+		if (HTML_CLOSE_BLOCK_RE.test(slice) && LINE_HAS_CFML_CLOSE_RE.test(outLineTail)) {
+			out += '\n' + leadingWsOfInputLine(pos);
+			i = j;
+			return true;
+		}
+
+		// (C) CFML tag — only at tag-to-tag boundary (preceding `>`)
+		if (!SPLITTABLE_RE.test(slice)) return false;
+		if (!trimmed.endsWith('>')) return false;
 		out += '\n' + leadingWsOfInputLine(pos);
 		i = j;
 		return true;
@@ -95,7 +129,8 @@ function splitAdjacentCFMLTags(code) {
 			continue;
 		}
 		// Opaque blocks: emit open tag verbatim, then skip to closer.
-		var rest = lower.slice(i, i + 8);
+		// 12 chars covers `<cfscript ` (10) plus a couple word-boundary chars.
+		var rest = lower.slice(i, i + 12);
 		if (/^<script\b/.test(rest)) {
 			if (maybeSplitBefore(i)) continue;
 			var oe = code.indexOf('>', i);
@@ -123,8 +158,23 @@ function splitAdjacentCFMLTags(code) {
 			emitRegion('</cfquery>');
 			continue;
 		}
-		// At a splittable open tag (cf*, /cf*) — check for split-before.
-		if (code[i] === '<' && SPLITTABLE_RE.test(code.slice(i)) && maybeSplitBefore(i)) {
+		if (/^<cfscript\b/.test(rest)) {
+			// <cfscript>...</cfscript> contains JS-like code with `//` line
+			// comments. Treat as opaque so embedded `<script>`/`<style>`
+			// substrings inside comments don't trigger splits.
+			if (maybeSplitBefore(i)) continue;
+			var oe4 = code.indexOf('>', i);
+			if (oe4 === -1) { out += code.slice(i); i = code.length; continue; }
+			out += code.slice(i, oe4 + 1);
+			i = oe4 + 1;
+			emitRegion('</cfscript>');
+			continue;
+		}
+		// At any `<` — let maybeSplitBefore decide based on its three
+		// rules (CFML / HTML-close-block / script-style). It returns
+		// false for non-matching tags so plain HTML tags like `<td>`
+		// just pass through.
+		if (code[i] === '<' && maybeSplitBefore(i)) {
 			continue;
 		}
 		// Quote (string literal) — emit verbatim until matching close.

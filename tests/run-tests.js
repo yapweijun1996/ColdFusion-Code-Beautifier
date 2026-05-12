@@ -282,6 +282,46 @@ assertEqual(
 	'<cfif a>\n\t<cfif b>\n\t\t<cfset x = 1>\n\t</cfif>\n</cfif>'
 );
 
+assertEqual(
+	'auto-split: <script> mid-line gets pulled onto own line + JS body re-indents to script depth +1',
+	runRouter("<td>foo&nbsp;<script>doIt();</script>bar</td>", 'cfml', false),
+	'<td>foo&nbsp;\n\t<script>doIt();</script>bar</td>'
+);
+
+assertEqual(
+	'auto-split: <script> with multi-line JS body — block opens own depth, body indents +1, </script> aligns with open',
+	runRouter("<td>...&nbsp;<script>\nvar a = 1;\n</script>\n<cfif x>Only</cfif>.</td>", 'cfml', false),
+	'<td>...&nbsp;\n\t<script>\n\t\tvar a = 1;\n\t</script>\n\t<cfif x>Only</cfif>.\n</td>'
+);
+
+assertEqual(
+	'auto-split: inline `<td>x</td>` (NO CFML close in line) preserved — does NOT split before </td>',
+	runRouter('<tr><td>foo</td><td>bar</td></tr>', 'cfml', false),
+	'<tr><td>foo</td><td>bar</td></tr>'
+);
+
+assertEqual(
+	'auto-split: <td>x<cfif>z</cfif>.</td> — line has </cfif>, so split before </td>',
+	runRouter('<td>x<cfif y>z</cfif>.</td>', 'cfml', false),
+	'<td>x<cfif y>z</cfif>.\n</td>'
+);
+
+assertEqual(
+	'auto-split: <cfscript> opaque — embedded <script> in JS comment NOT extracted',
+	runRouter('<cfscript>\n// note: <script>foo()</script>\nvar y = 1;\n</cfscript>', 'cfml', false),
+	'<cfscript>\n\t// note: <script>foo()</script>\n\tvar y = 1;\n</cfscript>'
+);
+
+assertEqual(
+	'auto-split: real-world numberToEnglish pattern — <td>...&nbsp;<script>JS</script><cfif>x</cfif>.</td>',
+	runRouter(
+		'<cfif disp_numberToEnglishProper EQ "y">\n\t<td #style_padding#>desc: &nbsp;<script Language="JavaScript">\n\tdocument.write(numberToEnglish(\'#amount_forex#\'));\n</script>\n\t<cfif set_language is \'english\'>Only</cfif>.</td>\n</cfif>',
+		'cfml',
+		false
+	),
+	'<cfif disp_numberToEnglishProper EQ "y">\n\t<td #style_padding#>desc: &nbsp;\n\t\t<script Language="JavaScript">\n\t\t\tdocument.write(numberToEnglish(\'#amount_forex#\'));\n\t\t</script>\n\t\t<cfif set_language is \'english\'>Only</cfif>.\n\t</td>\n</cfif>'
+);
+
 /* Lite path keyword coverage: cfquery with structural cfif inside takes the
  * Tier 2 verbatim path. Even though full Pro SQL re-format is skipped, the
  * Lite uppercase pass MUST still uppercase common SQL keywords like `as`,

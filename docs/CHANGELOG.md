@@ -2,6 +2,48 @@
 
 ## v6 series (2026-05-11 → 2026-05-12)
 
+### Feat: auto-split now also handles `<script>`/`<style>` mid-line + `</td>` after CFML closes + `<cfscript>` opaque-skip
+
+User feedback on real-world legacy CFML report: the existing auto-split (CFML tags only) didn't catch the very common pattern of `<td>...&nbsp;<script>JS</script><cfif>x</cfif>.</td>` where script and `</td>` should each be on their own line.
+
+Three new split rules added to `splitAdjacentCFMLTags`:
+
+1. **Always-split before `<script>`/`<style>` (and their closers)** when the current output line has any non-whitespace content. No "must follow `>`" requirement — `&nbsp;<script>` correctly splits even though `&nbsp;` ends with `;`.
+
+2. **Split before HTML close-block tags (`</td>`, `</tr>`, `</table>`, `</div>`, `</li>`, `</ul>`, `</ol>`, `</p>`, `</section>`, `</article>`, `</header>`, `</footer>`, `</nav>`, `</main>`, `</aside>`, `</form>`)** ONLY when the current output line already contains a CFML close tag (`</cfif>`, `</cfelse>`, etc.). This is the targeted signal "mixed CFML+HTML content where the HTML close should be visually separated". Preserves inline `<td>x</td>` and `<td>x</td><td>y</td>` patterns (no CFML close → no split).
+
+3. **`<cfscript>...</cfscript>` is now opaque** (like `<script>`, `<style>`, `<cfquery>`). Embedded `<script>`/`<style>` substrings inside JS line comments (`// ...`) inside `<cfscript>` no longer trigger splits.
+
+### Real-world impact
+
+User's `numberToEnglish` pattern now formats correctly:
+
+```cfml
+INPUT:
+<td...>desc: &nbsp;<script Language="JavaScript">
+    document.write(numberToEnglish('#x#'));
+</script>
+<cfif set_language is 'english'>Only</cfif>.</td>
+
+OUTPUT:
+<td...>desc: &nbsp;
+    <script Language="JavaScript">
+        document.write(numberToEnglish('#x#'));
+    </script>
+    <cfif set_language is 'english'>Only</cfif>.
+</td>
+```
+
+JS body indents to script depth +1 naturally because `<td>` opens depth and `<script>` opens deeper.
+
+### Validation
+
+- 109 prior tests + 6 new (script/style/cfscript/HTML-close-block + real-world `numberToEnglish` pattern) = **115 tests, all green**.
+- 14-file corpus (1.9 MB, 30,518 lines, 114 cfqueries): zero warnings, zero throws, all Pro SQL verdict counts unchanged.
+- 3,729 inline `<td>x</td>` patterns in corpus stay inline (rule (B) only fires when CFML close is in line).
+
+`sw.js` `CACHE_VERSION` → `v2026-05-12-15`.
+
 ### Feat (Phase 4): AND-leaves hoisting — Pattern A cfif trees now get full Pro SQL backbone
 
 The dominant real-world pattern in legacy CFML reports: a `<cfquery>` body with a complete `WHERE base AND base AND base` block followed by multiple `<cfif>` tags that each merely append optional `and xxx` / `or xxx` clauses. Phase 3 (WHERE hoisting) couldn't handle this — it requires every leaf to START with `where`. Phase 4 is Phase 3's dual: every leaf STARTS with `and` or `or`.
