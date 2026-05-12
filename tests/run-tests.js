@@ -295,9 +295,15 @@ assertEqual(
 );
 
 assertEqual(
-	'auto-split: inline `<td>x</td>` (NO CFML close in line) preserved — does NOT split before </td>',
+	'auto-split: <tr><td>x</td><td>y</td></tr> — opens get split at `>` boundary, structural closes (</tr>) align with opens, <td>x</td> stays inline',
 	runRouter('<tr><td>foo</td><td>bar</td></tr>', 'cfml', false),
-	'<tr><td>foo</td><td>bar</td></tr>'
+	'<tr>\n\t<td>foo</td>\n\t<td>bar</td>\n</tr>'
+);
+
+assertEqual(
+	'auto-split: empty <td></td> stays glued (no `>` between them at split-trigger position)',
+	runRouter('<table><tr><td></td><td>x</td></tr></table>', 'cfml', false),
+	'<table>\n\t<tr>\n\t\t<td></td>\n\t\t<td>x</td>\n\t</tr>\n</table>'
 );
 
 assertEqual(

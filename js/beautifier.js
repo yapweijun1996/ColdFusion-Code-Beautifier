@@ -33,7 +33,21 @@ function splitAdjacentCFMLTags(code) {
 	// Leading <!--- or <!-- (comment opener) also acts as a split boundary so
 	//   <cfset a = 1><!---<cfset b = 2>---><cfset c = 3>
 	// becomes 3 lines with the comment as a standalone middle line.
-	var SPLITTABLE_RE = /^<(\/?cf(?!queryparam\b|argument\b)[a-z]+\b|!---|!--)/i;
+	// Rule (C) splittables — three categories with different policy:
+	//   OPEN  — any HTML/CFML open tag `<TAG>`. Splits when preceded by
+	//           `>` (tag-to-tag boundary). Excludes cfqueryparam/cfargument.
+	//   CF_CLOSE — CFML close tags `</cfXXX>`. Splits when preceded by `>`.
+	//   COMMENT — `<!---` / `<!--`. Splits when preceded by `>`.
+	// HTML close tags (`</td>`, `</tr>`, etc.) are NOT in this list, so
+	// `<td></td>`, `</td></tr>` stay glued. Rule (B) handles the
+	// "mixed CFML+HTML close" case separately.
+	var SPLITTABLE_OPEN_RE     = /^<(?!\/|!|cfqueryparam\b|cfargument\b)[a-z][a-z0-9]*\b/i;
+	var SPLITTABLE_CFCLOSE_RE  = /^<\/cf(?!queryparam\b|argument\b)[a-z]+\b/i;
+	// Structural container closes that should align with their opens.
+	// Excludes `</td>`, `</li>`, `</p>`, `</span>`, `</a>`, `</b>`, `</i>` etc.
+	// (frequently inline-with-content).
+	var SPLITTABLE_HTMLCLOSE_RE = /^<\/(?:tr|table|thead|tbody|tfoot|html|head|body|ul|ol|select|fieldset|optgroup)\b/i;
+	var SPLITTABLE_COMMENT_RE  = /^<!--/;
 	// Always-split: <script>/<style> + their closers. Fires when output
 	// line has any non-ws content, regardless of preceding char. Real-
 	// world: `<td>...&nbsp;<script>` should split between `&nbsp;` and
@@ -106,8 +120,14 @@ function splitAdjacentCFMLTags(code) {
 			return true;
 		}
 
-		// (C) CFML tag — only at tag-to-tag boundary (preceding `>`)
-		if (!SPLITTABLE_RE.test(slice)) return false;
+		// (C) Open tag / CFML close / comment — splits at `>` boundary.
+		// HTML close tags (`</td>`, `</tr>`, etc.) deliberately omitted
+		// here to preserve `<td></td>` and `</td></tr>` inline.
+		var inSplittableC = SPLITTABLE_OPEN_RE.test(slice)
+			|| SPLITTABLE_CFCLOSE_RE.test(slice)
+			|| SPLITTABLE_HTMLCLOSE_RE.test(slice)
+			|| SPLITTABLE_COMMENT_RE.test(slice);
+		if (!inSplittableC) return false;
 		if (!trimmed.endsWith('>')) return false;
 		out += '\n' + leadingWsOfInputLine(pos);
 		i = j;

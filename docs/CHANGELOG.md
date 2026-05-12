@@ -2,6 +2,48 @@
 
 ## v6 series (2026-05-11 → 2026-05-12)
 
+### Feat: auto-align badly-indented multi-tag-per-line legacy code
+
+User report: legacy CFML reports often have lines like
+`<cfif x><tr height="..."><td width="..." #style_padding#>&nbsp;</td><td width="..." align="right">...` with all tags glued onto a single random-indented line. Even after Phase A's auto-split fixed indent, the multi-tag-per-line still defeated proper alignment.
+
+Rule (C) — split before tag at `>` boundary — broadened from cf-prefixed-only to cover ALL tag opens. Three categories of splittables:
+- **OPEN tags** (any `<TAG>` except `<cfqueryparam>`/`<cfargument>`) — split when preceded by `>` (so `<cfif><tr><td>` and `</td><td>` get split between).
+- **CFML close tags** (`</cfXXX>`) — split when preceded by `>`.
+- **Structural HTML close tags** (`</tr>`, `</table>`, `</thead>`, `</tbody>`, `</tfoot>`, `</html>`, `</head>`, `</body>`, `</ul>`, `</ol>`, `</select>`, `</fieldset>`, `</optgroup>`) — split when preceded by `>` so they align with their opens.
+- **Inline close tags** (`</td>`, `</li>`, `</p>`, `</span>`, `</a>`, etc.) deliberately NOT in splittable list — preserves `<td>x</td>`, `<td></td>`, `</td></tr>` patterns. Rule (B) handles the "mixed CFML+HTML close" case (`<cfif>x</cfif>.</td>` → split before `</td>` only when line has `</cfif>`).
+
+### Real-world example (user's `disp_pym1amt` table)
+
+```cfml
+INPUT (badly indented, multi-tag glued):
+<cfif use_split_payment_yn EQ "y">
+[12 tabs]<table>
+[13 tabs]<tr><td></td></tr>
+[13 tabs]<cfif disp_pym1amt GT 0><tr><td #style_padding#>&nbsp;</td><td>...
+
+OUTPUT (auto-aligned, each tag on own line):
+<cfif use_split_payment_yn EQ "y">
+\t<table>
+\t\t<tr>
+\t\t\t<td></td>
+\t\t</tr>
+\t\t<cfif disp_pym1amt GT 0>
+\t\t\t<tr>
+\t\t\t\t<td #style_padding#>&nbsp;</td>
+\t\t\t\t<td>...
+```
+
+Empty `<td></td>` stays inline. `</td>` glued to its content stays inline. Only OPEN tags and structural CONTAINER closes get pulled to own lines.
+
+### Validation
+
+- 115 prior tests + 1 new (empty `<td></td>` preservation) = **116 tests, all green**.
+- 14-file corpus: 0 warnings, 0 throws, Pro SQL verdict counts unchanged.
+- 365 `</td><td>` patterns in corpus — these now split between cells (each `<td>` on own line). Cleaner output.
+
+`sw.js` `CACHE_VERSION` → `v2026-05-12-16`.
+
 ### Feat: auto-split now also handles `<script>`/`<style>` mid-line + `</td>` after CFML closes + `<cfscript>` opaque-skip
 
 User feedback on real-world legacy CFML report: the existing auto-split (CFML tags only) didn't catch the very common pattern of `<td>...&nbsp;<script>JS</script><cfif>x</cfif>.</td>` where script and `</td>` should each be on their own line.
