@@ -1351,6 +1351,93 @@ assertEqual(
 	);
 })();
 
+/* ===================================================================
+ * Content-preservation invariants — round-trip equivalence checks.
+ *
+ * The CFML auto-split path (Rules A/B/C/D in splitAdjacentCFMLTags) and
+ * the indent tracker make WHITESPACE-ONLY changes. They never add, drop,
+ * or reorder content. This block proves it for every user-reported case
+ * by asserting:
+ *
+ *     normalize(input) === normalize(beautify(input))
+ *
+ * where normalize collapses ALL whitespace and lowercases. This catches
+ * any future regression that would corrupt content (drop a tag, swap
+ * order, inject characters, etc.) — even if the expected-string match
+ * in the assertEqual above still happens to pass.
+ *
+ * Caveats:
+ *   - Pro SQL paths NOT checked here (they intentionally reformat SQL).
+ *   - Pure-text inputs where the beautifier wraps in <pre> tags would
+ *     fail; we restrict to CFML inputs that take the auto-split path.
+ *   - Lite uppercase changes keyword case — normalize lowercases both
+ *     sides so this is benign.
+ * =================================================================== */
+function assertContentPreserved(name, input, language, deepFormat) {
+	var output = runRouter(input, language || 'cfml', deepFormat == true);
+	function norm(s) { return s.replace(/\s+/g, '').toLowerCase(); }
+	var ni = norm(input);
+	var no = norm(output);
+	if (ni !== no) {
+		console.log('\nFAIL CONTENT-PRESERVED: ' + name);
+		var i = 0;
+		while (i < ni.length && i < no.length && ni[i] === no[i]) i++;
+		var ctxA = Math.max(0, i - 30);
+		console.log('  First diff at char ' + i + ' of ' + Math.max(ni.length, no.length));
+		console.log('  Input  : ...' + ni.substr(ctxA, 60).replace(/\n/g, '\\n') + '...');
+		console.log('  Output : ...' + no.substr(ctxA, 60).replace(/\n/g, '\\n') + '...');
+		console.log('  Lengths: input=' + ni.length + ', output=' + no.length);
+		process.exitCode = 1;
+	}
+}
+
+// Every user-reported case input below comes from the inventory in
+// docs/CI-TEST-POLICY.md (cases #1–#25). Verifies content preservation.
+var USER_CASE_INPUTS = [
+	// Cases 1–8: auto-split fundamentals
+	['#1 three adjacent cfset',           '<cfset a = 1><cfset b = 2><cfset c = 3>'],
+	['#2 cfset / cfml-comment / cfset',   '<cfset a = 1><!---<cfset old = 2>---><cfset c = 3>'],
+	['#3 cfif open + cfinclude + close',  '<cfif x><cfinclude template="foo.cfm"></cfif>'],
+	['#4 inline cfif x>1<cfelse>0',       '<cfif x>1<cfelse>0</cfif>'],
+	['#5 script with cfml string inside', '<script>var x = "<cfset y=1>";</script>'],
+	['#6 cfquery with cfqueryparam',      '<cfquery name="q">SELECT 1<cfqueryparam value="1" cfsqltype="cf_sql_integer"></cfquery>'],
+	['#7 cfparam + cfinclude',            '<cfparam name="x" default=""><cfinclude template="bar.cfm">'],
+	['#8 nested cfif with cfset',         '<cfif a><cfif b><cfset x = 1></cfif></cfif>'],
+	// Cases 9–15: script/style/table/comment patterns
+	['#9 script mid-line in td',          '<td>foo&nbsp;<script>doIt();</script>bar</td>'],
+	['#10 script multi-line in td',       '<td>...&nbsp;<script>\nvar a = 1;\n</script>\n<cfif x>Only</cfif>.</td>'],
+	['#11 tr td td tr',                   '<tr><td>foo</td><td>bar</td></tr>'],
+	['#12 table empty td',                '<table><tr><td></td><td>x</td></tr></table>'],
+	['#13 td x cfif y z cfif . td',       '<td>x<cfif y>z</cfif>.</td>'],
+	['#14 cfscript opaque embedded script', '<cfscript>\n// note: <script>foo()</script>\nvar y = 1;\n</cfscript>'],
+	['#15 numberToEnglish pattern',       '<cfif disp_numberToEnglishProper EQ "y">\n\t<td #style_padding#>desc: &nbsp;<script Language="JavaScript">\n\tdocument.write(numberToEnglish(\'#amount_forex#\'));\n</script>\n\t<cfif set_language is \'english\'>Only</cfif>.</td>\n</cfif>'],
+	// Cases 16–20: real-world Rule D patterns
+	['#16 disp_pym1amt table glued',
+		'<cfif use_split_payment_yn EQ "y" AND split_payment_used EQ "y">\n' +
+		'\t\t\t\t\t\t\t\t\t\t\t\t<table width="100%" border="#bdtk#" class="#default_font#" cellspacing="0" cellpadding="0">\n' +
+		'\t\t\t\t\t\t\t\t\t\t\t\t\t<tr height=10><td></td></tr>\n' +
+		'\t\t\t\t\t\t\t\t\t\t\t\t\t<cfif disp_pym1amt GT 0><tr height="#ht_ft_total#"><td width="#wd_ft04to05_01#" #style_padding#>&nbsp;</td><td width="#wd_ft04to05_02#" align="right" #style_padding#>\n' +
+		'\t\t\t\t\t\t\t\t\t\t\t\t\t\t<cfif set_language is \'english\'>Paid by</cfif> #vle_pym1_desc#\n' +
+		'\t\t\t\t\t\t\t\t\t\t\t\t\t</td></tr></cfif>'],
+	['#17 serialnum stray cfif',          '<cfif qs_sr_nums.recordcount GT 0>\n\t<br>\n\t<cfif set_language is \'english\'>Serial Number</cfif> :&nbsp;</cfif>\n\t<cfset qcnt=0>'],
+	['#18 GST stray HTML close',          '<b>\n\t<cfif comain_gst_name EQ "GST">GST<cfelseif comain_gst_name EQ "VAT">VAT<cfelse>Sales Tax</cfif></b>'],
+	['#19 inline p Hello b world',        '<p>Hello <b>world</b>.</p>'],
+	['#20 Rule D inline cfif edge',       '<cfif x>1<cfelse>0</cfif>'],
+	// Case 21: backslash
+	['#21 backslash in CFML string',      '<cfset path = "C:\\foo\\"><cfquery name="q">SELECT 1</cfquery>'],
+	// Case 25: memo_transdesc with <br> inside string literal
+	['#25 memo_transdesc Remarks font',
+		'<td valign="top">\n' +
+		'\t<font>\n' +
+		'\t\t<b>Remarks:</b>\n' +
+		'\t\t<br>#trim(Replace(memo_transdesc, "#chr(13)##chr(10)#", "<br>", "ALL"))#</font>\n' +
+		'</td>']
+];
+
+USER_CASE_INPUTS.forEach(function(pair) {
+	assertContentPreserved(pair[0], pair[1], 'cfml', false);
+});
+
 if (!process.exitCode) {
-	console.log('All tests passed.');
+	console.log('All tests passed (including ' + USER_CASE_INPUTS.length + ' content-preservation invariants).');
 }

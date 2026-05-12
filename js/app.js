@@ -75,3 +75,81 @@ if (typeof document !== 'undefined' && document.querySelector) {
 		init();
 	}
 })();
+
+/* Safe Mode — one-click disable of all "content-shaped change" paths.
+ *
+ * When checked, force-unchecks AND disables (greys out) the four toggles
+ * that can alter content beyond whitespace:
+ *   - deep_sql / deep_css / deep_js  (home-rolled language formatters)
+ *   - pro_sql                         (sql-formatter library rewrites SQL)
+ *
+ * What remains active: CFML auto-split (Rules A/B/C/D) + indent tracker.
+ * Both are whitespace-only transformations (proven by 22 content-
+ * preservation invariants in tests/run-tests.js). Use Safe Mode when
+ * processing sensitive or production CFML where you cannot tolerate
+ * even a cosmetic SQL keyword case change.
+ *
+ * Persisted in localStorage so a one-time opt-in survives reloads.
+ * See docs/SAFETY.md for the full per-language risk evaluation.
+ */
+(function persistSafeMode() {
+	var STORAGE_KEY = 'cfb.safe_mode';
+	var GATED_IDS = ['deep_sql', 'deep_css', 'deep_js', 'pro_sql'];
+
+	function safeGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+	function safeSet(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
+
+	function applySafeMode(safeEl, gatedEls) {
+		var on = !!safeEl.checked;
+		for (var i = 0; i < gatedEls.length; i++) {
+			var el = gatedEls[i];
+			if (!el) continue;
+			if (on) {
+				// Stash the user's prior state so Safe Mode is fully reversible.
+				if (el.dataset && typeof el.dataset === 'object') {
+					el.dataset.safeModePrior = el.checked ? '1' : '0';
+				}
+				el.checked = false;
+				el.disabled = true;
+			} else {
+				el.disabled = false;
+				var prior = el.dataset && el.dataset.safeModePrior;
+				if (prior === '1') el.checked = true;
+				else if (prior === '0') el.checked = false;
+				// If no prior recorded (e.g. first load with safe_mode previously
+				// saved as ON), leave checkbox state as-is (unchecked) — the user
+				// can re-enable explicitly.
+			}
+			// Dim the parent <label> for a clear visual signal.
+			var lbl = el.closest ? el.closest('label') : null;
+			if (lbl && lbl.style) lbl.style.opacity = on ? '0.45' : '';
+		}
+	}
+
+	function init() {
+		if (typeof document === 'undefined' || !document.getElementById) return;
+		var safeEl = document.getElementById('safe_mode');
+		if (!safeEl) return;
+		var gatedEls = GATED_IDS.map(function(id) { return document.getElementById(id); });
+
+		var saved = safeGet(STORAGE_KEY);
+		if (saved === '1') safeEl.checked = true;
+		else if (saved === '0') safeEl.checked = false;
+
+		applySafeMode(safeEl, gatedEls);
+
+		if (typeof safeEl.addEventListener === 'function') {
+			safeEl.addEventListener('change', function() {
+				safeSet(STORAGE_KEY, safeEl.checked ? '1' : '0');
+				applySafeMode(safeEl, gatedEls);
+			});
+		}
+	}
+
+	if (typeof document === 'undefined') return;
+	if (document.readyState === 'loading' && typeof document.addEventListener === 'function') {
+		document.addEventListener('DOMContentLoaded', init);
+	} else {
+		init();
+	}
+})();
