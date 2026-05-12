@@ -21,6 +21,7 @@
  *   node tools/diagnose-corpus.js                  # default: --audit
  *   node tools/diagnose-corpus.js --audit          # run all + summary table
  *   node tools/diagnose-corpus.js --targets        # print full body of every Tier 2 candidate
+ *   node tools/diagnose-corpus.js --sanitize       # SQL syntax coverage gap report (corpus vs token-equivalence tests)
  *   node tools/diagnose-corpus.js --file foo.cfm   # restrict to one file (basename or full path)
  *   node tools/diagnose-corpus.js --dialect mysql  # default postgresql
  *   node tools/diagnose-corpus.js --no-write       # skip writing *.beautified.cfm
@@ -49,6 +50,7 @@ for (var ai = 0; ai < argv.length; ai++) {
     var a = argv[ai];
     if      (a === '--audit')    opts.mode = 'audit';
     else if (a === '--targets')  opts.mode = 'targets';
+    else if (a === '--sanitize') opts.mode = 'sanitize';
     else if (a === '--help' || a === '-h') { printHelp(); process.exit(0); }
     else if (a === '--no-write') opts.write = false;
     else if (a === '--file')     opts.file = argv[++ai];
@@ -65,6 +67,10 @@ function printHelp() {
         '  --audit       Run beautifier on all corpus files, write .beautified.cfm,',
         '                classify each cfquery, print summary table + grand totals (default).',
         '  --targets     Print full body of every Tier 2 verbatim cfquery (Phase 4 candidates).',
+        '  --sanitize    SQL syntax coverage gap report. Detects features used in corpus',
+        '                cfqueries vs features covered by Pro SQL token-equivalence tests',
+        '                in tests/run-tests.js, and surfaces corpus locations for any',
+        '                uncovered feature so a human can sanitize → add as a new case.',
         '',
         'Options:',
         '  --file NAME       Restrict to one file (basename or full path).',
@@ -341,7 +347,271 @@ function modeTargets() {
     }
 }
 
+// ---------- SQL syntax coverage gap report (--sanitize) ----------
+//
+// SQL feature catalog. Each entry is a key + regex that detects the
+// feature inside a cfquery body. Patterns are case-insensitive and
+// designed to be conservative (low false-positive rate). Order matters
+// only for output stability; categories are otherwise independent.
+//
+// When you add a new token-equivalence test for an uncovered feature,
+// add the feature here too so this report stays the source of truth.
+var SQL_FEATURES = [
+    // Set operations
+    { key: 'UNION',           pattern: /\bunion\b(?!\s+all)/i },
+    { key: 'UNION_ALL',       pattern: /\bunion\s+all\b/i },
+    { key: 'INTERSECT',       pattern: /\bintersect\b/i },
+    { key: 'EXCEPT',          pattern: /\bexcept\b/i },
+    // CTE + window functions
+    { key: 'WITH_CTE',        pattern: /\bwith\s+\w+\s+as\s*\(/i },
+    { key: 'RECURSIVE_CTE',   pattern: /\bwith\s+recursive\b/i },
+    { key: 'WINDOW_OVER',     pattern: /\)\s*over\s*\(/i },
+    { key: 'PARTITION_BY',    pattern: /\bpartition\s+by\b/i },
+    { key: 'ROW_NUMBER',      pattern: /\brow_number\s*\(\s*\)/i },
+    // DML other than SELECT
+    { key: 'INSERT_VALUES',   pattern: /\binsert\s+into\s+\S+[\s\S]{0,300}?\bvalues\s*\(/i },
+    { key: 'INSERT_SELECT',   pattern: /\binsert\s+into\s+\S+(?:\s*\([^)]*\))?\s*select\b/i },
+    { key: 'UPDATE_SET',      pattern: /\bupdate\s+\S+\s+set\b/i },
+    { key: 'DELETE_FROM',     pattern: /\bdelete\s+from\b/i },
+    { key: 'MERGE_INTO',      pattern: /\bmerge\s+into\b/i },
+    { key: 'TRUNCATE',        pattern: /\btruncate\s+table\b/i },
+    // Query shape
+    { key: 'SELECT_DISTINCT', pattern: /\bselect\s+distinct\b/i },
+    { key: 'JOIN_3PLUS',      pattern: /(?:inner|left|right|full|outer|cross)\s+(?:outer\s+)?join[\s\S]{0,500}?(?:inner|left|right|full|outer|cross)\s+(?:outer\s+)?join[\s\S]{0,500}?(?:inner|left|right|full|outer|cross)\s+(?:outer\s+)?join/i },
+    { key: 'CROSS_JOIN',      pattern: /\bcross\s+join\b/i },
+    { key: 'FULL_OUTER_JOIN', pattern: /\bfull\s+outer\s+join\b/i },
+    { key: 'SUBQUERY_FROM',   pattern: /\bfrom\s*\(\s*select\b/i },
+    { key: 'EXISTS_SUBQ',     pattern: /\bexists\s*\(\s*select\b/i },
+    { key: 'NOT_EXISTS_SUBQ', pattern: /\bnot\s+exists\s*\(\s*select\b/i },
+    { key: 'IN_SUBQUERY',     pattern: /\bin\s*\(\s*select\b/i },
+    { key: 'NOT_IN_SUBQUERY', pattern: /\bnot\s+in\s*\(\s*select\b/i },
+    { key: 'GROUP_BY',        pattern: /\bgroup\s+by\b/i },
+    { key: 'HAVING',          pattern: /\bhaving\b/i },
+    { key: 'ORDER_BY',        pattern: /\border\s+by\b/i },
+    { key: 'LIMIT_OFFSET',    pattern: /\b(limit|offset)\s+\d/i },
+    { key: 'FOR_UPDATE',      pattern: /\bfor\s+update\b/i },
+    // Predicates
+    { key: 'BETWEEN',         pattern: /\bbetween\b/i },
+    { key: 'LIKE',            pattern: /\blike\b/i },
+    { key: 'ILIKE',           pattern: /\bilike\b/i },
+    { key: 'IS_NULL',         pattern: /\bis\s+(?:not\s+)?null\b/i },
+    // Conditional
+    { key: 'CASE_WHEN',       pattern: /\bcase\s+when\b/i },
+    { key: 'NESTED_CASE',     pattern: /\bcase\s+when\b[\s\S]{0,300}?\bcase\s+when\b/i },
+    // Aggregates
+    { key: 'AGG_SUM',         pattern: /\bsum\s*\(/i },
+    { key: 'AGG_COUNT',       pattern: /\bcount\s*\(/i },
+    { key: 'AGG_AVG',         pattern: /\bavg\s*\(/i },
+    { key: 'AGG_MAX',         pattern: /\bmax\s*\(/i },
+    { key: 'AGG_MIN',         pattern: /\bmin\s*\(/i },
+    { key: 'GROUP_CONCAT',    pattern: /\b(?:group_concat|string_agg|listagg)\s*\(/i },
+    // Type / casting
+    { key: 'CAST_AS',         pattern: /\bcast\s*\([\s\S]{1,200}?\s+as\s+\w/i },
+    { key: 'CAST_DOUBLE_COLON', pattern: /::\w/ },
+    // CFML integration
+    { key: 'CFQUERYPARAM',    pattern: /<cfqueryparam\b/i },
+    { key: 'CFIF_IN_BODY',    pattern: /<cfif\b/i },
+    { key: 'CFLOOP_IN_BODY',  pattern: /<cfloop\b/i },
+    { key: 'PRESERVESINGLEQUOTES', pattern: /\bPreserveSingleQuotes\s*\(/i },
+    // Comments
+    { key: 'BLOCK_COMMENT',   pattern: /\/\*[\s\S]*?\*\// },
+    { key: 'LINE_COMMENT',    pattern: /(?:^|\s)--[^\n]/m },
+    { key: 'CFM_MARKUP_COMMENT', pattern: /<!---[\s\S]*?--->/ }
+];
+
+function detectFeatures(body) {
+    var hits = {};
+    SQL_FEATURES.forEach(function(f) {
+        if (f.pattern.test(body)) hits[f.key] = true;
+    });
+    return hits;
+}
+
+// Scan the token-equivalence test inputs in tests/run-tests.js to find
+// which features are already covered. Done by locating the
+// `runProSQLTokenEquivalenceTests` IIFE and reading every string-literal
+// argument that follows a `runProSQL(...)`-style fixture. We extract the
+// `cases = [...]` array via a balanced-bracket scan, then run feature
+// detection on each fixture string.
+function loadTestedFeatures() {
+    var src;
+    try { src = fs.readFileSync('tests/run-tests.js', 'utf8'); }
+    catch (e) { return { fixtures: [], features: {}, error: 'tests/run-tests.js unreadable' }; }
+
+    // Find the runProSQLTokenEquivalenceTests block.
+    var blockStart = src.indexOf('runProSQLTokenEquivalenceTests');
+    if (blockStart === -1) return { fixtures: [], features: {}, error: 'runProSQLTokenEquivalenceTests block not found' };
+
+    // Find the `var cases = [` inside the block.
+    var casesStart = src.indexOf('var cases = [', blockStart);
+    if (casesStart === -1) return { fixtures: [], features: {}, error: 'var cases = [ not found' };
+    var arrStart = casesStart + 'var cases = ['.length;
+
+    // Balanced-bracket scan to find matching ].
+    var depth = 1, i = arrStart, inStr = null;
+    while (i < src.length && depth > 0) {
+        var c = src[i];
+        if (inStr) {
+            if (c === '\\') { i += 2; continue; }
+            if (c === inStr) inStr = null;
+            i++;
+            continue;
+        }
+        if (c === '"' || c === "'") { inStr = c; i++; continue; }
+        if (c === '[') depth++;
+        else if (c === ']') depth--;
+        i++;
+    }
+    var arrEnd = i - 1; // position of matching ]
+    var arrText = src.slice(arrStart, arrEnd);
+
+    // Parse string literals. Each fixture is the 2nd string of a pair
+    // like ['name', '...sql input...']. We pull every JS string literal
+    // (single OR double quoted, JS escapes processed) out of arrText.
+    var fixtures = [];
+    var p = 0;
+    while (p < arrText.length) {
+        var quote = arrText[p];
+        if (quote !== "'" && quote !== '"') { p++; continue; }
+        var lit = '';
+        p++;
+        while (p < arrText.length) {
+            var ch = arrText[p];
+            if (ch === '\\') {
+                var nx = arrText[p + 1];
+                if      (nx === 'n')  lit += '\n';
+                else if (nx === 't')  lit += '\t';
+                else if (nx === 'r')  lit += '\r';
+                else if (nx === '\\') lit += '\\';
+                else if (nx === "'")  lit += "'";
+                else if (nx === '"')  lit += '"';
+                else                  lit += nx;
+                p += 2;
+                continue;
+            }
+            if (ch === quote) { p++; break; }
+            lit += ch;
+            p++;
+        }
+        fixtures.push(lit);
+    }
+
+    // Drop the first string of each pair (the description). Heuristic:
+    // strings shorter than 40 chars without "<cfquery" prefix are likely
+    // descriptions; everything else is a SQL fixture. We aggregate
+    // features over BOTH sets — descriptions can't trigger feature
+    // patterns reliably, but cfquery fixtures will.
+    var features = {};
+    var sqlFixtures = fixtures.filter(function(s) { return /<cfquery\b/i.test(s); });
+    sqlFixtures.forEach(function(s) {
+        var hits = detectFeatures(s);
+        Object.keys(hits).forEach(function(k) { features[k] = (features[k] || 0) + 1; });
+    });
+    return { fixtures: sqlFixtures, features: features, error: null };
+}
+
+function modeSanitize() {
+    var corpus = listCorpus(opts.corpus, opts.file);
+    var corpusFeatureCount = {};       // feature → number of cfqueries with it
+    var corpusFeatureExamples = {};    // feature → up to 3 {file, name, lineStart, snippet}
+
+    corpus.forEach(function(name) {
+        var p = path.join(opts.corpus, name);
+        var src = fs.readFileSync(p, 'utf8');
+        var ranges = findCfqueryRanges(src);
+        var srcLines = src.split('\n');
+        ranges.forEach(function(r) {
+            var body = srcLines.slice(r.start, r.end + 1).join('\n');
+            var hits = detectFeatures(body);
+            Object.keys(hits).forEach(function(k) {
+                corpusFeatureCount[k] = (corpusFeatureCount[k] || 0) + 1;
+                if (!corpusFeatureExamples[k]) corpusFeatureExamples[k] = [];
+                if (corpusFeatureExamples[k].length < 3) {
+                    corpusFeatureExamples[k].push({
+                        file: name, name: r.name, lineStart: r.start + 1, lineEnd: r.end + 1,
+                        snippet: extractSnippetForFeature(body, k)
+                    });
+                }
+            });
+        });
+    });
+
+    var tested = loadTestedFeatures();
+    if (tested.error) {
+        console.error('WARN: ' + tested.error);
+        console.error('Coverage column will show "?" for all features.');
+    }
+
+    // Print coverage table.
+    console.log('=== SQL syntax coverage report ===\n');
+    console.log('Corpus dir       : ' + opts.corpus);
+    console.log('Token-equiv test : tests/run-tests.js (runProSQLTokenEquivalenceTests)');
+    if (tested.fixtures) console.log('Test fixtures    : ' + tested.fixtures.length + ' Pro SQL token-equivalence cases parsed');
+    console.log('');
+    console.log('Feature              Corpus  Tests   Status');
+    console.log('────────────────────────────────────────────────────────────');
+    SQL_FEATURES.forEach(function(f) {
+        var c = corpusFeatureCount[f.key] || 0;
+        var t = (tested.features && tested.features[f.key]) || 0;
+        var status;
+        if (c === 0 && t === 0)        status = '·';
+        else if (c > 0 && t > 0)       status = 'covered';
+        else if (c > 0 && t === 0)     status = '⚠  GAP — corpus has, tests don\'t';
+        else                           status = 'tested (no corpus example)';
+        console.log('  ' + f.key.padEnd(22) + String(c).padStart(4) + '   ' + String(t).padStart(4) + '   ' + status);
+    });
+
+    // Surface gaps with concrete examples.
+    var gaps = SQL_FEATURES
+        .map(function(f) { return f.key; })
+        .filter(function(k) {
+            var c = corpusFeatureCount[k] || 0;
+            var t = (tested.features && tested.features[k]) || 0;
+            return c > 0 && t === 0;
+        });
+
+    if (gaps.length === 0) {
+        console.log('\n✓ No coverage gaps. Every SQL feature present in corpus has at least one token-equivalence test.');
+    } else {
+        console.log('\n=== ' + gaps.length + ' coverage gap(s) — sanitize candidates for human review ===');
+        console.log('For each gap, up to 3 corpus examples are shown. Pick one, sanitize it');
+        console.log('(table names → t1/t2/..., columns → a/b/c/..., literals → generic),');
+        console.log('and add as a new case in tests/run-tests.js runProSQLTokenEquivalenceTests.\n');
+        gaps.forEach(function(k) {
+            console.log('────────────────────────────────────────────────────────────');
+            console.log('GAP: ' + k + '   (corpus occurrences: ' + corpusFeatureCount[k] + ')');
+            corpusFeatureExamples[k].forEach(function(ex, idx) {
+                console.log('  [' + (idx + 1) + '] ' + ex.file + ' cfquery=' + ex.name + ' lines ' + ex.lineStart + '-' + ex.lineEnd);
+                ex.snippet.split('\n').forEach(function(l) { console.log('      | ' + l); });
+            });
+        });
+        console.log('────────────────────────────────────────────────────────────');
+    }
+}
+
+// Pull a small (≤ 6-line) snippet around the first match of feature f.key.
+// Used to give the human a quick visual sense of what to sanitize.
+function extractSnippetForFeature(body, featureKey) {
+    var feat = SQL_FEATURES.filter(function(f) { return f.key === featureKey; })[0];
+    if (!feat) return '(no pattern)';
+    var m = feat.pattern.exec(body);
+    if (!m) return '(pattern fell through)';
+    feat.pattern.lastIndex = 0; // reset stateful regex
+    var lines = body.split('\n');
+    // Find which line the match starts on.
+    var idx = m.index;
+    var sumLen = 0, hitLine = 0;
+    for (var i = 0; i < lines.length; i++) {
+        sumLen += lines[i].length + 1; // + newline
+        if (sumLen > idx) { hitLine = i; break; }
+    }
+    var ctxStart = Math.max(0, hitLine - 1);
+    var ctxEnd   = Math.min(lines.length, hitLine + 4);
+    return lines.slice(ctxStart, ctxEnd).map(function(l) { return l.replace(/\t/g, '  '); }).join('\n');
+}
+
 // ---------- dispatch ----------
-if (opts.mode === 'audit')   modeAudit();
-else if (opts.mode === 'targets') modeTargets();
+if (opts.mode === 'audit')         modeAudit();
+else if (opts.mode === 'targets')  modeTargets();
+else if (opts.mode === 'sanitize') modeSanitize();
 else { console.error('Unknown mode: ' + opts.mode); process.exit(2); }

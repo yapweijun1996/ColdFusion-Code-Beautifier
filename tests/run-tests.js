@@ -1666,7 +1666,24 @@ assertEqual(
 		// Multi-line SQL comment spanning logical sections — Phase 4
 		// may shift this comment position; multiset check must still pass.
 		['corpus #9 multi-line SQL block comment + cfif AND-leaves (Phase 4 comment shift OK)',
-			"<cfquery name=\"q\">\n\tSELECT a, b /* this is a\n\t  multi-line comment\n\t  about column b */, c\n\tFROM t1\n\tWHERE x = 1\n\t<cfif y>\n\t\tand z = 2\n\t</cfif>\n</cfquery>"]
+			"<cfquery name=\"q\">\n\tSELECT a, b /* this is a\n\t  multi-line comment\n\t  about column b */, c\n\tFROM t1\n\tWHERE x = 1\n\t<cfif y>\n\t\tand z = 2\n\t</cfif>\n</cfquery>"],
+		// Cases #10-#14 surfaced by `node tools/diagnose-corpus.js --sanitize`
+		// as real corpus coverage gaps:
+		//   UPDATE_SET           — inc_sendemail.cfm (1 occurrence)
+		//   SELECT_DISTINCT      — 18 corpus occurrences across multiple files
+		//   IS_NULL              — 3 corpus occurrences
+		//   CFLOOP_IN_BODY       — fr_mthly_sales_cust.cfm (3 occurrences)
+		//   CFM_MARKUP_COMMENT   — 7 corpus occurrences (CFML comments inside SQL)
+		['corpus #10 UPDATE ... SET with cfqueryparam (DML other than SELECT)',
+			"<cfquery name=\"q\">\n\tupdate t1\n\tset a = 'y'\n\twhere b = 'val'\n\tand c = <cfqueryparam value=\"#x#\" cfsqltype=\"cf_sql_varchar\">\n</cfquery>"],
+		['corpus #11 SELECT DISTINCT — single column projection',
+			"<cfquery name=\"q\">\n\tSELECT distinct a\n\tFROM t1\n\tWHERE id = '#x#'\n</cfquery>"],
+		['corpus #12 IS NULL / IS NOT NULL predicates',
+			"<cfquery name=\"q\">\n\tSELECT a, b FROM t1 WHERE c IS NULL AND d IS NOT NULL ORDER BY a\n</cfquery>"],
+		['corpus #13 <cfloop> inside SELECT clause — Tier 2 verbatim path',
+			"<cfquery name=\"q\">\n\tselect\n\t\t<cfloop query=\"qs_period\">\n\t\t\tsum(P#fyearperiodmth_cfn#_amt) as P#fyearperiodmth_cfn#_amt,\n\t\t</cfloop>\n\t\tsum(total) as total\n\tfrom t1\n\tgroup by id\n</cfquery>"],
+		['corpus #14 CFML markup comment <!--- ---> inside cfquery body — comment multiset preserved',
+			"<cfquery name=\"q\">\n\tselect a, b,\n\t\t<!--- legacy columns removed 2024-01:\n\t\t\td, e, f --->\n\t\tc\n\tfrom t1\n\twhere x = 1\n</cfquery>"]
 	];
 
 	var failed = 0;
