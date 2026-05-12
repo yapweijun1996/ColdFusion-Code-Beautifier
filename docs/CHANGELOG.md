@@ -1,6 +1,35 @@
 # Changelog
 
-## v6 series (2026-05-11)
+## v6 series (2026-05-11 → 2026-05-12)
+
+### Feat (Phase 4): AND-leaves hoisting — Pattern A cfif trees now get full Pro SQL backbone
+
+The dominant real-world pattern in legacy CFML reports: a `<cfquery>` body with a complete `WHERE base AND base AND base` block followed by multiple `<cfif>` tags that each merely append optional `and xxx` / `or xxx` clauses. Phase 3 (WHERE hoisting) couldn't handle this — it requires every leaf to START with `where`. Phase 4 is Phase 3's dual: every leaf STARTS with `and` or `or`.
+
+Real-world impact (validated on 14-file corpus, 1.9 MB, 30,518 lines, 114 cfqueries): **Phase 4 fixed 5 of 8 Tier 2 verbatim cfqueries**, producing properly formatted SELECT/FROM/WHERE/GROUP BY/ORDER BY backbones with the cfif tree preserved as a sub-tree under WHERE, body lines indented +1 with keywords uppercased. The remaining 3 verbatim cfqueries are explicit out-of-scope patterns (Pattern B: cfif inside parens; Pattern D: cfif appends UNION arm).
+
+New helpers in `js/deep-format.js`:
+- `splitCfqueryBodyAtCfifTreeMulti` (captures from FIRST cfif to LAST `</cfif>` at depth 0; differs from Phase 3's splitter that stops at FIRST close)
+- `detectAllLeavesStartWithAndOr` (precondition checker)
+- `formatPhase4PostFragment` (synthesizes `SELECT 1 FROM t WHERE 1=1 + post` for sql-formatter, then slices off the prefix)
+
+Phase 4 dispatch sits between Phase 3 hoist and Tier 2 verbatim. ANY failure → fall back to Tier 2, zero regression possible.
+
+10 progressive e2e tests (T1–T10) pin the dispatch behavior. T1–T8 exercise Phase 4. T9 verifies Phase 3 still fires first. T10 verifies Pattern D (UNION cfif) safely falls back to Tier 2.
+
+### Pre-existing bug fixed: `normalizeCFMLAttributes` truncated unquoted values with internal whitespace
+
+Found while validating Phase 4 on `fr_fg_vari_qty.cfm`. Pattern: `<cfqueryparam value=#TNOdateformat('#fromday#/#frommth#/#fromyear# ')# cfsqltype="cf_sql_date">`. The unquoted attribute value contained a space INSIDE the `#expression#` (between `#fromyear#` and `')#`), and `normalizeCFMLAttributes` walked "until whitespace" — truncating mid-expression and dropping the rest of the tag.
+
+Fix: when scanning unquoted attribute values, track `#...#` interpolation depth, paren depth, and nested quote state. Whitespace inside an expression now correctly stays part of the value. 1 new e2e regression test (T8b) pins this.
+
+### Validation
+
+- 98 prior tests + 11 new (T1–T10 + T8b) = **109 tests, all green**.
+- 14-file corpus: zero warnings, zero throws. TIER2_VERBATIM_LITE drops from 7 → 2 (Phase 4 picked up 5 Pattern A targets).
+- Phase 4 v2 design doc (`docs/PHASE4-DESIGN.md`) — algorithm matched implementation exactly.
+
+`sw.js` `CACHE_VERSION` → `v2026-05-12-14`.
 
 ### Feat: auto-split adjacent CFML tags on the same source line — multi-`<cfset>` + comment-jammed legacy code now formats cleanly
 

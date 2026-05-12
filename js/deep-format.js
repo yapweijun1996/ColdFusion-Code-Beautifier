@@ -194,8 +194,38 @@ function normalizeCFMLAttributes(content) {
 			}
 			value = content.slice(valStart, i);
 		} else {
+			// Unquoted attribute value. Naive "walk until whitespace" breaks
+			// for CFML hash-interpolated values like
+			//   value=#TNOdateformat('#fromday#/#frommth#/#fromyear# ')#
+			// where the space between `#fromyear#` and `')#` is INSIDE the
+			// expression. Track `#...#` depth + paren depth + nested quotes
+			// so whitespace inside an expression is preserved.
 			var valStart = i;
-			while (i < content.length && !/\s/.test(content[i])) i++;
+			var inHash = false;
+			var parenDepth = 0;
+			var quoteIn = '';
+			while (i < content.length) {
+				var ch = content[i];
+				if (quoteIn) {
+					if (ch === quoteIn) {
+						if (content[i + 1] === quoteIn) { i += 2; continue; }
+						quoteIn = '';
+					}
+					i++;
+					continue;
+				}
+				if (inHash) {
+					if (ch === '#' && parenDepth === 0) { inHash = false; i++; continue; }
+					if (ch === '(') parenDepth++;
+					else if (ch === ')') parenDepth--;
+					else if (ch === "'" || ch === '"') quoteIn = ch;
+					i++;
+					continue;
+				}
+				if (ch === '#') { inHash = true; i++; continue; }
+				if (/\s/.test(ch)) break;
+				i++;
+			}
 			value = content.slice(valStart, i);
 		}
 		// Lowercase cfsqltype CF_SQL_* values
@@ -353,6 +383,107 @@ function splitCfqueryBodyAtCfifTree(body) {
 		treeLines: lines.slice(openIdx, closeIdx + 1),
 		post: lines.slice(closeIdx + 1).join('\n')
 	};
+}
+
+/* Phase 4 helpers — AND-leaves hoisting (Phase 3's dual).
+ *
+ * Phase 3 catches cfquery bodies where every cfif leaf STARTS WITH `where `
+ * — the WHERE keyword gets hoisted out of the branches.
+ *
+ * Phase 4 catches the much more common dual case: the cfquery body has a
+ * complete `WHERE base_condition AND base_condition` block OUTSIDE the cfif
+ * tree, and each cfif leaf merely APPENDS optional `and xxx`/`or xxx` clauses.
+ * This pattern dominates real-world legacy CFML reports.
+ *
+ * Three new helpers:
+ *   splitCfqueryBodyAtCfifTreeMulti — like splitCfqueryBodyAtCfifTree but
+ *     captures from FIRST <cfif> to LAST matching </cfif> at depth 0, so
+ *     multiple sibling cfif blocks all become part of the tree segment.
+ *     Phase 3's splitter stops at the FIRST close; Phase 4 needs the LAST.
+ *
+ *   detectAllLeavesStartWithAndOr — verifies precondition for Phase 4.
+ *     Markup comments (<!--- ... --->) are transparent and don't disqualify.
+ *
+ *   formatPhase4PostFragment — for trailing GROUP BY / ORDER BY / HAVING /
+ *     LIMIT / UNION clauses. Synthesizes `SELECT 1 FROM t WHERE 1=1 + post`,
+ *     formats via sql-formatter, then slices off the synthetic prefix to
+ *     return only the formatted post-WHERE fragment.
+ */
+function splitCfqueryBodyAtCfifTreeMulti(body) {
+	if (typeof body !== 'string') return null;
+	var lines = body.split('\n');
+	var openP = /^<(?:cfif|cfloop|cfswitch)\b[^>]*>$/i;
+	var closeP = /^<\/(?:cfif|cfloop|cfswitch)>$/i;
+	var openIdx = -1;
+	var lastCloseIdx = -1;
+	var depth = 0;
+	for (var i = 0; i < lines.length; i++) {
+		var t = lines[i].trim();
+		if (openP.test(t)) {
+			if (openIdx === -1) openIdx = i;
+			depth++;
+		} else if (closeP.test(t)) {
+			if (depth > 0) {
+				depth--;
+				if (depth === 0 && openIdx !== -1) {
+					lastCloseIdx = i;
+				}
+			}
+		}
+	}
+	if (openIdx === -1 || lastCloseIdx === -1) return null;
+	return {
+		pre: lines.slice(0, openIdx).join('\n'),
+		treeLines: lines.slice(openIdx, lastCloseIdx + 1),
+		post: lines.slice(lastCloseIdx + 1).join('\n')
+	};
+}
+
+function detectAllLeavesStartWithAndOr(treeLines) {
+	var structural = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b[^>]*>$/i;
+	var commentLine = /^<!---[\s\S]*--->$/;
+	var seenLeaf = false;
+	for (var i = 0; i < treeLines.length; i++) {
+		var t = treeLines[i].trim();
+		if (t === '' || structural.test(t) || commentLine.test(t)) continue;
+		if (!/^(and|or)\b/i.test(t)) return false;
+		seenLeaf = true;
+	}
+	return seenLeaf;
+}
+
+function formatPhase4PostFragment(post, sqlDialect) {
+	if (typeof post !== 'string') return '';
+	var trimmed = post.trim();
+	if (trimmed === '') return '';
+	// Synthesize a complete SELECT so sql-formatter has a well-formed input;
+	// the output's post-WHERE fragment is what we keep.
+	var synthetic = 'SELECT 1\nFROM t\nWHERE 1=1\n' + trimmed;
+	try {
+		var prot = protectCFMLTokens(synthetic);
+		var formatted = formatProSQLSync(prot.code, sqlDialect);
+		var restored = restoreCFMLTokens(formatted, prot.tokens);
+		var lines = restored.split('\n');
+		var postKeywordOwn = /^(GROUP BY|ORDER BY|HAVING|LIMIT|OFFSET|FETCH|UNION|UNION ALL|INTERSECT|EXCEPT)\s*$/;
+		for (var i = 0; i < lines.length; i++) {
+			if (postKeywordOwn.test(lines[i])) {
+				return lines.slice(i).join('\n');
+			}
+		}
+	} catch (e) {
+		if (typeof console !== 'undefined' && console.warn) {
+			console.warn('[deep-format] Phase 4 post-tree synthesize failed, using lite uppercase. Error:', e && e.message);
+		}
+	}
+	// Fallback: lite uppercase only.
+	try {
+		var protPost = protectCFMLTokens(trimmed);
+		var upperedPost = uppercaseSQLKeywordsInProtected(protPost.code);
+		var spacedPost = normalizeSQLEqualsSpacing(upperedPost);
+		return restoreCFMLTokens(spacedPost, protPost.tokens);
+	} catch (e2) {
+		return trimmed;
+	}
 }
 
 function detectAllLeavesStartWithWhere(treeLines) {
@@ -750,6 +881,63 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 						// Phase 3 failed — fall through to Tier 2
 						if (typeof console !== 'undefined' && console.warn) {
 							console.warn('[deep-format] Phase 3 WHERE hoisting failed (cfquery #' + currentIndex + '), falling back to Tier 2 verbatim. Error:', hoistErr && hoistErr.message, '\nDialect:', sqlDialect);
+						}
+					}
+				}
+
+				// Phase 4 — AND-leaves hoisting (Phase 3's dual). Fires when
+				// the cfquery body has a complete `WHERE base AND base` block
+				// OUTSIDE the cfif tree, and every cfif leaf merely appends
+				// optional `and xxx` / `or xxx` clauses. Format the SELECT/
+				// FROM/WHERE backbone via sql-formatter, leave the cfif tree
+				// structurally intact (just lite-uppercase keywords inside
+				// each leaf), and synthesize-format the post-tree (GROUP BY /
+				// ORDER BY / HAVING / LIMIT / UNION).
+				//
+				// Unlike Tier 1 / Phase 3, Phase 4 does NOT require user indent
+				// — the AND-leaves precondition is specific enough. This means
+				// flat-input AND-leaves cases now produce nicely-formatted
+				// output instead of falling to Tier 3 verbatim.
+				if (sqlPro
+						&& typeof formatProSQLSync === 'function'
+						&& typeof isProSQLLoaded === 'function'
+						&& isProSQLLoaded()) {
+					try {
+						var cleanedForP4 = cleanEmbeddedBody(verbatimSource);
+						var splitP4 = splitCfqueryBodyAtCfifTreeMulti(cleanedForP4);
+						if (splitP4
+								&& /\bselect\b[\s\S]*\bfrom\b[\s\S]*\bwhere\b/i.test(splitP4.pre)
+								&& detectAllLeavesStartWithAndOr(splitP4.treeLines)) {
+							var preTrimmedP4 = splitP4.pre.replace(/\s+$/, '');
+							var preProtP4 = protectCFMLTokens(preTrimmedP4);
+							var preFormattedP4 = formatProSQLSync(preProtP4.code, sqlDialect);
+							var preRestoredP4 = restoreCFMLTokens(preFormattedP4, preProtP4.tokens);
+							preRestoredP4 = cleanRestoredCFMLTokenSpacing(preRestoredP4);
+							preRestoredP4 = preRestoredP4.replace(/\s+$/, '');
+
+							// formatStrippedTree is the right helper here even
+							// though we don't strip anything: it walks the tree
+							// with depth tracking and applies keyword uppercase
+							// + `=` spacing to body lines (which for Phase 4 are
+							// the `and ...` / `or ...` clauses).
+							var treeFormattedP4 = formatStrippedTree(splitP4.treeLines);
+
+							var postFormattedP4 = formatPhase4PostFragment(splitP4.post, sqlDialect);
+
+							var assembledP4 = preRestoredP4 + '\n' + treeFormattedP4;
+							if (postFormattedP4 !== '') {
+								assembledP4 += '\n' + postFormattedP4;
+							}
+
+							return maybeNormalizeCFMLTags(
+								parentIndent + openTag + '\n'
+								+ indentEmbeddedBody(assembledP4, parentIndent) + '\n'
+								+ parentIndent + closeTag
+							);
+						}
+					} catch (p4Err) {
+						if (typeof console !== 'undefined' && console.warn) {
+							console.warn('[deep-format] Phase 4 AND-leaves hoisting failed (cfquery #' + currentIndex + '), falling back to Tier 2 verbatim. Error:', p4Err && p4Err.message, '\nDialect:', sqlDialect);
 						}
 					}
 				}

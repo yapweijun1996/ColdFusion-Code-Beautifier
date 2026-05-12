@@ -1160,10 +1160,15 @@ assertEqual(
 
 	// T5 — Multi-line `and (...)` continuation. The leaf body has 2 lines:
 	// first starts with `and`, second with `or`. Both pass precondition.
+	// Note: function names (`lower`) inside cfif leaves stay lowercase —
+	// formatStrippedTree uppercases keywords (AND, OR, LIKE) but not
+	// function calls. Pre-tree and post-tree go through formatProSQLSync
+	// which DOES uppercase functions; this asymmetry is documented and
+	// matches Phase 3 behavior.
 	assertEqual(
 		'Phase4 T5: leaf body with multi-line AND/OR continuation',
 		runProSQL("<cfquery name=\"q\">\nSELECT a FROM t WHERE x = 1\n<cfif y>\nand (lower(a) LIKE '%x%'\nor lower(b) LIKE '%y%')\n</cfif>\n</cfquery>"),
-		"<cfquery name=\"q\">\n\tSELECT\n\t\ta\n\tFROM\n\t\tt\n\tWHERE\n\t\tx = 1\n\t\t<cfif y>\n\t\t\tAND (LOWER(a) LIKE '%x%'\n\t\t\tOR LOWER(b) LIKE '%y%')\n\t\t</cfif>\n</cfquery>"
+		"<cfquery name=\"q\">\n\tSELECT\n\t\ta\n\tFROM\n\t\tt\n\tWHERE\n\t\tx = 1\n\t\t<cfif y>\n\t\t\tAND (lower(a) LIKE '%x%'\n\t\t\tOR lower(b) LIKE '%y%')\n\t\t</cfif>\n</cfquery>"
 	);
 
 	// T6 — Tree contains <!--- comment --->. Comment passes through verbatim.
@@ -1196,6 +1201,16 @@ assertEqual(
 		'Phase4 T9: all-WHERE leaves still go through Phase 3, not Phase 4',
 		runProSQL('<cfquery name="q">\n\tSELECT a\n\tFROM t\n\t<cfif y>\n\t\twhere x = 1\n\t<cfelse>\n\t\twhere x = 2\n\t</cfif>\n\tand b = 3\n</cfquery>'),
 		'<cfquery name="q">\n\tSELECT\n\t\ta\n\tFROM\n\t\tt\n\tWHERE\n\t\t<cfif y>\n\t\t\tx = 1\n\t\t<cfelse>\n\t\t\tx = 2\n\t\t</cfif>\n\t\tAND b = 3\n</cfquery>'
+	);
+
+	// T8b — Regression: unquoted attribute value with #hash-expression# that
+	// has internal whitespace (e.g., `value=#fn('#x#/#y# ')#`) must NOT
+	// truncate at the inner space. This bug was found while validating Phase
+	// 4 on fr_fg_vari_qty.cfm where BETWEEN clauses use TNOdateformat.
+	assertEqual(
+		'Phase4 T8b: cfqueryparam with #expr(...)# containing internal whitespace does NOT truncate',
+		runProSQL("<cfquery name=\"q\">\nSELECT a FROM t WHERE x BETWEEN <CFQUERYPARAM VALUE=#fn('#a# ')# CFSQLTYPE=\"CF_SQL_DATE\"> AND <CFQUERYPARAM VALUE=#fn('#b# ')# CFSQLTYPE=\"CF_SQL_DATE\">\n<cfif y>\nand z = 1\n</cfif>\n</cfquery>"),
+		"<cfquery name=\"q\">\n\tSELECT\n\t\ta\n\tFROM\n\t\tt\n\tWHERE\n\t\tx BETWEEN <cfqueryparam value=#fn('#a# ')# cfsqltype=\"cf_sql_date\"> AND <cfqueryparam value=#fn('#b# ')# cfsqltype=\"cf_sql_date\">\n\t\t<cfif y>\n\t\t\tAND z = 1\n\t\t</cfif>\n</cfquery>"
 	);
 
 	// T10 — Safety: leaf contains `union select` (Pattern D — cfif appends
