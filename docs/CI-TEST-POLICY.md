@@ -52,6 +52,7 @@ Every entry below is a real user-reported scenario from the issue/feedback histo
 | 22 | `qs_result_main` with lowercase `as`, `using`, `cast`, `over` | Tier 2 verbatim Lite path must uppercase common SQL keywords | `Lite uppercase covers AS, INNER JOIN, WHERE, FROM, SELECT` |
 | 23 | Pro SQL marker injection / Phase 3 hoist (T1–T10) | Various cfif-bearing cfquery shapes (10 tests) — Phase 3 / Phase 4 dispatch | search `phase 3` / `phase 4` in `tests/run-tests.js` |
 | 24 | CFML routed without SQL formatting when deep format off | CFML auto-split fires but SQL body stays verbatim | `cfml routed without sql formatting when deep format off` |
+| 25 | **memo_transdesc Remarks** — `<font>` wraps multi-line content, `<br>#trim(Replace(..., "<br>", "ALL"))#</font>` jams stray `</font>` after text containing **`<br>` inside a string literal** | `</font>` must peel; the `<br>` inside `Replace(...)` string args must NOT confuse Rule D's tag matching (string literals are opaque to the splitter) | `auto-split: real-world memo_transdesc Remarks pattern — <font> wraps multi-line content, stray </font> after text+string-with-<br>-inside peels` |
 
 ## How to add a new user case
 

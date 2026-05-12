@@ -381,6 +381,24 @@ assertEqual(
 );
 
 assertEqual(
+	'auto-split: real-world memo_transdesc Remarks pattern — <font> wraps multi-line content, stray </font> after text+string-with-<br>-inside peels (Rule D ignores tags inside string literals)',
+	runRouter(
+		'<td valign="top">\n' +
+		'\t<font>\n' +
+		'\t\t<b>Remarks:</b>\n' +
+		'\t\t<br>#trim(Replace(memo_transdesc, "#chr(13)##chr(10)#", "<br>", "ALL"))#</font>\n' +
+		'</td>',
+		'cfml', false
+	),
+	'<td valign="top">\n' +
+	'\t<font>\n' +
+	'\t\t<b>Remarks:</b>\n' +
+	'\t\t<br>#trim(Replace(memo_transdesc, "#chr(13)##chr(10)#", "<br>", "ALL"))#\n' +
+	'\t</font>\n' +
+	'</td>'
+);
+
+assertEqual(
 	'auto-split: real-world numberToEnglish pattern — <td>...&nbsp;<script>JS</script><cfif>x</cfif>.</td>',
 	runRouter(
 		'<cfif disp_numberToEnglishProper EQ "y">\n\t<td #style_padding#>desc: &nbsp;<script Language="JavaScript">\n\tdocument.write(numberToEnglish(\'#amount_forex#\'));\n</script>\n\t<cfif set_language is \'english\'>Only</cfif>.</td>\n</cfif>',
