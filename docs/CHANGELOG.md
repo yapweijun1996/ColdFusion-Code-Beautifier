@@ -2,6 +2,31 @@
 
 ## v6 series (2026-05-11 → 2026-05-12)
 
+### Tooling: `tools/diagnose-corpus.js` — consolidated corpus audit
+
+Three earlier diagnostic scripts that lived under `sample/` (`_corpus_audit.js`, `_corpus_audit2.js`, `_phase4_targets.js`) were merged into a single committed dev tool at `tools/diagnose-corpus.js` with a proper CLI.
+
+`sample/` is gitignored, so anything dropped there was lost to contributors. Moving the diagnostic into `tools/` means any new sample `.cfm` file dropped under `sample/sample_cfm/` can be audited with one command:
+
+```bash
+node tools/diagnose-corpus.js              # full audit table + grand totals
+node tools/diagnose-corpus.js --targets    # full body of every Tier 2 verbatim cfquery (Phase 4 candidates)
+node tools/diagnose-corpus.js --file foo.cfm
+node tools/diagnose-corpus.js --dialect mysql --no-write
+```
+
+Features:
+- Auto-discovers `*.cfm` under `sample/sample_cfm/` (no hard-coded file list)
+- Better classifier (recognizes `SELECT DISTINCT` / `UPDATE` / `INSERT INTO` / `DELETE` / `WITH` / `MERGE` / `TRUNCATE` as Pro SQL signatures; `PRESERVED_AS_FORMATTED` verdict for already-formatted input)
+- Non-zero exit when any file throws (CI-friendly)
+- Gracefully degrades to Lite-only when `vendor/sql-formatter.min.js` is missing
+
+Verdict taxonomy: `IDENTICAL_NOOP`, `FULL_REFORMAT`, `PHASE3_HOIST_OR_MARKER`, `PRESERVED_AS_FORMATTED`, `TIER2_VERBATIM_NOCASE`, `TIER2_VERBATIM_LITE`, `WHITESPACE_ONLY`, `NO_PRO_SQL_BUT_CHANGED`, `COUNT_MISMATCH`.
+
+Current v18 baseline (15 files, 33,716 lines, 126 cfqueries): 76.2% FULL_REFORMAT, 8.7% PRESERVED_AS_FORMATTED, 6.3% PHASE3_HOIST_OR_MARKER, 5.6% WHITESPACE_ONLY, 2.4% Tier 2 verbatim, 0.8% other — 0 warnings, 0 throws.
+
+
+
 ### Feat: auto-align badly-indented multi-tag-per-line legacy code
 
 User report: legacy CFML reports often have lines like
