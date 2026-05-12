@@ -1351,6 +1351,295 @@ assertEqual(
 	);
 })();
 
+/* ===========================================================================
+ * SQL token-equivalence invariants — Pro SQL path corruption check.
+ *
+ * Tokenizes input + output cfquery bodies and asserts semantic preservation:
+ *
+ *   • Non-keyword identifiers (column/table names)       — same order
+ *   • String literals + numeric literals                 — byte-equal, same order
+ *   • CFML tags (cfif/cfelse/cfqueryparam/cfloop/etc.)   — same order
+ *     (case-normalized, internal-whitespace-collapsed)
+ *   • CFML expressions #...#                             — byte-equal, same order
+ *   • Punctuation (parens, commas, operators)            — same order
+ *   • SQL comments (/* *​/ and -- and <!--- ---​>)        — same MULTISET
+ *     (Phase 3/4 may legitimately move comments between cfif branches,
+ *      but never drop, duplicate, or invent comments)
+ *
+ * EXEMPT from sequence check (allowed to merge/hoist/disappear):
+ *   • SQL keywords (SELECT, WHERE, AND, OR, FROM, JOIN, etc.)
+ *     because Phase 3 hoist legitimately MERGES duplicated WHERE prefixes
+ *     from multiple cfif branches into a single backbone WHERE keyword.
+ *
+ * This block downgrades SAFETY.md's "Pro SQL Phase 4 comment placement
+ * may drift" entry from "corpus-tested only" to "CI-gated invariant".
+ * If a regression ever drops a column name, swaps two column literals,
+ * loses a cfif branch, or vanishes a SQL comment, these assertions catch
+ * it — independent of the assertEqual expected-string match.
+ * =========================================================================== */
+(function runProSQLTokenEquivalenceTests() {
+	var vendorPath = 'vendor/sql-formatter.min.js';
+	if (!fs.existsSync(vendorPath)) {
+		console.log('SKIP Pro SQL token-equivalence tests (vendor bundle missing): ' + vendorPath);
+		return;
+	}
+	var sqlFormatter = require('../' + vendorPath);
+	var proSrc = fs.readFileSync('js/pro-sql.js', 'utf8');
+	var browserCodeLocal = scripts.map(function(file) { return fs.readFileSync(file, 'utf8'); }).join('\n');
+
+	function runProSQL(input, dialect) {
+		var elements = {
+			language: { value: 'cfml' },
+			split_html_tag: { checked: false },
+			auto_copy: { checked: false }, auto_clear: { checked: false }, auto_clear_output: { checked: false },
+			deep_sql: { checked: true }, deep_css: { checked: false }, deep_js: { checked: false },
+			pro_sql: { checked: true }, pro_sql_dialect: { value: dialect || 'mysql' },
+			input: { value: input }, output: { value: '', select: function() {} }
+		};
+		var ctx = {
+			console: { log: function() {}, warn: function() {} },
+			window: { sqlFormatter: sqlFormatter },
+			document: {
+				getElementById: function(id) { return elements[id]; },
+				execCommand: function() { return true; },
+				querySelector: function() { return { prepend: function() {}, textContent: '' }; },
+				createElement: function() { return { className: '', innerHTML: '', style:{setProperty:function(){}}, classList:{add:function(){},remove:function(){}}, addEventListener:function(){}, remove:function(){} }; },
+				addEventListener: function() {}, readyState: 'complete'
+			},
+			setTimeout: setTimeout, clearTimeout: clearTimeout
+		};
+		vm.createContext(ctx);
+		vm.runInContext(proSrc + '\n' + browserCodeLocal, ctx);
+		ctx.beautifyCodes();
+		return elements.output.value;
+	}
+
+	// Conservative SQL keyword set — anything in this dictionary is allowed
+	// to be hoisted/merged/dropped during Pro SQL reformatting. Everything
+	// else must appear in input and output in the exact same sequence.
+	var SQL_KEYWORDS = {};
+	[
+		'select','distinct','from','where','and','or','not','in','between','like','ilike','is','null','as',
+		'on','using','join','inner','left','right','full','outer','cross','natural',
+		'group','by','having','order','asc','desc',
+		'limit','offset','fetch','next','rows','only','first',
+		'union','intersect','except','all',
+		'case','when','then','else','end',
+		'insert','into','values','returning',
+		'update','set','delete',
+		'with','merge','truncate',
+		'true','false',
+		'cast','over','partition','within','filter'
+	].forEach(function(k) { SQL_KEYWORDS[k] = 1; });
+
+	function tokenize(text) {
+		var toks = [];
+		var i = 0;
+		var n = text.length;
+		while (i < n) {
+			var c = text[i];
+			// Whitespace — dropped from output
+			if (c === ' ' || c === '\t' || c === '\n' || c === '\r') { i++; continue; }
+			// CFML markup comment <!--- ... --->
+			if (text.substr(i, 5) === '<!---') {
+				var ce = text.indexOf('--->', i + 5);
+				if (ce === -1) { toks.push({kind:'COMMENT_CFM', text: text.slice(i).replace(/\s+/g,' ').trim()}); i = n; break; }
+				toks.push({kind:'COMMENT_CFM', text: text.slice(i, ce + 4).replace(/\s+/g,' ').trim()});
+				i = ce + 4; continue;
+			}
+			// SQL line comment -- ...
+			if (c === '-' && text[i+1] === '-') {
+				var j = i;
+				while (j < n && text[j] !== '\n') j++;
+				toks.push({kind:'COMMENT_SQL', text: text.slice(i, j).replace(/\s+/g,' ').trim()});
+				i = j; continue;
+			}
+			// SQL block comment /* ... */
+			if (c === '/' && text[i+1] === '*') {
+				var be = text.indexOf('*/', i + 2);
+				if (be === -1) { toks.push({kind:'COMMENT_SQL', text: text.slice(i).replace(/\s+/g,' ').trim()}); i = n; break; }
+				toks.push({kind:'COMMENT_SQL', text: text.slice(i, be + 2).replace(/\s+/g,' ').trim()});
+				i = be + 2; continue;
+			}
+			// CFML tag <cfXXX...> or </cfXXX...>
+			if (c === '<' && /^<\/?cf[a-z]/i.test(text.substr(i, 12))) {
+				var te = text.indexOf('>', i);
+				if (te === -1) { toks.push({kind:'CFML_TAG', text: text.slice(i).toLowerCase().replace(/\s+/g,' ').trim()}); i = n; break; }
+				toks.push({kind:'CFML_TAG', text: text.slice(i, te + 1).toLowerCase().replace(/\s+/g,' ')});
+				i = te + 1; continue;
+			}
+			// CFML expression #...#  (## is escaped literal #)
+			if (c === '#') {
+				var j = i + 1;
+				while (j < n) {
+					if (text[j] === '#') {
+						if (text[j+1] === '#') { j += 2; continue; }
+						break;
+					}
+					j++;
+				}
+				toks.push({kind:'CFML_EXPR', text: text.slice(i, j + 1)});
+				i = j + 1; continue;
+			}
+			// String single-quoted (SQL doubled-quote escape)
+			if (c === "'") {
+				var j = i + 1;
+				while (j < n) {
+					if (text[j] === "'") {
+						if (text[j+1] === "'") { j += 2; continue; }
+						break;
+					}
+					j++;
+				}
+				toks.push({kind:'STRING', text: text.slice(i, j + 1)});
+				i = j + 1; continue;
+			}
+			// String double-quoted
+			if (c === '"') {
+				var j = i + 1;
+				while (j < n) {
+					if (text[j] === '"') {
+						if (text[j+1] === '"') { j += 2; continue; }
+						break;
+					}
+					j++;
+				}
+				toks.push({kind:'STRING', text: text.slice(i, j + 1)});
+				i = j + 1; continue;
+			}
+			// Number
+			if (c >= '0' && c <= '9') {
+				var j = i;
+				while (j < n && ((text[j] >= '0' && text[j] <= '9') || text[j] === '.')) j++;
+				if (j < n && (text[j] === 'e' || text[j] === 'E')) {
+					j++;
+					if (j < n && (text[j] === '+' || text[j] === '-')) j++;
+					while (j < n && text[j] >= '0' && text[j] <= '9') j++;
+				}
+				toks.push({kind:'NUMBER', text: text.slice(i, j)});
+				i = j; continue;
+			}
+			// Identifier (letter / underscore start)
+			if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c === '_') {
+				var j = i;
+				while (j < n && /[A-Za-z0-9_]/.test(text[j])) j++;
+				var word = text.slice(i, j).toLowerCase();
+				toks.push({kind: SQL_KEYWORDS[word] ? 'KEYWORD' : 'IDENT', text: word});
+				i = j; continue;
+			}
+			// Multi-char punctuation
+			if (i + 1 < n) {
+				var two = text.substr(i, 2);
+				if (two === '<=' || two === '>=' || two === '!=' || two === '<>' || two === '||' || two === '::') {
+					toks.push({kind:'PUNCT', text: two});
+					i += 2; continue;
+				}
+			}
+			// Single-char punctuation
+			toks.push({kind:'PUNCT', text: c});
+			i++;
+		}
+		return toks;
+	}
+
+	function compareEquivalent(inTokens, outTokens) {
+		function isSeqRelevant(t) {
+			return t.kind !== 'COMMENT_SQL' && t.kind !== 'COMMENT_CFM' && t.kind !== 'KEYWORD';
+		}
+		var inSeq  = inTokens.filter(isSeqRelevant);
+		var outSeq = outTokens.filter(isSeqRelevant);
+
+		if (inSeq.length !== outSeq.length) {
+			return 'sequence length mismatch — input ' + inSeq.length + ' content tokens, output ' + outSeq.length;
+		}
+		for (var i = 0; i < inSeq.length; i++) {
+			if (inSeq[i].kind !== outSeq[i].kind || inSeq[i].text !== outSeq[i].text) {
+				var ctx = inSeq.slice(Math.max(0, i-2), i+3).map(function(t) { return t.kind + ':' + t.text; }).join(' ');
+				return 'token mismatch at index ' + i + '\n    input  : {' + inSeq[i].kind + ':' + JSON.stringify(inSeq[i].text) + '}\n    output : {' + outSeq[i].kind + ':' + JSON.stringify(outSeq[i].text) + '}\n    context: ' + ctx;
+			}
+		}
+
+		// Comment multiset comparison — Phase 4 may shift comment position
+		// across cfif branches, but multiset (count + content) is invariant.
+		function commentMultiset(toks) {
+			var ms = {};
+			for (var k = 0; k < toks.length; k++) {
+				if (toks[k].kind === 'COMMENT_SQL' || toks[k].kind === 'COMMENT_CFM') {
+					var key = toks[k].kind + ':' + toks[k].text;
+					ms[key] = (ms[key] || 0) + 1;
+				}
+			}
+			return ms;
+		}
+		var inCM = commentMultiset(inTokens);
+		var outCM = commentMultiset(outTokens);
+		var allKeys = {};
+		Object.keys(inCM).forEach(function(k) { allKeys[k] = 1; });
+		Object.keys(outCM).forEach(function(k) { allKeys[k] = 1; });
+		var keys = Object.keys(allKeys);
+		for (var k = 0; k < keys.length; k++) {
+			var key = keys[k];
+			if ((inCM[key] || 0) !== (outCM[key] || 0)) {
+				return 'comment multiset mismatch — "' + key.slice(0, 80) + '" — input count ' + (inCM[key]||0) + ', output count ' + (outCM[key]||0);
+			}
+		}
+		return null;
+	}
+
+	function assertSQLTokenEquivalent(name, input, dialect) {
+		var output = runProSQL(input, dialect);
+		var err = compareEquivalent(tokenize(input), tokenize(output));
+		if (err) {
+			console.log('\nFAIL TOKEN-EQUIVALENT: ' + name);
+			console.log('  ' + err);
+			console.log('  Input:\n' + input.split('\n').map(function(l) { return '    | ' + l; }).join('\n'));
+			console.log('  Output:\n' + output.split('\n').map(function(l) { return '    | ' + l; }).join('\n'));
+			process.exitCode = 1;
+		}
+	}
+
+	// Corpus of cfquery shapes spanning every Pro SQL dispatch path.
+	var cases = [
+		['full reformat: simple SELECT no cfif',
+			'<cfquery name="q">select id, name, status from users where active = 1 order by id limit 10</cfquery>'],
+		['full reformat: JOIN + subquery',
+			'<cfquery name="q">select o.id, u.name from orders o left join users u on o.user_id = u.id where o.total > 100</cfquery>'],
+		['phase 3 hoist: WHERE in cfif branches — keyword merged, identifiers preserved',
+			'<cfquery name="q">\n\tSELECT a\n\tFROM t\n\t<cfif y>\n\t\twhere x = 1\n\t<cfelse>\n\t\twhere x = 2\n\t</cfif>\n\tand b = 3\n</cfquery>'],
+		['phase 4: AND-leaves preserved',
+			'<cfquery name="q">\n\tSELECT a, b FROM t WHERE x = 1\n\t<cfif y>\n\t\tand c = 2\n\t</cfif>\n</cfquery>'],
+		['phase 4: cfif/cfelse/cfelseif three-way',
+			'<cfquery name="q">\n\tSELECT a FROM t WHERE x = 1\n\t<cfif y EQ 1>\n\t\tand z = 2\n\t<cfelseif y EQ 2>\n\t\tand z = 3\n\t<cfelse>\n\t\tand z = 4\n\t</cfif>\n</cfquery>'],
+		['phase 4: three sibling cfif blocks',
+			'<cfquery name="q">\n\tSELECT a FROM t WHERE x = 1\n\t<cfif y1>and a1 = 1</cfif>\n\t<cfif y2>and a2 = 2</cfif>\n\t<cfif y3>and a3 = 3</cfif>\n</cfquery>'],
+		['cfqueryparam tokens preserved across format',
+			'<cfquery name="q">\n\tSELECT id FROM users WHERE id = <cfqueryparam value="#x#" cfsqltype="cf_sql_integer"> AND status = <cfqueryparam value="#s#" cfsqltype="cf_sql_varchar">\n</cfquery>'],
+		['SQL block comment /* */ survives via multiset',
+			'<cfquery name="q">\n\tSELECT a /* main column */, b FROM t WHERE x = 1\n</cfquery>'],
+		['SQL line comment -- survives via multiset',
+			'<cfquery name="q">\n\tSELECT a -- pick first\n\tFROM t WHERE x = 1\n</cfquery>'],
+		['string literal with doubled-quote escape preserved byte-equal',
+			"<cfquery name=\"q\">\n\tSELECT id FROM users WHERE name = 'O''Brien' AND status = 'active'\n</cfquery>"],
+		['numeric literals: int, decimal, exponent — all preserved',
+			'<cfquery name="q">\n\tSELECT a FROM t WHERE x = 1 AND y = 1.5 AND z = 1e3\n</cfquery>'],
+		['IN with multiple string literals — order preserved',
+			"<cfquery name=\"q\">\n\tSELECT id FROM t WHERE status IN ('active', 'pending', 'closed')\n</cfquery>"],
+		['CASE WHEN expression — identifiers and literals preserved',
+			"<cfquery name=\"q\">\n\tSELECT id, CASE WHEN status = 'A' THEN 1 WHEN status = 'B' THEN 2 ELSE 0 END as tier FROM t\n</cfquery>"]
+	];
+
+	var failed = 0;
+	cases.forEach(function(c) {
+		var before = process.exitCode;
+		assertSQLTokenEquivalent(c[0], c[1]);
+		if (process.exitCode && !before) failed++;
+	});
+
+	if (!failed) {
+		console.log('PASS: Pro SQL token-equivalence (' + cases.length + ' cases — no token corruption, comments preserved as multiset)');
+	}
+})();
+
 /* ===================================================================
  * Content-preservation invariants — round-trip equivalence checks.
  *

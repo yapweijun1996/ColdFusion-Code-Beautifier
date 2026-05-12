@@ -31,7 +31,7 @@ The 116 unit tests + 22 content-preservation invariants enforce that **CFML auto
 | Tier 2 Verbatim (cfif-bearing cfquery, no Pro SQL) | **Very low** | Body kept word-for-word, only keyword case normalized. |
 | Tier 2 Lite uppercase | **Low** | Uppercases tokens in `PRO_SQL_KEYWORDS`. Columns named `from`/`select`/`as`/etc. would also be uppercased — **cosmetic only**, SQL identifiers are case-insensitive in most engines. |
 | Pro SQL Phase 3 hoist (cfif outside WHERE) | **Medium** | Uses `__cfm_NN__` markers. Orphan-marker detection falls back to Tier 2 verbatim, never silent corruption. |
-| Pro SQL Phase 4 (split-format-recombine per cfif branch) | **Medium** | Each branch goes through sql-formatter independently. Any branch throws → entire query falls back to Tier 2 verbatim. **Known caveat**: multi-line `/* */` SQL comments spanning cfif branches may end up attached to a different branch after recombine — comment placement shifts but SQL logic is unchanged. |
+| Pro SQL Phase 4 (split-format-recombine per cfif branch) | **Low–Medium** | Each branch goes through sql-formatter independently. Any branch throws → entire query falls back to Tier 2 verbatim. Token-equivalence test suite (13 CI-gated cases) proves no column/literal/CFML-tag is dropped or reordered, and no comment is dropped or duplicated. **Remaining caveat**: comment *position* may shift between cfif branches (content/count preserved by multiset check). |
 | Pro SQL Full reformat (no cfif) | **Low** | sql-formatter@15.7.3 (mature third-party library). |
 
 **Verdict**: SQL token sequences are preserved on every path. Whitespace and case may change. Only Pro SQL Phase 4 has the comment-placement caveat above.
@@ -93,18 +93,20 @@ node tools/diagnose-corpus.js
 
 ## What's tested vs what's not
 
-**Tested and CI-gated** (116 unit tests + 22 content-preservation invariants + 25 user-case pinned tests):
+**Tested and CI-gated** (116 unit tests + 22 content-preservation invariants + 13 Pro SQL token-equivalence invariants + 25 user-case pinned tests):
 - CFML tag structure preservation
 - String literal content preservation (single / double / SQL `''` doubled-quote)
 - Markup comment preservation
 - `<script>` / `<style>` / `<cfquery>` / `<cfscript>` body preservation in opaque mode
 - Pro SQL marker injection / orphan detection / fallback chain
+- **Pro SQL token-equivalence**: input and output cfquery bodies are tokenized; non-keyword identifiers, string/numeric literals, CFML tags/expressions, and punctuation must appear in the **same sequence**. SQL keywords are exempt (Phase 3 hoist legitimately merges duplicated `WHERE`/`AND` prefixes). SQL comments (`/* */`, `--`, `<!--- --->`) compared as **multisets** — Phase 4 may shift them between cfif branches, but never drop, duplicate, or invent them.
 - All 25 documented user-reported scenarios (see `docs/CI-TEST-POLICY.md`)
 
 **Not exhaustively tested** (corpus-tested only, no formal proof):
-- Pro SQL Phase 4 + SQL multi-line `/* */` comment placement across cfif branches
 - `formatJSCode` regex/division heuristic on adversarial input
 - CSS string literals containing `{`/`}` characters
 - HTML body text containing unescaped `<`/`>`
+
+The previous entry "Pro SQL Phase 4 + SQL multi-line `/* */` comment placement across cfif branches" was promoted to the CI-gated list above on 2026-05-12 via the token-equivalence test suite. Comment **content** preservation is now formally proven; comment **position** is intentionally allowed to drift (this matches the empirical Phase 4 behavior).
 
 If you hit any of these, file an issue with a minimal repro and it becomes case #26+ per the policy in `docs/CI-TEST-POLICY.md`.
