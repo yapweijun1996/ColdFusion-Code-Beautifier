@@ -1625,7 +1625,48 @@ assertEqual(
 		['IN with multiple string literals — order preserved',
 			"<cfquery name=\"q\">\n\tSELECT id FROM t WHERE status IN ('active', 'pending', 'closed')\n</cfquery>"],
 		['CASE WHEN expression — identifiers and literals preserved',
-			"<cfquery name=\"q\">\n\tSELECT id, CASE WHEN status = 'A' THEN 1 WHEN status = 'B' THEN 2 ELSE 0 END as tier FROM t\n</cfquery>"]
+			"<cfquery name=\"q\">\n\tSELECT id, CASE WHEN status = 'A' THEN 1 WHEN status = 'B' THEN 2 ELSE 0 END as tier FROM t\n</cfquery>"],
+		// -----------------------------------------------------------------
+		// Corpus-derived sanitized cases (real-world SQL shape, generic names)
+		// -----------------------------------------------------------------
+		// Source: fr_mthly_sales_cust.cfm — UNION between two SELECTs each
+		// with GROUP BY. Tests Pro SQL handling of UNION across cfif.
+		['corpus #1 UNION between two SELECTs with GROUP BY',
+			"<cfquery name=\"q\">\n\tselect t1.a, t1.b, sum(t2.c) as total\n\tfrom t1 inner join t2 on t1.id = t2.parent_id\n\twhere t1.flag = 'y'\n\tgroup by t1.a, t1.b\n\tunion\n\tselect t1.a, t1.b, '0' as total\n\tfrom t1\n\twhere t1.flag = 'n'\n\tgroup by t1.a, t1.b\n</cfquery>"],
+		// Source: inc_fin_mod_view283_01.cfm — sum(CASE WHEN ... ELSE ... END)
+		// aggregate with conditional branches, GROUP BY + ORDER BY.
+		['corpus #2 sum(CASE WHEN) aggregate with GROUP BY + ORDER BY',
+			"<cfquery name=\"q\">\n\tSELECT g.code, g.unique_id, sc.desc as label,\n\t\tsum(CASE WHEN g.amt >= 0 THEN g.amt ELSE 0 END) as debit,\n\t\tsum(CASE WHEN g.amt < 0 THEN -1 * g.amt ELSE 0 END) as credit\n\tFROM t1 g\n\tinner join t2 sc on g.fn = sc.fn\n\tWHERE g.tag = 'a' AND g.amt <> '0' AND g.cls like 'p%'\n\tGROUP BY g.code, g.unique_id, sc.desc\n\tORDER BY sc.desc\n</cfquery>"],
+		// Source: fr_mthly_sales_cust.cfm lines 123-131 — nested CASE inside
+		// sum() with multiple OR conditions. Stress-tests Pro SQL with
+		// deeply nested function calls.
+		['corpus #3 nested CASE WHEN inside sum() with OR predicates',
+			"<cfquery name=\"q\">\n\tSELECT t1.id,\n\t\tsum(CASE WHEN t1.period = 1 THEN\n\t\t\t(CASE WHEN t1.flag = 'a' or t1.flag = 'b' THEN -1 * t1.qty ELSE t1.qty END)\n\t\t\tELSE 0 END) as qty_period_1\n\tFROM t1\n\tGROUP BY t1.id\n</cfquery>"],
+		// Source: fr_mthly_sales_cust.cfm — 4-table JOIN with multi-column
+		// ON conditions and inner + left outer mix.
+		['corpus #4 four-table JOIN (inner + left outer) with multi-column ON',
+			"<cfquery name=\"q\">\n\tselect t1.a, t2.b, t3.c, t4.d\n\tfrom t1\n\tinner join t2 on t2.fn = t1.fn and t1.id = t2.parent_id\n\tleft outer join t3 on t1.fn = t3.fn and t1.code_unique = t3.code_unique\n\tinner join t4 on t1.fn = t4.fn and t1.party_id = t4.party_id\n\twhere t1.fn = <cfqueryparam value=\"#cookie.fn#\" cfsqltype=\"cf_sql_varchar\">\n</cfquery>"],
+		// Source: fr_mthly_sales_cust.cfm lines 144-146 — cfqueryparam
+		// with date type and BETWEEN, with CFML # expression containing
+		// internal whitespace (already pinned in T8b but with simpler shape).
+		['corpus #5 BETWEEN with two cfqueryparam date values containing # expressions',
+			"<cfquery name=\"q\">\n\tSELECT a FROM t WHERE date_col BETWEEN <CFQUERYPARAM VALUE=#TNOdateformat('#fromday#/#frommth#/#fromyear# ')# CFSQLTYPE=\"CF_SQL_DATE\"> AND <CFQUERYPARAM VALUE=#TNOdateformat('#today#/#tomth#/#toyear# ')# CFSQLTYPE=\"CF_SQL_DATE\">\n</cfquery>"],
+		// Source: fr_mthly_sales_cust.cfm — LIKE with lcase() function +
+		// CFML expression interpolated into the pattern string.
+		['corpus #6 LIKE pattern with lcase() and CFML # expression in pattern',
+			"<cfquery name=\"q\">\n\tselect a from t1 where (lower(t1.code) LIKE '%#lcase(search_query_desc)#%' or lower(t1.desc) LIKE '%#lcase(search_query_desc)#%')\n</cfquery>"],
+		// Source: pattern from inc_fin_mod_view283_01.cfm style — HAVING
+		// clause with aggregate condition.
+		['corpus #7 HAVING clause with aggregate filter',
+			"<cfquery name=\"q\">\n\tSELECT t1.cat, count(*) as cnt, sum(t1.amt) as total\n\tFROM t1\n\tGROUP BY t1.cat\n\tHAVING count(*) > 1 AND sum(t1.amt) > 100\n\tORDER BY total DESC\n</cfquery>"],
+		// Source: pur_po_view272-style pattern — IN clause with PreserveSingleQuotes
+		// and multiple cfif filters appending AND clauses (Phase 4 territory).
+		['corpus #8 IN with PreserveSingleQuotes + cfif AND-leaves (Phase 4)',
+			"<cfquery name=\"q\">\n\tSELECT a, b FROM t1\n\tWHERE t1.fn = <cfqueryparam value=\"#cookie.fn#\" cfsqltype=\"cf_sql_varchar\">\n\tand t1.tag in (#PreserveSingleQuotes(list)#)\n\t<cfif a>\n\t\tand t1.party = '#party_val#'\n\t</cfif>\n\t<cfif b>\n\t\tand t1.staff in (#PreserveSingleQuotes(staff_list)#)\n\t</cfif>\n</cfquery>"],
+		// Multi-line SQL comment spanning logical sections — Phase 4
+		// may shift this comment position; multiset check must still pass.
+		['corpus #9 multi-line SQL block comment + cfif AND-leaves (Phase 4 comment shift OK)',
+			"<cfquery name=\"q\">\n\tSELECT a, b /* this is a\n\t  multi-line comment\n\t  about column b */, c\n\tFROM t1\n\tWHERE x = 1\n\t<cfif y>\n\t\tand z = 2\n\t</cfif>\n</cfquery>"]
 	];
 
 	var failed = 0;
