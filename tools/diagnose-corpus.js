@@ -40,22 +40,24 @@ process.chdir(ROOT);
 // ---------- CLI ----------
 var argv = process.argv.slice(2);
 var opts = {
-    mode:    'audit',
-    file:    null,
-    dialect: 'postgresql',
-    write:   true,
-    corpus:  path.join('sample', 'sample_cfm')
+    mode:        'audit',
+    autoSuggest: false,
+    file:        null,
+    dialect:     'postgresql',
+    write:       true,
+    corpus:      path.join('sample', 'sample_cfm')
 };
 for (var ai = 0; ai < argv.length; ai++) {
     var a = argv[ai];
-    if      (a === '--audit')    opts.mode = 'audit';
-    else if (a === '--targets')  opts.mode = 'targets';
-    else if (a === '--sanitize') opts.mode = 'sanitize';
+    if      (a === '--audit')        opts.mode = 'audit';
+    else if (a === '--targets')      opts.mode = 'targets';
+    else if (a === '--sanitize')     opts.mode = 'sanitize';
+    else if (a === '--auto-suggest') opts.autoSuggest = true;
     else if (a === '--help' || a === '-h') { printHelp(); process.exit(0); }
-    else if (a === '--no-write') opts.write = false;
-    else if (a === '--file')     opts.file = argv[++ai];
-    else if (a === '--dialect')  opts.dialect = argv[++ai];
-    else if (a === '--corpus')   opts.corpus = argv[++ai];
+    else if (a === '--no-write')     opts.write = false;
+    else if (a === '--file')         opts.file = argv[++ai];
+    else if (a === '--dialect')      opts.dialect = argv[++ai];
+    else if (a === '--corpus')       opts.corpus = argv[++ai];
     else { console.error('Unknown arg: ' + a + '\nRun --help for usage.'); process.exit(2); }
 }
 
@@ -71,6 +73,11 @@ function printHelp() {
         '                cfqueries vs features covered by Pro SQL token-equivalence tests',
         '                in tests/run-tests.js, and surfaces corpus locations for any',
         '                uncovered feature so a human can sanitize → add as a new case.',
+        '                Combine with --auto-suggest to ALSO emit pasteable JS code:',
+        '                  node tools/diagnose-corpus.js --sanitize --auto-suggest',
+        '                which auto-applies sanitization rules (real_table → t1/t2,',
+        '                real_col → a/b/c, real strings → val1/val2, #real_expr# → #x#/#y#)',
+        '                and prints ready-to-paste assertEqual fixtures for each gap.',
         '',
         'Options:',
         '  --file NAME       Restrict to one file (basename or full path).',
@@ -529,7 +536,8 @@ function modeSanitize() {
                 if (corpusFeatureExamples[k].length < 3) {
                     corpusFeatureExamples[k].push({
                         file: name, name: r.name, lineStart: r.start + 1, lineEnd: r.end + 1,
-                        snippet: extractSnippetForFeature(body, k)
+                        snippet: extractSnippetForFeature(body, k),
+                        fullBody: body  // for --auto-suggest sanitization
                     });
                 }
             });
@@ -586,7 +594,520 @@ function modeSanitize() {
             });
         });
         console.log('────────────────────────────────────────────────────────────');
+
+        if (opts.autoSuggest) emitAutoSuggestions(gaps, corpusFeatureExamples);
     }
+}
+
+// Emit pasteable JS code blocks for the first corpus example of each gap.
+// Each block is an array literal of the form ['description', 'sanitized cfquery'].
+// Drop into tests/run-tests.js inside the runProSQLTokenEquivalenceTests
+// `cases` array. The output is best-effort — the human should still review
+// the diff for false-rename collisions (e.g. function names that happened
+// to look like custom funcs because the catalog missed them).
+function emitAutoSuggestions(gaps, corpusFeatureExamples) {
+    console.log('\n=== --auto-suggest: pasteable JS fixtures for tests/run-tests.js ===');
+    console.log('Each block below is one ready-to-paste case for the runProSQLTokenEquivalenceTests');
+    console.log('`cases` array. Sanitization is best-effort:');
+    console.log('  • real table names → t1, t2, ...');
+    console.log('  • real column names → a, b, c, ...');
+    console.log('  • custom functions → fn1, fn2, ...');
+    console.log('  • string literals → \'val1\', \'val2\', ...');
+    console.log('  • CFML expressions #foo# → #x#, #y#, ...');
+    console.log('Known SQL functions (sum/count/lower/etc.) are kept verbatim.');
+    console.log('Review the diff before pasting — false-renames are possible if the');
+    console.log('catalog missed a known function or scope prefix.');
+    console.log('────────────────────────────────────────────────────────────\n');
+
+    gaps.forEach(function(featureKey) {
+        var examples = corpusFeatureExamples[featureKey] || [];
+        if (examples.length === 0) return;
+        var ex = examples[0];  // sanitize first example only — keeps output compact
+        var sanitized;
+        try {
+            sanitized = sanitizeSnippet(ex.fullBody);
+        } catch (e) {
+            console.log('// GAP ' + featureKey + ' — sanitization failed: ' + (e.message || e));
+            return;
+        }
+        // Collapse trailing whitespace lines that came from the cfquery wrapper.
+        sanitized = sanitized.replace(/\n[\t ]*\n/g, '\n').trim();
+        var desc = 'corpus-derived gap: ' + featureKey + ' (auto-sanitized from ' + ex.file +
+                   ' #' + ex.name + ' lines ' + ex.lineStart + '-' + ex.lineEnd + ', REVIEW BEFORE PASTE)';
+        console.log('// ----- GAP: ' + featureKey + ' -----');
+        console.log('[' + JSON.stringify(desc) + ',');
+        console.log('\t"' + jsStringEscape(sanitized) + '"],');
+        console.log('');
+    });
+    console.log('────────────────────────────────────────────────────────────');
+    console.log('Workflow: copy the desired block(s) above, paste into the `cases`');
+    console.log('array near the end of runProSQLTokenEquivalenceTests, run');
+    console.log('`node tests/run-tests.js` to confirm, then `node tools/diagnose-corpus.js');
+    console.log('--sanitize` to verify the gap is closed.');
+}
+
+// ============================================================================
+// Sanitizer for --auto-suggest. Best-effort, pragmatic 80/20 implementation:
+//
+//   real_table_name (after FROM/JOIN/UPDATE/INTO)  →  t1, t2, t3, ...
+//   alias for that table (immediately after, AS or whitespace)  →  same tN
+//   real_column_name (anywhere else as IDENT)      →  a, b, c, d, ...
+//   custom_function(...)  (IDENT followed by `(`, not in known SQL funcs)
+//                                                  →  fn1, fn2, ...
+//   'real string literal'                          →  'val1', 'val2', ...
+//   #real_cfml_expr#                               →  #x#, #y#, #z#, ...
+//   datasource attrs / cfqueryparam values / etc.  →  best-effort sanitized
+//
+// PRESERVED VERBATIM:
+//   - SQL keywords (SELECT, FROM, WHERE, AND, OR, JOIN, etc.)
+//   - Well-known SQL function names (sum, count, lower, ltrim, ...)
+//   - CFML tag NAMES and ATTRIBUTE NAMES (cfquery / name= / cfsqltype=)
+//   - Numeric literals
+//   - Punctuation, operators
+//   - SQL/CFML comments
+//
+// Output is structurally identical to input — only proprietary identifiers
+// are renamed. A human reviewer can spot-check by skimming the diff.
+// ============================================================================
+
+var SANITIZE_SQL_KEYWORDS = {};
+[
+    'select','distinct','from','where','and','or','not','in','between','like','ilike','is','null','as',
+    'on','using','join','inner','left','right','full','outer','cross','natural',
+    'group','by','having','order','asc','desc',
+    'limit','offset','fetch','next','rows','only','first',
+    'union','intersect','except','all',
+    'case','when','then','else','end',
+    'insert','into','values','returning',
+    'update','set','delete',
+    'with','recursive','merge','truncate',
+    'true','false',
+    'cast','over','partition','within','filter',
+    'exists'
+].forEach(function(k) { SANITIZE_SQL_KEYWORDS[k] = 1; });
+
+// Well-known SQL functions — kept verbatim because they carry no business info.
+var SANITIZE_KNOWN_FUNCS = {};
+[
+    'sum','count','avg','min','max','count_big',
+    'lower','upper','ltrim','rtrim','trim','length','char_length',
+    'substring','substr','left','right','replace','concat','coalesce','nullif',
+    'cast','convert','to_char','to_date','to_number','to_timestamp',
+    'date_format','str_to_date','format',
+    'now','current_date','current_timestamp','sysdate','getdate',
+    'year','month','day','hour','minute','second','dayofweek','dayofmonth','dayofyear',
+    'datediff','dateadd','datepart','date_add','date_sub','date_trunc','date_part',
+    'abs','ceil','ceiling','floor','round','mod','power','sqrt','exp','ln','log','sign',
+    'group_concat','string_agg','listagg',
+    'row_number','rank','dense_rank','lag','lead','first_value','last_value','nth_value','ntile',
+    'json_extract','jsonb_extract_path','json_value',
+    'isnull','ifnull','nvl','decode',
+    'preservesinglequotes' // CF-specific, but commonly used; preserve verbatim
+].forEach(function(k) { SANITIZE_KNOWN_FUNCS[k] = 1; });
+
+// Position-tracking SQL/CFML tokenizer. Returns {kind, text, start, end}.
+function sanitizeTokenize(text) {
+    var toks = [];
+    var i = 0;
+    var n = text.length;
+    while (i < n) {
+        var c = text[i];
+        var startPos = i;
+        // CFML markup comment
+        if (text.substr(i, 5) === '<!---') {
+            var ce = text.indexOf('--->', i + 5);
+            if (ce === -1) { toks.push({kind:'COMMENT_CFM', text:text.slice(i), start:i, end:n}); i = n; break; }
+            toks.push({kind:'COMMENT_CFM', text:text.slice(i, ce + 4), start:i, end:ce + 4});
+            i = ce + 4; continue;
+        }
+        // SQL line comment
+        if (c === '-' && text[i+1] === '-') {
+            var j = i;
+            while (j < n && text[j] !== '\n') j++;
+            toks.push({kind:'COMMENT_SQL', text:text.slice(i, j), start:i, end:j});
+            i = j; continue;
+        }
+        // SQL block comment
+        if (c === '/' && text[i+1] === '*') {
+            var be = text.indexOf('*/', i + 2);
+            if (be === -1) { toks.push({kind:'COMMENT_SQL', text:text.slice(i), start:i, end:n}); i = n; break; }
+            toks.push({kind:'COMMENT_SQL', text:text.slice(i, be + 2), start:i, end:be + 2});
+            i = be + 2; continue;
+        }
+        // CFML tag
+        if (c === '<' && /^<\/?cf[a-z]/i.test(text.substr(i, 12))) {
+            var te = text.indexOf('>', i);
+            if (te === -1) { toks.push({kind:'CFML_TAG', text:text.slice(i), start:i, end:n}); i = n; break; }
+            toks.push({kind:'CFML_TAG', text:text.slice(i, te + 1), start:i, end:te + 1});
+            i = te + 1; continue;
+        }
+        // CFML expression #...# (## is escape)
+        if (c === '#') {
+            var j = i + 1;
+            while (j < n) {
+                if (text[j] === '#') {
+                    if (text[j+1] === '#') { j += 2; continue; }
+                    break;
+                }
+                j++;
+            }
+            toks.push({kind:'CFML_EXPR', text:text.slice(i, j + 1), start:i, end:j + 1});
+            i = j + 1; continue;
+        }
+        // Whitespace — emit as WS token so we can preserve formatting
+        if (c === ' ' || c === '\t' || c === '\n' || c === '\r') {
+            var j = i;
+            while (j < n && (text[j]===' '||text[j]==='\t'||text[j]==='\n'||text[j]==='\r')) j++;
+            toks.push({kind:'WS', text:text.slice(i, j), start:i, end:j});
+            i = j; continue;
+        }
+        // Strings
+        if (c === "'" || c === '"') {
+            var q = c;
+            var j = i + 1;
+            while (j < n) {
+                if (text[j] === q) {
+                    if (text[j+1] === q) { j += 2; continue; }
+                    break;
+                }
+                j++;
+            }
+            toks.push({kind: q === "'" ? 'STRING_SQ' : 'STRING_DQ', text:text.slice(i, j + 1), start:i, end:j + 1});
+            i = j + 1; continue;
+        }
+        // Numbers
+        if (c >= '0' && c <= '9') {
+            var j = i;
+            while (j < n && ((text[j] >= '0' && text[j] <= '9') || text[j] === '.')) j++;
+            if (j < n && (text[j] === 'e' || text[j] === 'E')) {
+                j++;
+                if (j < n && (text[j] === '+' || text[j] === '-')) j++;
+                while (j < n && text[j] >= '0' && text[j] <= '9') j++;
+            }
+            toks.push({kind:'NUMBER', text:text.slice(i, j), start:i, end:j});
+            i = j; continue;
+        }
+        // Identifier
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c === '_') {
+            var j = i;
+            while (j < n && /[A-Za-z0-9_]/.test(text[j])) j++;
+            var word = text.slice(i, j);
+            var lower = word.toLowerCase();
+            toks.push({kind: SANITIZE_SQL_KEYWORDS[lower] ? 'KEYWORD' : 'IDENT', text:word, start:i, end:j});
+            i = j; continue;
+        }
+        // Punct (single char — multi-char operators handled by adjacent puncts)
+        toks.push({kind:'PUNCT', text:c, start:i, end:i+1});
+        i++;
+    }
+    return toks;
+}
+
+function sanitizeSnippet(text) {
+    var tokens = sanitizeTokenize(text);
+    var n = tokens.length;
+
+    // Mappings (consistent across the whole snippet)
+    var maps = { table: {}, column: {}, cfunc: {}, sstr: {}, dstr: {}, expr: {} };
+    var counters = { table: 0, column: 0, cfunc: 0, sstr: 0, dstr: 0, expr: 0 };
+    var POOL = {
+        table: ['t1','t2','t3','t4','t5','t6','t7','t8','t9','t10','t11','t12'],
+        column: ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s'],
+        cfunc: ['fn1','fn2','fn3','fn4','fn5','fn6'],
+        sstr: ['val1','val2','val3','val4','val5','val6','val7','val8'],
+        dstr: ['Val1','Val2','Val3','Val4','Val5','Val6'],
+        expr: ['x','y','z','w','u','v','p','q']
+    };
+    function pick(category, original) {
+        if (maps[category][original]) return maps[category][original];
+        var pool = POOL[category];
+        var name = pool[counters[category]] || (category[0] + counters[category]);
+        counters[category]++;
+        maps[category][original] = name;
+        return name;
+    }
+
+    // Helper: next non-WS token index (or -1)
+    function nextNonWs(from) {
+        for (var k = from; k < n; k++) {
+            if (tokens[k].kind !== 'WS') return k;
+        }
+        return -1;
+    }
+    function prevNonWs(from) {
+        for (var k = from; k >= 0; k--) {
+            if (tokens[k].kind !== 'WS') return k;
+        }
+        return -1;
+    }
+
+    // Pass 1: tag IDENT tokens with semantic role.
+    // States: AFTER_FROM_OR_JOIN → next IDENT is TABLE; the IDENT right
+    // after a TABLE (separated only by WS, not a comma/keyword) is its ALIAS
+    // (mapped to the same tN). AS keyword between TABLE and ALIAS is OK.
+    var roles = new Array(n);  // 'TABLE' | 'TABLE_ALIAS' | 'CUSTOM_FUNC' | 'COLUMN' | undefined
+    var awaitingTable = false;
+    var lastTableIdx = -1;
+    var awaitingAlias = false;
+
+    for (var i = 0; i < n; i++) {
+        var t = tokens[i];
+        if (t.kind === 'WS' || t.kind === 'COMMENT_SQL' || t.kind === 'COMMENT_CFM') continue;
+        if (t.kind === 'KEYWORD') {
+            var k = t.text.toLowerCase();
+            if (k === 'from' || k === 'join' || k === 'update' || (k === 'into' && i > 0)) {
+                awaitingTable = true;
+                awaitingAlias = false;
+                continue;
+            }
+            if (k === 'as' && awaitingAlias) {
+                continue; // keep awaitingAlias
+            }
+            // Any other keyword breaks the alias / table-tracking state
+            awaitingTable = false;
+            awaitingAlias = false;
+            continue;
+        }
+        if (t.kind === 'PUNCT') {
+            // `,` after table starts a new table position (if in FROM list)
+            if (t.text === ',' && lastTableIdx !== -1 && awaitingAlias) {
+                // Comma after `FROM t1, ...` → next IDENT is another table
+                awaitingTable = true;
+                awaitingAlias = false;
+                continue;
+            }
+            // `(` immediately after IDENT was already handled below
+            if (t.text === '(') {
+                awaitingAlias = false;
+            }
+            continue;
+        }
+        if (t.kind === 'IDENT') {
+            var nx = nextNonWs(i + 1);
+            var isCall      = nx !== -1 && tokens[nx].kind === 'PUNCT' && tokens[nx].text === '(';
+            var isQualifier = nx !== -1 && tokens[nx].kind === 'PUNCT' && tokens[nx].text === '.';
+            if (isCall) {
+                var lc = t.text.toLowerCase();
+                roles[i] = SANITIZE_KNOWN_FUNCS[lc] ? 'KNOWN_FUNC' : 'CUSTOM_FUNC';
+                awaitingTable = false;
+                awaitingAlias = false;
+                continue;
+            }
+            if (isQualifier) {
+                // `tablealias.column` — left side is a table alias regardless
+                // of whether we've seen FROM yet. SQL allows forward references.
+                roles[i] = 'TABLE_ALIAS';
+                awaitingTable = false;
+                awaitingAlias = false;
+                continue;
+            }
+            if (awaitingTable) {
+                roles[i] = 'TABLE';
+                lastTableIdx = i;
+                awaitingTable = false;
+                awaitingAlias = true;
+                continue;
+            }
+            if (awaitingAlias) {
+                roles[i] = 'TABLE_ALIAS';
+                awaitingAlias = false;
+                continue;
+            }
+            roles[i] = 'COLUMN';
+            continue;
+        }
+    }
+
+    // Pass 2: build output, preserving original whitespace/punctuation/comments.
+    var out = '';
+    for (var i2 = 0; i2 < n; i2++) {
+        var tok = tokens[i2];
+        switch (tok.kind) {
+            case 'WS':
+            case 'COMMENT_SQL':
+            case 'COMMENT_CFM':
+            case 'KEYWORD':
+            case 'PUNCT':
+            case 'NUMBER':
+                out += tok.text;
+                break;
+            case 'IDENT':
+                if (roles[i2] === 'TABLE') {
+                    // Look ahead for an adjacent TABLE_ALIAS that might already
+                    // be mapped (because a `gl.col` qualifier appeared earlier
+                    // in the SELECT clause before this `FROM ... gl` line).
+                    // If found, reuse its slot so `FROM gen_ledger_detail gl`
+                    // becomes `FROM t1 t1` (alias and table point to same name).
+                    var tblLc = tok.text.toLowerCase();
+                    var aliasIdx = -1;
+                    for (var fwd = i2 + 1; fwd < n; fwd++) {
+                        if (tokens[fwd].kind === 'WS') continue;
+                        if (tokens[fwd].kind === 'KEYWORD' && tokens[fwd].text.toLowerCase() === 'as') continue;
+                        if (roles[fwd] === 'TABLE_ALIAS') { aliasIdx = fwd; break; }
+                        break;  // hit something else — no alias here
+                    }
+                    var aliasLc = aliasIdx !== -1 ? tokens[aliasIdx].text.toLowerCase() : null;
+                    if (aliasLc && maps.table[aliasLc]) {
+                        maps.table[tblLc] = maps.table[aliasLc];
+                        out += maps.table[aliasLc];
+                    } else {
+                        out += pick('table', tblLc);
+                    }
+                }
+                else if (roles[i2] === 'TABLE_ALIAS') {
+                    var aliasLc2 = tok.text.toLowerCase();
+                    if (maps.table[aliasLc2]) {
+                        out += maps.table[aliasLc2];
+                    } else {
+                        // Find nearest preceding TABLE — share its mapping
+                        var tableText = null;
+                        for (var bk2 = i2 - 1; bk2 >= 0; bk2--) {
+                            if (roles[bk2] === 'TABLE') { tableText = tokens[bk2].text.toLowerCase(); break; }
+                        }
+                        if (tableText && maps.table[tableText]) {
+                            maps.table[aliasLc2] = maps.table[tableText];
+                            out += maps.table[tableText];
+                        } else {
+                            out += pick('table', aliasLc2);
+                        }
+                    }
+                }
+                else if (roles[i2] === 'CUSTOM_FUNC')      out += pick('cfunc', tok.text.toLowerCase());
+                else if (roles[i2] === 'KNOWN_FUNC')       out += tok.text;
+                else                                       out += pick('column', tok.text.toLowerCase());
+                break;
+            case 'STRING_SQ':
+                // 'foo' → 'val1' but preserve #...# CFML interpolation INSIDE.
+                out += "'" + sanitizeStringInner(tok.text.slice(1, -1), maps, counters, pick, "'") + "'";
+                break;
+            case 'STRING_DQ':
+                out += '"' + sanitizeStringInner(tok.text.slice(1, -1), maps, counters, pick, '"') + '"';
+                break;
+            case 'CFML_EXPR':
+                // #foo_bar# → #x# (sanitize inner identifier path)
+                out += '#' + sanitizeCfmlExprInner(tok.text.slice(1, -1), maps, counters, pick) + '#';
+                break;
+            case 'CFML_TAG':
+                out += sanitizeCfmlTagText(tok.text, maps, counters, pick);
+                break;
+            default:
+                out += tok.text;
+        }
+    }
+    return out;
+}
+
+// Inside a string literal, preserve #...# interpolation chunks (sanitize the
+// inner expression) but replace the static text with a single 'valN' marker.
+// Heuristic: if the string contains at least one '#', split on #...#-runs and
+// keep them; otherwise replace the whole string with 'valN'.
+function sanitizeStringInner(content, maps, counters, pick, quote) {
+    if (content.indexOf('#') === -1) {
+        return pick(quote === "'" ? 'sstr' : 'dstr', content);
+    }
+    // Walk and replace bare text segments with valN, sanitize #...# chunks
+    var out = '';
+    var i = 0;
+    var hadText = false;
+    while (i < content.length) {
+        if (content[i] === '#') {
+            // collect #...# block
+            var j = i + 1;
+            while (j < content.length && content[j] !== '#') j++;
+            out += '#' + sanitizeCfmlExprInner(content.slice(i+1, j), maps, counters, pick) + '#';
+            i = j + 1;
+            continue;
+        }
+        // walk to next # or end
+        var k = i;
+        while (k < content.length && content[k] !== '#') k++;
+        var chunk = content.slice(i, k);
+        if (chunk.trim() !== '') {
+            // replace static chunk with %V where V is val placeholder, but only first time
+            if (!hadText) {
+                out += '%' + pick(quote === "'" ? 'sstr' : 'dstr', chunk) + '%';
+                hadText = true;
+            } else {
+                out += '%' + pick(quote === "'" ? 'sstr' : 'dstr', chunk) + '%';
+            }
+        } else {
+            out += chunk;
+        }
+        i = k;
+    }
+    return out;
+}
+
+// Inside #...#, sanitize identifier chain. e.g. `cookie.cookcfnunique` →
+// `cookie.x`. Preserve `cookie.` / `session.` / `request.` / `url.` /
+// `form.` / `arguments.` prefixes (scopes are not proprietary).
+var CF_SCOPE_PREFIXES = { cookie:1, session:1, request:1, url:1, form:1, arguments:1, application:1, server:1, variables:1 };
+function sanitizeCfmlExprInner(expr, maps, counters, pick) {
+    // If pure function call like fn('...') keep function structure but sanitize args
+    // For simplicity: replace any identifier with x/y/z (consistent), keep
+    // operators, function calls, scope prefixes, and string literals inside.
+    var subToks = sanitizeTokenize(expr);
+    var out = '';
+    for (var i = 0; i < subToks.length; i++) {
+        var st = subToks[i];
+        if (st.kind === 'IDENT') {
+            var lc = st.text.toLowerCase();
+            // Function-call check
+            var nx = i + 1;
+            while (nx < subToks.length && subToks[nx].kind === 'WS') nx++;
+            if (nx < subToks.length && subToks[nx].kind === 'PUNCT' && subToks[nx].text === '(') {
+                out += SANITIZE_KNOWN_FUNCS[lc] ? st.text : pick('cfunc', lc);
+                continue;
+            }
+            if (CF_SCOPE_PREFIXES[lc]) {
+                out += lc;
+                continue;
+            }
+            out += pick('expr', lc);
+        } else if (st.kind === 'STRING_SQ') {
+            out += "'" + sanitizeStringInner(st.text.slice(1, -1), maps, counters, pick, "'") + "'";
+        } else if (st.kind === 'STRING_DQ') {
+            out += '"' + sanitizeStringInner(st.text.slice(1, -1), maps, counters, pick, '"') + '"';
+        } else {
+            out += st.text;
+        }
+    }
+    return out;
+}
+
+// Sanitize a CFML tag's inner text. Most tags have attribute values that
+// may contain proprietary data: `<cfquery datasource="real_ds_name" name="qs_real">`.
+// We sanitize:
+//   - datasource="..." → datasource="ds"
+//   - name="..."       → name="q"
+//   - value="#...#"    → value="#x#"  (via sanitizeStringInner / sanitizeCfmlExprInner)
+//   - template="..."   → template="t.cfm"
+// Preserve attribute NAMES and cfsqltype values (they're CFML constants, not data).
+function sanitizeCfmlTagText(tag, maps, counters, pick) {
+    return tag
+        .replace(/datasource\s*=\s*"[^"]*"/gi, 'datasource="ds"')
+        .replace(/datasource\s*=\s*'[^']*'/gi, "datasource='ds'")
+        .replace(/template\s*=\s*"[^"]*"/gi, 'template="t.cfm"')
+        .replace(/template\s*=\s*'[^']*'/gi, "template='t.cfm'")
+        .replace(/name\s*=\s*"([^"]*)"/gi, 'name="q"')
+        .replace(/name\s*=\s*'([^']*)'/gi, "name='q'")
+        .replace(/query\s*=\s*"([^"]*)"/gi, 'query="loop_q"')
+        .replace(/value\s*=\s*"([^"]*)"/gi, function(m, v) {
+            return 'value="' + sanitizeStringInner(v, maps, counters, pick, '"') + '"';
+        })
+        .replace(/value\s*=\s*'([^']*)'/gi, function(m, v) {
+            return "value='" + sanitizeStringInner(v, maps, counters, pick, "'") + "'";
+        })
+        .replace(/value\s*=\s*(#[^>\s]*?#)/gi, function(m, v) {
+            // bare-#expr# attribute value
+            return 'value=#' + sanitizeCfmlExprInner(v.slice(1, -1), maps, counters, pick) + '#';
+        });
+}
+
+// Escape a string for embedding inside a JS double-quoted literal
+// (the form used in tests/run-tests.js token-equivalence cases).
+function jsStringEscape(s) {
+    return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\t/g, '\\t').replace(/\r/g, '\\r');
 }
 
 // Pull a small (≤ 6-line) snippet around the first match of feature f.key.
