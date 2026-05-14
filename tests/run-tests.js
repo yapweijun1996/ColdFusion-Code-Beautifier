@@ -810,6 +810,39 @@ assertEqual(
 	'function f() {\n\treturn {\n\t\touter: {\n\t\t\tinner: 1\n\t\t} };\n}'
 );
 
+/* Regression: regex literals containing `[` `]` must not count as
+ * brackets. Repro: sample/ai_chatbox_js_runtime_send.cfm had a
+ *   var markers = [
+ *       /\n\s*\[OBSERVER CRITIC\b[\s\S]*$/i,
+ *       ...
+ *   ];
+ * block where each regex contributed 2 opens (`\[` + `[\s\S]`) but only
+ * 1 close (`]`), leaking +3 indent across 3 lines so the final closing
+ * `}` of the outer async function landed at depth 3 instead of 0.
+ *
+ * Fix: countBracesOutsideStrings tracks lastSig and treats `/` in
+ * operator position as a regex literal opener, scanning to the matching
+ * `/` (respecting `\` escapes and `[...]` character classes). */
+assertEqual(
+	'regex literal `[\\s\\S]` does not leak indent',
+	runRouter(
+		'function f() {\nvar arr = [\n/\\[a\\][\\s\\S]*$/i,\n/\\[b\\][\\s\\S]*$/i\n];\n}',
+		'cfml', false
+	),
+	'function f() {\n\tvar arr = [\n\t\t/\\[a\\][\\s\\S]*$/i,\n\t\t/\\[b\\][\\s\\S]*$/i\n\t];\n}'
+);
+
+assertEqual(
+	'division operator vs regex literal disambiguation',
+	runRouter(
+		// `x / y` — division (lastSig=value after `x`). `var r = /a[b]/g`
+		// — regex (lastSig=operator after `=`). Both balance properly.
+		'function f() {\nvar z = x / y;\nvar r = /a[b]/g;\nif(z){}\n}',
+		'cfml', false
+	),
+	'function f() {\n\tvar z = x / y;\n\tvar r = /a[b]/g;\n\tif(z){}\n}'
+);
+
 assertEqual(
 	'braces inside string literals do not affect indent',
 	runRouter(

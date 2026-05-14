@@ -287,6 +287,18 @@ function splitAdjacentCFMLTags(code) {
  *                                      DO count — they affect JS nesting)
  *   - line comments           // …    (rest of line)
  *   - block comments          /* … * /  (whole region)
+ *   - regex literals          /.../flags  (with `\` escape and `[...]`
+ *                                      character classes where `/` is
+ *                                      literal). `/` in OPERATOR position
+ *                                      starts a regex; `/` in VALUE
+ *                                      position is the division operator.
+ *
+ * The regex case matters because patterns frequently use `\[` (escaped
+ * literal `[`) and `[\s\S]` (character class) — without protection, the
+ * `[` inside the regex gets counted as an array opener and indent leaks.
+ * Real-world repro: a `var markers = [ /.../, /.../ ]` array of regex
+ * literals in sample/ai_chatbox_js_runtime_send.cfm leaked +3 indent
+ * because each regex contributed 2 opens and 1 close.
  *
  * Returns {open, close}. */
 function countBracesOutsideStrings(s) {
@@ -294,6 +306,12 @@ function countBracesOutsideStrings(s) {
 	var i = 0;
 	var inQ = null;        // null | "'" | '"' | '`'
 	var inBlockComment = false;
+	// `lastSig` tracks whether the previous significant token was a
+	// VALUE (identifier, number, `)`, `]`, string close) or an
+	// OPERATOR (`=`, `(`, `,`, `:`, `;`, `+`, `-`, `*`, `/`, ...).
+	// `/` starts a regex literal only after an operator (or at line
+	// start). Mirrors protectBraceCodeText in deep-format.js.
+	var lastSig = null;    // null | 'value' | 'operator'
 	while (i < s.length) {
 		var c = s[i];
 		if (inBlockComment) {
@@ -302,7 +320,7 @@ function countBracesOutsideStrings(s) {
 		}
 		if (inQ) {
 			if (c === '\\') { i += 2; continue; }
-			if (c === inQ) { inQ = null; i++; continue; }
+			if (c === inQ) { inQ = null; lastSig = 'value'; i++; continue; }
 			i++; continue;
 		}
 		// Line comment — bail until EOL (single-line input → end).
@@ -310,9 +328,38 @@ function countBracesOutsideStrings(s) {
 		// Block comment — single-line only here (multi-line is handled by
 		// the outer beautifier's inBlockComment state).
 		if (c === '/' && s[i + 1] === '*') { inBlockComment = true; i += 2; continue; }
+		// Regex literal — `/` in operator position (start of expression).
+		// Scan forward to matching `/`, respecting `\` escapes and `[...]`
+		// character classes (where `/` is literal). Consume trailing flags.
+		// If we can't find a closer on this line, treat `/` as a division
+		// operator and fall through.
+		if (c === '/' && (lastSig === null || lastSig === 'operator')) {
+			var rs = i + 1;
+			var inClass = false;
+			var closed = false;
+			while (rs < s.length) {
+				var rc = s[rs];
+				if (rc === '\\') { rs += 2; continue; }
+				if (rc === '\n') break;
+				if (rc === '[') inClass = true;
+				else if (rc === ']') inClass = false;
+				else if (rc === '/' && !inClass) { rs++; closed = true; break; }
+				rs++;
+			}
+			if (closed) {
+				while (rs < s.length && /[gimsuy]/.test(s[rs])) rs++;
+				i = rs;
+				lastSig = 'value';
+				continue;
+			}
+			// Not a closed regex on this line — `/` becomes division.
+		}
 		if (c === '"' || c === "'" || c === '`') { inQ = c; i++; continue; }
-		if (c === '{' || c === '[') open++;
-		else if (c === '}' || c === ']') close++;
+		if (c === ' ' || c === '\t') { i++; continue; }
+		if (c === '{' || c === '[') { open++; lastSig = 'operator'; i++; continue; }
+		if (c === '}' || c === ']') { close++; lastSig = 'value'; i++; continue; }
+		if (c === ')' || /[A-Za-z0-9_$]/.test(c)) { lastSig = 'value'; }
+		else { lastSig = 'operator'; }
 		i++;
 	}
 	return { open: open, close: close };
