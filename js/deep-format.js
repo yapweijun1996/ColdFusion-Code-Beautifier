@@ -1545,11 +1545,88 @@ function addBraceCodeParenToken(tokens, value) {
 	return id;
 }
 
+/* Restores `(...)` groups captured by protectBraceCodeParens.
+ *
+ * Single-line tokens: straight substring replace.
+ *
+ * Multi-line tokens (e.g. `(function(evt) { … })` spanning newlines from
+ * the source): need re-indentation. The main format loop applied indent
+ * to the line that holds the placeholder, but each subsequent line of
+ * the token kept the SOURCE's original whitespace verbatim. When the
+ * source had outer-wrap indent (every line +1 tab because the file was
+ * a CFML include), the wrapper line got dedented to top level but the
+ * paren-content body kept its old +1 → wrapper at indent 0 and body at
+ * indent 2, off by one.
+ *
+ * Fix: walk the multi-line token's lines tracking brace depth from 0.
+ * Line containing the placeholder ("host line") sits at baseIndent.
+ * Each subsequent line gets baseIndent + (depth-tab) prefix, with its
+ * original leading whitespace stripped. Closing-brace lines decrement
+ * before applying prefix so `})` aligns with `(function() {`.
+ *
+ * Verified on sample/ai_chatbox_js_runtime_send.cfm L208-211 + L217-219
+ * (commit ada7e54). */
 function restoreBraceCodeParens(code, tokens) {
 	for (var i = 0; i < tokens.length; i++) {
-		code = code.split('__BRACEPAREN_' + i + '__').join(tokens[i]);
+		var placeholder = '__BRACEPAREN_' + i + '__';
+		var value = tokens[i];
+		if (value.indexOf('\n') === -1) {
+			code = code.split(placeholder).join(value);
+			continue;
+		}
+		// Multi-line: each occurrence needs its own re-indent because
+		// the placeholder's host-line indent may differ. Walk
+		// occurrences in order, slicing as we go.
+		var pieces = code.split(placeholder);
+		var rebuilt = pieces[0];
+		for (var k = 1; k < pieces.length; k++) {
+			var hostLineStart = rebuilt.lastIndexOf('\n') + 1;
+			var hostLinePrefix = rebuilt.slice(hostLineStart);
+			var leadMatch = hostLinePrefix.match(/^(\t*)/);
+			var baseIndent = leadMatch ? leadMatch[1] : '';
+			rebuilt += reindentMultilineParenContent(value, baseIndent) + pieces[k];
+		}
+		code = rebuilt;
 	}
 	return code;
+}
+
+/* Re-indents the content of a multi-line paren token so its first line
+ * sits inline with the placeholder and subsequent lines step in/out by
+ * brace depth. Strips each subsequent line's existing leading
+ * whitespace before applying the new prefix. */
+function reindentMultilineParenContent(value, baseIndent) {
+	var lines = value.split('\n');
+	var depth = 0;
+	var out = [];
+	for (var k = 0; k < lines.length; k++) {
+		var trimmed = lines[k].replace(/^[ \t]+/, '');
+		var lineDepth = depth;
+		// Lines that start with a closer pre-decrement (so `})` aligns
+		// with its opener).
+		if (/^[\]}]/.test(trimmed)) lineDepth--;
+		if (lineDepth < 0) lineDepth = 0;
+		var prefix;
+		if (k === 0) {
+			// Host line — placeholder already had `baseIndent` rendered
+			// by the main loop. Emit content verbatim (no prefix here).
+			prefix = '';
+		} else {
+			prefix = baseIndent + repeatTab(lineDepth);
+		}
+		out.push(prefix + trimmed);
+		// Update depth from this line's outer characters. The line's
+		// content may still contain protected __BRACETOKEN_N__ /
+		// __BRACEPAREN_N__ placeholders — they look like
+		// `__BRACETOKEN_0__` with no braces, so counting `{` `[` `}` `]`
+		// on the visible chars is safe.
+		for (var ci = 0; ci < trimmed.length; ci++) {
+			var c = trimmed[ci];
+			if (c === '{' || c === '[') depth++;
+			else if (c === '}' || c === ']') depth--;
+		}
+	}
+	return out.join('\n');
 }
 
 function addBraceCodeToken(tokens, value) {

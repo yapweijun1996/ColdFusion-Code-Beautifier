@@ -2,6 +2,40 @@
 
 ## v7 series (2026-05-14)
 
+### Fix: `formatBraceCode` re-indents multi-line paren-token content on restore
+
+`protectBraceCodeParens` captures balanced `(...)` groups (including
+multi-line `(function() { body })` IIFE / callback patterns) into
+opaque tokens so the simple `{`/`}`/`;` splitter can't mangle for-loop
+heads or argument lists. On restore, single-line tokens reinsert
+cleanly — but **multi-line tokens kept their source's original
+whitespace verbatim**, which mis-aligned when the file had outer-wrap
+indent that got dedented.
+
+Real-world repro: sample/ai_chatbox_js_runtime_send.cfm — source
+wrapped everything at +1 tab (CFML include style). formatBraceCode
+correctly dedented top-level statements like
+`AgentLog.subscribe(function(evt) { … })` from 1 tab to 0, but the
+callback body (inside the paren-token) kept its source's 2 tabs.
+Result: wrapper at indent 0 with body at indent 2 — off by one tab,
+and the closing `});` landed at indent 1 instead of 0.
+
+Fix: rewrote `restoreBraceCodeParens` to walk each multi-line token's
+lines tracking brace depth from 0, applying `baseIndent + depth-tabs`
+prefix (where `baseIndent` is the indent of the placeholder's host
+line in the output). Lines starting with `}` or `]` pre-decrement so
+`})` aligns with its opening `(function() {`. The first line stays
+inline with the placeholder (its prefix is owned by the main format
+loop, not the restorer). Single-line tokens still use the original
+substring replace — zero overhead for the common case.
+
+2 new regression tests:
+- "multi-line paren body re-indents to match dedented wrapper"
+- "nested multi-line parens stay aligned"
+
+Verified on the user fixture: callback bodies now sit one tab inside
+their wrapper; closing `});` aligns with the opening line.
+
 ### Fix: regex literal awareness in `hasTagsOutsideStrings` — string parity preserved across `/'/g` patterns
 
 Third variant of the same content-corruption bug class. User-supplied

@@ -805,6 +805,34 @@ assertEqual(
 	'js'
 );
 
+// Regression: multi-line paren tokens (e.g. AgentLog.subscribe(function(evt) {
+// body; })) must re-indent their body relative to the placeholder's host
+// line, not keep the source's outer-wrap indent. Real-world repro from
+// sample/ai_chatbox_js_runtime_send.cfm L208-211 — source had everything
+// at +1 outer-indent; formatBraceCode stripped the outer wrap on its own
+// split lines (object methods at level 0) but the paren-token body kept
+// its +1 verbatim, producing wrapper at level 0 with body at level 2.
+assertEqual(
+	'js mode — multi-line paren body re-indents to match dedented wrapper',
+	runRouter(
+		// Source has outer-wrap (1 tab on every line). Top-level
+		// declaration should dedent to 0; body of the inner callback
+		// should be at 1 (not 2).
+		'\tAgentLog.subscribe(function(evt) {\n\t\tactivityDrawer.render();\n\t\tif (x) y();\n\t});',
+		'js', false
+	),
+	'AgentLog.subscribe(function(evt) {\n\tactivityDrawer.render();\n\tif (x) y();\n});'
+);
+
+assertEqual(
+	'js mode — nested multi-line parens stay aligned',
+	runRouter(
+		'document.addEventListener(\'evt\', function() {\n\ttry { render(); } catch (_) {}\n});',
+		'js', false
+	),
+	'document.addEventListener(\'evt\', function() {\n\ttry { render(); } catch (_) {}\n});'
+);
+
 assertEqual(
 	'js mode — regex with character class [/] does not poison parity',
 	(function() {
