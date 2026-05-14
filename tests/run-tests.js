@@ -747,11 +747,35 @@ assertEqual(
 	'js'
 );
 
+// Updated 2026-05-14: a leading CFML markup / HTML / JS block / JS line
+// comment banner does NOT disqualify a JS body from 'js' routing. Comment
+// regions are comments, not language semantics. Real CFML tags (<cfset>,
+// <cfif>, <cfquery>) and real HTML tags OUTSIDE strings/comments are what
+// route to 'cfml'. Matches splitLeadingCommentBlock + the
+// formatJsWithLeadingComments path that preserves the banner verbatim.
 assertEqual(
-	'js mode — auto-detect stays cfml when any < tag char present',
+	'js mode — leading CFML markup comment banner does NOT block js routing',
 	(function() {
 		var harness = makeContext('', 'auto');
 		return harness.context.detectLanguage('<!--- header --->\nfunction f() { return 1; }');
+	})(),
+	'js'
+);
+
+assertEqual(
+	'js mode — real CFML tags after banner DO route to cfml',
+	(function() {
+		var harness = makeContext('', 'auto');
+		return harness.context.detectLanguage('<!--- banner --->\n<cfset x = 1>\n<cfif x><cfquery>SELECT 1</cfquery></cfif>');
+	})(),
+	'cfml'
+);
+
+assertEqual(
+	'js mode — real HTML tags route to cfml (mixed markup files)',
+	(function() {
+		var harness = makeContext('', 'auto');
+		return harness.context.detectLanguage('<div>real markup</div>');
 	})(),
 	'cfml'
 );

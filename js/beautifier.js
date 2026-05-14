@@ -632,19 +632,31 @@ return lines.join('\n');
 
 }
 
-/* Returns true iff `code` contains a `<` tag opener (followed by alpha,
- * `!`, or `/`) OUTSIDE of JS strings and comments. Used by detectLanguage
- * so bare JS fragments containing HTML tags inside string literals
- * (`var s = '<div>...'`) are NOT misclassified as CFML.
+/* Returns true iff `code` contains a real `<TAG>` (CFML or HTML tag
+ * opener) OUTSIDE of: JS strings, JS comments, CFML markup comments
+ * (`<!--- --->`), and HTML comments (`<!-- -->`). Used by detectLanguage
+ * so bare JS fragments containing HTML tags inside string literals OR
+ * wrapped in CFML markup comment banners are NOT misclassified as CFML.
  *
- * Real-world repro: sample fragment with `imgHtml += '<div class="...">'`
- * was routed to CFML mode because the regex `/<[a-zA-Z!\/]/` matched the
- * `<div` inside the string; CFML mode's `splitAdjacentCFMLTags` then
- * injected newlines before `</div>` etc., corrupting the JS string
- * literals at runtime. Detection MUST honor JS escape semantics (\\, \',
- * \", template literals) — these are the same lexical rules
- * `formatBraceCode` uses, so this helper is the front-door gate that
- * routes such inputs to the correct formatter. */
+ * What counts as a "real tag" here: `<` followed by alpha or `/` —
+ * i.e. `<div`, `</cfquery`, `<cfset`. Crucially, `<!---` and `<!--`
+ * are SKIPPED (their entire comment region is consumed) rather than
+ * being treated as tag openers. Comment regions don't determine
+ * language semantics; only real tags do.
+ *
+ * Two repros this guards against:
+ * 1. `imgHtml += '<div class="..." onclick="open(\'x\')">';` — the JS
+ *    string contains both HTML AND a `\'` escape. CFML mode's
+ *    splitAdjacentCFMLTags would lose track of the string boundary at
+ *    the `\'` and inject newlines before `</div>` mid-string, breaking
+ *    the JS at runtime.
+ * 2. `<!--- header --->\nfunction f() { … }` — a CFML markup comment
+ *    banner followed by bare JS. The banner is just documentation,
+ *    not CFML semantics, so the file should route to 'js'.
+ *
+ * Both fire only when JS escape semantics matter. detection MUST honor
+ * JS escapes (\\, \', \", template literals) — the same lexical rules
+ * `formatBraceCode` uses. */
 function hasTagsOutsideStrings(code) {
 	if (typeof code !== 'string') return false;
 	var i = 0, n = code.length;
@@ -662,8 +674,22 @@ function hasTagsOutsideStrings(code) {
 		}
 		if (c === '/' && c2 === '/') { inLC = true; i += 2; continue; }
 		if (c === '/' && c2 === '*') { inBC = true; i += 2; continue; }
+		// CFML markup comment <!--- ... ---> — consume entire region.
+		if (c === '<' && c2 === '!' && code[i + 2] === '-' && code[i + 3] === '-' && code[i + 4] === '-') {
+			var endCfm = code.indexOf('--->', i + 5);
+			if (endCfm === -1) return false;  // unterminated → trust JS path
+			i = endCfm + 4; continue;
+		}
+		// HTML comment <!-- ... --> — consume entire region.
+		if (c === '<' && c2 === '!' && code[i + 2] === '-' && code[i + 3] === '-') {
+			var endHtm = code.indexOf('-->', i + 4);
+			if (endHtm === -1) return false;
+			i = endHtm + 3; continue;
+		}
 		if (c === '"' || c === "'" || c === '`') { inQ = c; i++; continue; }
-		if (c === '<' && c2 && /[a-zA-Z!\/]/.test(c2)) return true;
+		// Real tag opener: `<` + letter or `<` + `/`. NOT `<!` (handled
+		// above) and NOT `<` followed by space/digit/punctuation.
+		if (c === '<' && c2 && /[a-zA-Z\/]/.test(c2)) return true;
 		i++;
 	}
 	return false;
@@ -673,16 +699,31 @@ function detectLanguage(code) {
 	if (/^\s*(select|insert|update|delete|with|create|alter|drop)\b/i.test(code)) {
 		return 'sql';
 	}
-	// JS detection: input begins with a JS construct AND has no `<tag>`
-	// chars OUTSIDE strings/comments. Adds common control-flow keywords
-	// (if/for/while/do/switch/return/throw/try) and `(` to the prefix list
-	// so bare-JS fragments like `if (m.role === 'user') { … }` route here.
-	// String-aware tag check means `'<div>'` inside a JS string doesn't
-	// disqualify (this was the bug: CFML mode's splitAdjacentCFMLTags
-	// corrupts JS strings containing HTML because it doesn't honor `\'`
-	// escapes — JS escapes are not part of CFML's string semantics).
+	// JS detection: strip any leading CFML/HTML/JS comment banner FIRST
+	// (so `<!--- header --->\nfunction f()` and `/* file desc */\nvar x =`
+	// both route correctly), then check that the post-banner body
+	// (a) begins with a JS construct AND (b) has no `<tag>` chars
+	// OUTSIDE strings/comments (CFML markup comments are also skipped
+	// here so mid-file `<!--- … --->` documentation doesn't disqualify).
+	//
+	// Construct prefix list includes common control-flow keywords
+	// (if/for/while/do/switch/return/throw/try) plus bare `(` `[` `{`
+	// for IIFEs, arrays, object exports.
+	//
+	// Why this routing matters (data-loss-class fix, not aesthetic):
+	// CFML mode's splitAdjacentCFMLTags uses CFML string semantics
+	// (`\` is literal, NOT an escape). When that walker encounters a
+	// JS string containing `\'` or `\"` (real-world repro:
+	// `'<div onclick="open(\'x\')">'`) it loses track of the string
+	// boundary and starts treating subsequent `<div>` etc. inside the
+	// string as real tags — injecting newlines INSIDE the JS string
+	// literal at runtime. Routing to 'js' lets formatBraceCode (which
+	// has proper JS escape handling) preserve the strings verbatim.
 	var jsPrefix = /^\s*(\/\/|\/\*|function\b|var\b|let\b|const\b|class\b|import\b|export\b|async\b|if\b|for\b|while\b|do\b|switch\b|return\b|throw\b|try\b|\(\s*\)\s*=>|[\[{(])/;
-	if (jsPrefix.test(code) && !hasTagsOutsideStrings(code)) {
+	var bodyAfterBanner = (typeof splitLeadingCommentBlock === 'function')
+		? splitLeadingCommentBlock(code).body
+		: code;
+	if (jsPrefix.test(bodyAfterBanner) && !hasTagsOutsideStrings(code)) {
 		return 'js';
 	}
 	return 'cfml';

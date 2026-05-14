@@ -2,6 +2,47 @@
 
 ## v7 series (2026-05-14)
 
+### Fix: comment-banner-aware detection — CFML markup banner over JS body now routes to `'js'`
+
+The previous string-aware detection fix (same commit day) protected
+inline HTML-in-strings but missed the most common real-world pattern:
+a `.cfm` file with a CFML markup comment banner (`<!--- ... --->`) at
+the top followed by **bare procedural JS** (a `.cfm` include intended
+to be sourced into another page that owns the `<script>` boundary).
+
+Symptom: same data-loss-class corruption as before. The CFML walker
+hit JS `\'` escapes inside strings → lost track of string boundary →
+injected newlines into JS strings mid-literal. Visible damage at
+sample/ai_chatbox_js_runtime_send.cfm L108-115 where multi-line
+HTML-templating strings became syntactically broken.
+
+Fix (two parts):
+
+1. `hasTagsOutsideStrings` now SKIPS entire `<!--- ... --->` and
+   `<!-- ... -->` regions (they're comments, not tag openers). Only
+   real `<TAG>` (alpha or `/` after `<`) outside strings/comments is
+   treated as a CFML/HTML tag signal.
+
+2. `detectLanguage` calls `splitLeadingCommentBlock(code).body` and
+   tests the JS-construct prefix against the **post-banner body**,
+   not the raw source. So `<!--- doc header --->\nfunction f() {…}`
+   now routes to `'js'`. Real CFML tags AFTER the banner
+   (`<cfset>`/`<cfif>`/`<cfquery>`) still route to `'cfml'`.
+
+Verified on the user's actual fixture (`messages_render.cfm` 18KB):
+detectLanguage now returns `'js'`, content-preservation invariant
+holds, all multi-line JS HTML-templating strings preserved verbatim.
+
+3 new regression tests + 1 updated expectation:
+
+- "leading CFML markup comment banner does NOT block js routing"
+  (overrides previous test expectation since the previous behavior
+  was the bug — `<!--- header --->\nfunction f()` should be `'js'`)
+- "real CFML tags after banner DO route to cfml" (locks correct
+  behavior — `<!--- banner --->\n<cfset x = 1>` stays `'cfml'`)
+- "real HTML tags route to cfml" (locks `<div>` outside strings →
+  `'cfml'`)
+
 ### Fix: string-aware tag detection in `detectLanguage` — bare JS with HTML inside strings no longer routes to CFML
 
 User report (sample fixture): a bare JS fragment

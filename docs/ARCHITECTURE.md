@@ -75,14 +75,20 @@ beautifyCodes()                       router (DOM I/O)
 
 `detectLanguage()` routes to `'js'` when BOTH:
 
-1. Input begins with a JS construct — `function` / `var` / `let` / `const` /
-   `class` / `import` / `export` / `async` / `if` / `for` / `while` / `do` /
-   `switch` / `return` / `throw` / `try` / `(…)=>` / `[` / `{` / `(` / `//` /
-   `/*`.
-2. Input has NO `<tag>` chars **outside string literals and comments**
-   (helper `hasTagsOutsideStrings` walks with JS lexer state — strings
-   with `\\` and `\'` escapes, template literals with `${…}`, `//` line
-   comments, `/* */` block comments).
+1. The **post-comment-banner** body begins with a JS construct —
+   `function` / `var` / `let` / `const` / `class` / `import` / `export` /
+   `async` / `if` / `for` / `while` / `do` / `switch` / `return` / `throw`
+   / `try` / `(…)=>` / `[` / `{` / `(` / `//` / `/*`. `splitLeadingCommentBlock`
+   peels off any leading CFML markup (`<!--- --->`), HTML (`<!-- -->`),
+   JS block (`/* */`), or JS line (`//`) comments before the prefix
+   check, so a `.cfm` file that opens with a documentation banner over
+   bare JS still routes correctly.
+2. The full source has NO real `<TAG>` chars outside string literals
+   AND outside comments. `hasTagsOutsideStrings` walks with JS lexer
+   state — strings with `\\`/`\'`/`\"` escapes, template literals with
+   `${…}`, `//` line comments, `/* */` block comments, **and full
+   `<!--- --->` / `<!-- -->` comment regions**. Only `<TAG>` (alpha or
+   `/` after `<`) outside all of those is a real tag.
 
 The string-aware check is what makes JS fragments like
 ```js
