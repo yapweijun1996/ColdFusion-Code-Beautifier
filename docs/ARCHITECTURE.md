@@ -128,6 +128,48 @@ Guest languages (SQL, JS, CSS) live inside a host language (CFML). The guest for
 
 **`protectBraceCodeParens(jsBody)`** — after text protection, wraps every balanced `(…)` as `__BRACEPAREN_N__` so the simple `{` `}` `;` formatter cannot split `for (i = 0; i < n; i++)` or a function argument list.
 
+## Token restoration contract
+
+**Any `protectXxxToken` MUST have a host-context-aware `restoreXxxToken` for multi-line tokens.** This is a hard contract — violating it produces wrong-but-stable alignment bugs (the formatter re-indents code around the token but the token content keeps its source whitespace, off by N tabs).
+
+The contract:
+
+| Token kind | Restore strategy | Why |
+|---|---|---|
+| Single-line tokens | Plain substring replace | Token sits on one line — placeholder's line indent is the only indent needed; main loop already applied it. |
+| Multi-line block comments (`/* … */`) | Strip longest common leading TAB sequence from continuation lines; re-prepend with placeholder's host-line baseIndent | Tabs are structural indent (re-indentable); spaces preserve visual alignment under `/* ` and must NOT be stripped. |
+| Multi-line `(…)` paren groups | Walk lines tracking brace depth from 0. Strip each continuation line's leading whitespace; prepend `baseIndent + depth-tabs`. Lines starting with `}`/`]` pre-decrement so closers align with their openers. | Paren content is real code — its structure dictates indent, not source whitespace. |
+| Multi-line template literals / regex | Verbatim restore (NEVER modify) | Content is syntactically significant — every character + newline is part of the string/pattern value. Re-indent would alter runtime behavior. |
+| Single-line strings | Verbatim restore | Content is significant; can't span newlines anyway. |
+
+Detection at restore time uses the token value's leading chars:
+- starts with `/*` → block comment, re-indent
+- starts with `` ` `` → template literal, verbatim
+- starts with `/` (not `/*` or `//`) → regex, verbatim
+- starts with `"` or `'` → string, verbatim
+- starts with `//` → line comment, single-line (no newline)
+- starts with `(` → paren group, re-indent with depth tracking
+
+Implementations: [`restoreBraceCodeText`](../js/deep-format.js) (commit `e308e69`), [`restoreBraceCodeParens`](../js/deep-format.js) (commit `9156ba7`), shared helpers `reindentMultilineBlockComment` + `reindentMultilineParenContent`.
+
+**Anti-pattern (the bug that motivated this contract)**:
+
+```js
+// WRONG — flat replace mis-aligns multi-line tokens after host context changes.
+function restoreXxx(code, tokens) {
+    for (var i = 0; i < tokens.length; i++) {
+        code = code.split('__XXX_' + i + '__').join(tokens[i]);
+    }
+    return code;
+}
+```
+
+Real-world repros that broke under the flat-replace approach (all 2026-05-14):
+- Multi-line `(function(evt) { body })` callback — body kept source's +1 tab outer-wrap after wrapper got dedented. Visible in `sample/ai_chatbox_js_runtime_send.cfm` L218-222.
+- File-header `/* ========== HEADER … */` block comment — comment kept source's +1 tab after surrounding code got dedented to 0. Visible in same fixture L13-15.
+
+**When adding a new `protectXxxToken`**: also write `restoreXxxToken` that handles the multi-line case. If your token value is always single-line, document that invariant and the restore can stay flat — but you must guarantee no caller can pass multi-line content. Otherwise, add a regression test that exercises a multi-line input.
+
 ## SQL formatter state
 
 The main loop in `beautifySQL` tracks four orthogonal axes:

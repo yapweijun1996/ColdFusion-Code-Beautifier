@@ -12,3 +12,10 @@ Thumbs.db
 *.swp
 .vscode/
 .idea/
+
+# Claude Code harness — transient lock/scratch files.
+# .claude/launch.json IS committed (see existing tracked file); only the
+# transient files inside .claude/ are ignored.
+.claude/scheduled_tasks.lock
+.claude/cache/
+.claude/state/
