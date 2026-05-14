@@ -1,5 +1,10 @@
-# local-only test fixtures (not part of the published demo)
-sample/
+# local-only test fixtures (not part of the published demo).
+# The folder itself IS committed (via sample/.gitkeep) so the
+# idempotency test in tests/run-tests.js has a place to read from;
+# but the *.cfm fixtures inside are developer-private.
+sample/*
+!sample/.gitkeep
+!sample/README.md
 
 # OS / editor noise
 .DS_Store

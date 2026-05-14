@@ -730,6 +730,95 @@ assertEqual(
 	'<cfif x>\n\t<!--- example: <cfquery name="q">SELECT 1</cfquery> --->\n\t<cfset y = 2>\n</cfif>'
 );
 
+/* JS mode — bare JS (no <script> wrapper) routed through formatBraceCode.
+ * Wins over CFML mode: template literals, regex literals, and parenthesized
+ * groups are token-protected before brace splitting.
+ *
+ * Auto-detect routes to JS only when input has zero CFML/HTML tags AND
+ * begins with a JS construct. Files with leading <!---...---> banners
+ * (very common in legacy CFML) stay in cfml mode — that path is exercised
+ * by the existing CFML brace-counter tests above. */
+assertEqual(
+	'js mode — auto-detect picks tag-free JS file',
+	(function() {
+		var harness = makeContext('', 'auto');
+		return harness.context.detectLanguage('function f() { return 1; }');
+	})(),
+	'js'
+);
+
+assertEqual(
+	'js mode — auto-detect stays cfml when any < tag char present',
+	(function() {
+		var harness = makeContext('', 'auto');
+		return harness.context.detectLanguage('<!--- header --->\nfunction f() { return 1; }');
+	})(),
+	'cfml'
+);
+
+assertEqual(
+	'js mode — formatBraceCode protects template literal ${...}',
+	runRouter('var s = `hello ${user.name}; end`;\nif(x){foo();}', 'js', false),
+	// Template literal stays on one line (its body is token-protected so
+	// the `;` inside doesn't trigger a line break, and `${...}` braces
+	// don't drive indentation). `if(x){...}` splits as formatBraceCode
+	// always does: `{` keeps its line, body indents +1, `}` outdents.
+	'var s = `hello ${user.name}; end`;\nif(x){\n\tfoo();\n}'
+);
+
+assertEqual(
+	'js mode — formatBraceCode protects regex literal',
+	runRouter('var r = /\\d+;\\s+/g;\nif(x){y();}', 'js', false),
+	// Regex literal not split on `;` inside the pattern.
+	'var r = /\\d+;\\s+/g;\nif(x){\n\ty();\n}'
+);
+
+assertEqual(
+	'js mode — leading CFML comment header preserved verbatim',
+	runRouter('<!--- file header --->\nfunction f(){return 1;}', 'js', false),
+	'<!--- file header --->\nfunction f(){\n\treturn 1;\n}'
+);
+
+assertEqual(
+	'js mode — js mode is idempotent (output of formatBraceCode is a fixed point)',
+	(function() {
+		var pass1 = runRouter('function f(){var r = /a;b/g;\nreturn `${1};${2}`;}', 'js', false);
+		return runRouter(pass1, 'js', false) === pass1 ? 'idempotent' : 'NOT idempotent';
+	})(),
+	'idempotent'
+);
+
+/* Regression: multi-line JS object literals between CFML tags must not
+ * drift indent. Previous heuristic `includes("{") && !includes("}")` only
+ * decremented ONCE for a line containing two trailing `}`, leaking +1
+ * indent per array entry. Reproduced from sample/ai_chatbox_js_runtime_*.cfm. */
+assertEqual(
+	'js array of object literals between cfml tags closes back to base indent',
+	runRouter(
+		'function f() {\nreturn [\n{ a: 1, args: {} },\n{ a: 2, b: 3,\n  args: { x: 1, y: 2 } },\n{ a: 4, args: { nested: { z: 9 } } }\n];\n}',
+		'cfml', false
+	),
+	'function f() {\n\treturn [\n\t\t{ a: 1, args: {} },\n\t\t{ a: 2, b: 3,\n\t\t\targs: { x: 1, y: 2 } },\n\t\t{ a: 4, args: { nested: { z: 9 } } }\n\t];\n}'
+);
+
+assertEqual(
+	'trailing multi-close `} },` decrements two levels at once',
+	runRouter(
+		'function f() {\nreturn {\nouter: {\ninner: 1\n} };\n}',
+		'cfml', false
+	),
+	'function f() {\n\treturn {\n\t\touter: {\n\t\t\tinner: 1\n\t\t} };\n}'
+);
+
+assertEqual(
+	'braces inside string literals do not affect indent',
+	runRouter(
+		'function f() {\nvar s = "if (x) { y(); } else { z(); }";\nvar t = 1;\n}',
+		'cfml', false
+	),
+	'function f() {\n\tvar s = "if (x) { y(); } else { z(); }";\n\tvar t = 1;\n}'
+);
+
 /* Phase 3 — WHERE hoisting + split-format-recombine unit tests.
  *   - splitCfqueryBodyAtCfifTree: slice {pre, treeLines, post}
  *   - detectAllLeavesStartWithWhere: precondition for hoisting
@@ -1784,6 +1873,77 @@ var USER_CASE_INPUTS = [
 USER_CASE_INPUTS.forEach(function(pair) {
 	assertContentPreserved(pair[0], pair[1], 'cfml', false);
 });
+
+/* ===================================================================
+ * Sample-folder idempotency suite.
+ *
+ * Walks `sample/*.cfm`, beautifies each file, then beautifies the
+ * output and asserts byte-equality. Idempotency is the strongest
+ * possible regression catch for indent drift / spurious whitespace
+ * edits / CFML auto-split rules — if the formatter is honest, a
+ * second pass over its own output must be a no-op.
+ *
+ * The sample/ folder is committed (via .gitkeep + README.md) but its
+ * *.cfm contents are gitignored so each developer can drop their
+ * private real-world inputs without leaking proprietary code. When
+ * the folder is empty, this suite logs SKIP and stays green — no CI
+ * dependency on fixtures that don't ship.
+ *
+ * Two variants per file: deep-format-OFF and deep-format-ON. The
+ * OFF variant exercises the pure CFML-tag pass + bare-JS brace
+ * counter; the ON variant additionally routes <cfquery> through
+ * SQL formatter, <script> through formatBraceCode, <style> through
+ * formatCSSCode. Both must idempotent.
+ * =================================================================== */
+(function runSampleIdempotencySuite() {
+	var sampleDir = 'sample';
+	var entries;
+	try {
+		entries = fs.readdirSync(sampleDir).filter(function(f) {
+			return /\.cfm$/i.test(f);
+		});
+	} catch (err) {
+		console.log('SKIP idempotency (sample/ unreadable: ' + (err && err.message) + ')');
+		return;
+	}
+	if (entries.length === 0) {
+		console.log('SKIP idempotency (no *.cfm in sample/) — drop a fixture to enable');
+		return;
+	}
+	var pass = 0;
+	var fail = 0;
+	function diffLine(a, b) {
+		var aLines = a.split('\n');
+		var bLines = b.split('\n');
+		var n = Math.min(aLines.length, bLines.length);
+		for (var i = 0; i < n; i++) {
+			if (aLines[i] !== bLines[i]) {
+				return 'line ' + (i + 1) + ' diverges:\n  pass1: ' + JSON.stringify(aLines[i]) + '\n  pass2: ' + JSON.stringify(bLines[i]);
+			}
+		}
+		if (aLines.length !== bLines.length) {
+			return 'line counts differ (pass1=' + aLines.length + ', pass2=' + bLines.length + ')';
+		}
+		return 'unknown';
+	}
+	entries.forEach(function(name) {
+		var src = fs.readFileSync(sampleDir + '/' + name, 'utf8');
+		[false, true].forEach(function(deep) {
+			var label = name + ' (deep=' + (deep ? 'on' : 'off') + ')';
+			var pass1 = runRouter(src, 'auto', deep);
+			var pass2 = runRouter(pass1, 'auto', deep);
+			if (pass1 === pass2) {
+				pass++;
+			} else {
+				fail++;
+				console.log('\nFAIL idempotency: ' + label);
+				console.log('  ' + diffLine(pass1, pass2));
+				process.exitCode = 1;
+			}
+		});
+	});
+	console.log('PASS sample idempotency: ' + pass + ' file/mode pairs across ' + entries.length + ' fixture(s)' + (fail ? ' (' + fail + ' failed)' : ''));
+})();
 
 if (!process.exitCode) {
 	console.log('All tests passed (including ' + USER_CASE_INPUTS.length + ' content-preservation invariants).');

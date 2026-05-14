@@ -278,6 +278,67 @@ function splitAdjacentCFMLTags(code) {
 	return out;
 }
 
+/* String-aware brace/bracket counter for one line of JS/CSS/JSON-ish text.
+ *
+ * Counts `{` `[` (openers) and `}` `]` (closers) that appear OUTSIDE
+ *   - single-quoted strings   '...'   (with `\` escape)
+ *   - double-quoted strings   "..."   (with `\` escape)
+ *   - template literals       `...`   (with `\` escape; `${…}` braces
+ *                                      DO count — they affect JS nesting)
+ *   - line comments           // …    (rest of line)
+ *   - block comments          /* … * /  (whole region)
+ *
+ * Returns {open, close}. */
+function countBracesOutsideStrings(s) {
+	var open = 0, close = 0;
+	var i = 0;
+	var inQ = null;        // null | "'" | '"' | '`'
+	var inBlockComment = false;
+	while (i < s.length) {
+		var c = s[i];
+		if (inBlockComment) {
+			if (c === '*' && s[i + 1] === '/') { inBlockComment = false; i += 2; continue; }
+			i++; continue;
+		}
+		if (inQ) {
+			if (c === '\\') { i += 2; continue; }
+			if (c === inQ) { inQ = null; i++; continue; }
+			i++; continue;
+		}
+		// Line comment — bail until EOL (single-line input → end).
+		if (c === '/' && s[i + 1] === '/') break;
+		// Block comment — single-line only here (multi-line is handled by
+		// the outer beautifier's inBlockComment state).
+		if (c === '/' && s[i + 1] === '*') { inBlockComment = true; i += 2; continue; }
+		if (c === '"' || c === "'" || c === '`') { inQ = c; i++; continue; }
+		if (c === '{' || c === '[') open++;
+		else if (c === '}' || c === ']') close++;
+		i++;
+	}
+	return { open: open, close: close };
+}
+
+/* Count consecutive `}`/`]` characters at the start of `s` (after any
+ * leading whitespace, but with NO intervening whitespace between the
+ * closers themselves). Used to pre-decrement indentLevel so the line's
+ * display position reflects its visual depth.
+ *
+ * Examples (return value in brackets):
+ *   `}`        [1]   — single closer, decrement one
+ *   `}}`       [2]   — adjacent closers, decrement two
+ *   `} },`     [1]   — second `}` is trailing (separated by space) and
+ *                      only contributes to next-line indent, NOT this
+ *                      line's display position. This matches the
+ *                      common "} },"-on-its-own-line convention where
+ *                      the line aligns with the inner close.
+ *   `reason:`  [0]   — non-closer leading char */
+function leadingClosersOf(s) {
+	var n = 0, i = 0;
+	while (i < s.length && (s[i] === ' ' || s[i] === '\t')) i++;
+	while (i < s.length && (s[i] === '}' || s[i] === ']')) { n++; i++; }
+	return n;
+}
+
 function beautifyCFML(rawCode, split_html_tag) {
 
 	if(split_html_tag == true){
@@ -481,37 +542,37 @@ function beautifyCFML(rawCode, split_html_tag) {
 		/* maintain_yn [end  ] */
 
 		if(maintain_yn == "n"){
-			/* Decrease [start] */
-			// JavaScript CSS
-			if(line_data.startsWith("}")){
-				indentLevel -= 1;
-			}
-			else if(line_data.startsWith("]")){
-				indentLevel -= 1;
-			}
-			else if(line_data.includes("}") && !line_data.includes("{")){
-				indentLevel -= 1;
-			}
-			/* Decrease [end  ] */
-
+			/* Balanced brace/bracket counting (JS / CSS / JSON-ish lines).
+			 *
+			 * The previous heuristic relied on `startsWith("}")` /
+			 * `endsWith("{")` / `includes("{") && !includes("}")`. That
+			 * mishandles lines like
+			 *   `{ skillName: 'x', toolName: 'y',`        (one `{`, no `}`)
+			 *   `args: { text: '...',`                    (one `{`, no `}`)
+			 *   `reason: "..." } },`                      (two `}`)
+			 * because the third line only decremented ONCE for the two
+			 * trailing `}`s — so each multi-line object literal in an
+			 * array leaks +1 of indent forever. Real-world repro is a
+			 * `<cfm>` file containing a pure JS fragment outside any
+			 * `<script>` tag (no `formatBraceCode` dispatch in that path).
+			 *
+			 * Fix: per-line, count `{ [` (openers) and `} ]` (closers)
+			 * OUTSIDE of string literals, line comments, and block
+			 * comments. Pre-decrement by the number of *leading* closers
+			 * (the visual position of the line itself), then post-adjust
+			 * indentLevel by the net delta. Algebraically that's just
+			 *   indentLevel += (openers - closers)
+			 * but the pre-decrement matters because applyIndent() must
+			 * see the *display* level (leading-closer-discounted), not
+			 * the carry-over level. */
+			var braceCounts = countBracesOutsideStrings(line);
+			var leadingCl   = leadingClosersOf(line);
+			indentLevel -= leadingCl;
 
 			// indentation
-			//lines[i] = ''.padStart(indentLevel * indentSize) + line;
 			applyIndent();
 
-			/* Increase [start] */
-			// JavaScript CSS
-			if(line_data.endsWith("{")){
-				indentLevel += 1;
-			}else if(line_data.endsWith("[")){
-				indentLevel += 1;
-				/* Increase [end  ] */
-			}
-			else if(line_data.includes("{") && !line_data.includes("}")){
-				indentLevel += 1;
-				/* Increase [end  ] */
-			}
-
+			indentLevel += (braceCounts.open - braceCounts.close + leadingCl);
 		}
 
 	}
@@ -528,7 +589,88 @@ function detectLanguage(code) {
 	if (/^\s*(select|insert|update|delete|with|create|alter|drop)\b/i.test(code)) {
 		return 'sql';
 	}
+	// Tag-free input that begins with a JS construct → 'js' mode (routes
+	// through formatBraceCode for robust template-literal / regex / parens
+	// handling). Conservative: ANY `<` followed by alpha/`!`/`/` disqualifies,
+	// so files with even one CFML/HTML tag stay in 'cfml' mode and use the
+	// tag-aware indentation path. The user can still pick 'js' explicitly
+	// from the dropdown to override.
+	if (!/<[a-zA-Z!\/]/.test(code)
+		&& /^\s*(\/\/|\/\*|function\b|var\b|let\b|const\b|class\b|import\b|export\b|async\b|\(\s*\)\s*=>|[\[{])/.test(code)) {
+		return 'js';
+	}
 	return 'cfml';
+}
+
+/* Strip leading CFML markup comments + JS block/line comments from `code`
+ * and return {leading, body}. Lets formatJsWithLeadingComments preserve
+ * file-header comments verbatim while still routing the JS body through
+ * formatBraceCode (which would otherwise reflow indentation inside the
+ * comment regions or skip them entirely depending on token-protection).
+ *
+ * `leading` includes the trailing newline(s) after the last comment so
+ * the body's first line starts at column 0. */
+function splitLeadingCommentBlock(code) {
+	var i = 0;
+	var n = code.length;
+	while (i < n) {
+		// Skip whitespace
+		while (i < n && (code[i] === ' ' || code[i] === '\t' || code[i] === '\n' || code[i] === '\r')) i++;
+		if (i >= n) break;
+		// CFML markup comment <!--- ... --->
+		if (code.substr(i, 5) === '<!---') {
+			var endC = code.indexOf('--->', i + 5);
+			if (endC === -1) break;
+			i = endC + 4;
+			continue;
+		}
+		// HTML comment <!-- ... -->
+		if (code.substr(i, 4) === '<!--') {
+			var endH = code.indexOf('-->', i + 4);
+			if (endH === -1) break;
+			i = endH + 3;
+			continue;
+		}
+		// JS block comment /* ... */
+		if (code.substr(i, 2) === '/*') {
+			var endB = code.indexOf('*/', i + 2);
+			if (endB === -1) break;
+			i = endB + 2;
+			continue;
+		}
+		// JS line comment // ...
+		if (code.substr(i, 2) === '//') {
+			var endL = code.indexOf('\n', i + 2);
+			if (endL === -1) { i = n; break; }
+			i = endL;
+			continue;
+		}
+		break;
+	}
+	return {
+		leading: code.slice(0, i),
+		body: code.slice(i)
+	};
+}
+
+/* Format JS-mode input: pass through formatBraceCode, but preserve any
+ * leading CFML markup / JS comment header verbatim. This is what makes
+ * routing files like sample/ai_chatbox_js_runtime_*.cfm (CFML comment
+ * header + bare JS) safe — the comments don't go through brace splitting
+ * (which would mangle them) but the JS body gets the full treatment. */
+function formatJsWithLeadingComments(code) {
+	if (typeof formatBraceCode !== 'function') return code;
+	var split = splitLeadingCommentBlock(code);
+	if (split.body.trim() === '') {
+		// All comments / whitespace — return as-is.
+		return code;
+	}
+	// Normalize trailing whitespace on the leading block to exactly one
+	// newline so the boundary is predictable and idempotent.
+	var leading = split.leading.replace(/[ \t\r\n]+$/, '');
+	var body = formatBraceCode(split.body, false);
+	if (leading === '') return body;
+	return leading + '\n' + body;
 }
 
 function beautifyCodes() {
@@ -565,7 +707,19 @@ function beautifyCodes() {
 	}
 
 	function runFormat() {
-		if(language == 'sql'){
+		if(language == 'js'){
+			// Bare JS path — routes through formatBraceCode (deep-format.js)
+			// instead of beautifyCFML's per-line brace counter. Wins:
+			//   - Template literals  `..${x}..`     parsed correctly, including
+			//     nested `${ {a:1} }` expressions.
+			//   - Regex literals     /\d+/g         not mistaken for division.
+			//   - String content     "if(x){y}"     not counted as braces.
+			//   - Parens groups      (a, b, c)     held together, not split.
+			// Leading CFML/HTML/JS comment header is preserved verbatim so
+			// files like sample/ai_chatbox_js_runtime_*.cfm (CFML comment
+			// banner + bare JS) round-trip safely.
+			output.value = formatJsWithLeadingComments(rawCode);
+		}else if(language == 'sql'){
 			var canUseProDirect = pro_sql
 				&& typeof formatProSQLSync === 'function'
 				&& typeof isProSQLLoaded === 'function'

@@ -15,7 +15,7 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. N
   - `<cfquery>` body → SQL formatter with CFML token protection (`<cfqueryparam>`, `<cf*>`, `#var#`, `<!--- … --->`).
   - `<script>` body → JS formatter with protected strings, comments, regex literals, template literals (`${…}` nesting), and `(…)` groups.
   - `<style>` body → CSS formatter.
-- **Language selector** with `Auto` / `CFML / HTML` / `SQL` modes; auto-detect routes SQL-looking input directly to the SQL formatter.
+- **Language selector** with `Auto` / `CFML / HTML` / `SQL` / `JavaScript` modes; auto-detect routes SQL-looking input to the SQL formatter and tag-free JS-looking input through `formatBraceCode` (template literals, regex, and parens token-protected).
 - **Auto-copy / auto-clear input / auto-clear output** independent toggles (copy-success guards the output clear).
 - **Force-split `<tag><tag>`** option for dense HTML.
 - **Fullscreen layout** with side-by-side input / output on desktop, stacked on mobile.
