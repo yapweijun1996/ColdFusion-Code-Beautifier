@@ -632,18 +632,57 @@ return lines.join('\n');
 
 }
 
+/* Returns true iff `code` contains a `<` tag opener (followed by alpha,
+ * `!`, or `/`) OUTSIDE of JS strings and comments. Used by detectLanguage
+ * so bare JS fragments containing HTML tags inside string literals
+ * (`var s = '<div>...'`) are NOT misclassified as CFML.
+ *
+ * Real-world repro: sample fragment with `imgHtml += '<div class="...">'`
+ * was routed to CFML mode because the regex `/<[a-zA-Z!\/]/` matched the
+ * `<div` inside the string; CFML mode's `splitAdjacentCFMLTags` then
+ * injected newlines before `</div>` etc., corrupting the JS string
+ * literals at runtime. Detection MUST honor JS escape semantics (\\, \',
+ * \", template literals) — these are the same lexical rules
+ * `formatBraceCode` uses, so this helper is the front-door gate that
+ * routes such inputs to the correct formatter. */
+function hasTagsOutsideStrings(code) {
+	if (typeof code !== 'string') return false;
+	var i = 0, n = code.length;
+	var inQ = null;        // null | "'" | '"' | '`'
+	var inLC = false;       // // line comment
+	var inBC = false;       // /* block comment */
+	while (i < n) {
+		var c = code[i], c2 = code[i + 1];
+		if (inLC) { if (c === '\n') inLC = false; i++; continue; }
+		if (inBC) { if (c === '*' && c2 === '/') { inBC = false; i += 2; continue; } i++; continue; }
+		if (inQ) {
+			if (c === '\\') { i += 2; continue; }  // JS escape
+			if (c === inQ) { inQ = null; i++; continue; }
+			i++; continue;
+		}
+		if (c === '/' && c2 === '/') { inLC = true; i += 2; continue; }
+		if (c === '/' && c2 === '*') { inBC = true; i += 2; continue; }
+		if (c === '"' || c === "'" || c === '`') { inQ = c; i++; continue; }
+		if (c === '<' && c2 && /[a-zA-Z!\/]/.test(c2)) return true;
+		i++;
+	}
+	return false;
+}
+
 function detectLanguage(code) {
 	if (/^\s*(select|insert|update|delete|with|create|alter|drop)\b/i.test(code)) {
 		return 'sql';
 	}
-	// Tag-free input that begins with a JS construct → 'js' mode (routes
-	// through formatBraceCode for robust template-literal / regex / parens
-	// handling). Conservative: ANY `<` followed by alpha/`!`/`/` disqualifies,
-	// so files with even one CFML/HTML tag stay in 'cfml' mode and use the
-	// tag-aware indentation path. The user can still pick 'js' explicitly
-	// from the dropdown to override.
-	if (!/<[a-zA-Z!\/]/.test(code)
-		&& /^\s*(\/\/|\/\*|function\b|var\b|let\b|const\b|class\b|import\b|export\b|async\b|\(\s*\)\s*=>|[\[{])/.test(code)) {
+	// JS detection: input begins with a JS construct AND has no `<tag>`
+	// chars OUTSIDE strings/comments. Adds common control-flow keywords
+	// (if/for/while/do/switch/return/throw/try) and `(` to the prefix list
+	// so bare-JS fragments like `if (m.role === 'user') { … }` route here.
+	// String-aware tag check means `'<div>'` inside a JS string doesn't
+	// disqualify (this was the bug: CFML mode's splitAdjacentCFMLTags
+	// corrupts JS strings containing HTML because it doesn't honor `\'`
+	// escapes — JS escapes are not part of CFML's string semantics).
+	var jsPrefix = /^\s*(\/\/|\/\*|function\b|var\b|let\b|const\b|class\b|import\b|export\b|async\b|if\b|for\b|while\b|do\b|switch\b|return\b|throw\b|try\b|\(\s*\)\s*=>|[\[{(])/;
+	if (jsPrefix.test(code) && !hasTagsOutsideStrings(code)) {
 		return 'js';
 	}
 	return 'cfml';

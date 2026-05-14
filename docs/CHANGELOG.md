@@ -2,6 +2,39 @@
 
 ## v7 series (2026-05-14)
 
+### Fix: string-aware tag detection in `detectLanguage` — bare JS with HTML inside strings no longer routes to CFML
+
+User report (sample fixture): a bare JS fragment
+```js
+if (m.role === 'user') {
+    var html = '<div class="x">' + name + '</div>';
+    var s2 = ' </div>';
+}
+```
+was misclassified as `'cfml'` because the previous `/<[a-zA-Z!\/]/` test
+matched `<div` INSIDE the string literal. CFML mode then ran
+`splitAdjacentCFMLTags` which doesn't honor JS `\'` escape semantics —
+it lost track of the string boundary and injected newlines before
+`</div>` and `</span>`, **producing literal newlines inside JS strings
+at runtime**. The output looked plausible but executed broken
+(`' </div>'` became `'\n\t\t\t\t</div>'`).
+
+Fix: new helper `hasTagsOutsideStrings(code)` walks the source with JS
+lexer state (strings, line/block comments, `\\` and `\'` escapes,
+template literals) and reports `true` only for `<` chars that are real
+tag openers. `detectLanguage()` now requires BOTH a JS-construct prefix
+AND `!hasTagsOutsideStrings(code)` to route to `'js'`. The construct
+prefix list also expanded to include common keywords (`if`, `for`,
+`while`, `do`, `switch`, `return`, `throw`, `try`) and bare `(` so
+real-world JS fragments are not missed.
+
+This is content-corruption-class, not just whitespace drift — added 5
+new regression tests in `tests/run-tests.js` covering: HTML inside
+single/double-quoted strings, HTML inside `/* */` and `//` comments,
+escape-sequence-followed-by-tag, real CFML tags (must still detect
+true), tag after JS code outside strings, idempotency on the fix, and
+character-level content preservation.
+
 ### Fix: balanced brace counter — multi-line JS object literals no longer drift indent
 
 Commit `aa7cb4e`. The CFML beautifier's per-line brace logic for non-tag lines

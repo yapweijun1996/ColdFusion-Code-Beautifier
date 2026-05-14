@@ -73,13 +73,32 @@ beautifyCodes()                       router (DOM I/O)
               └─ if css → <style>   body → formatCSSCode
 ```
 
-`detectLanguage()` routes to `'js'` only when the input has zero `<` tag
-chars AND begins with a JS construct (`function`/`var`/`let`/`const`/`class`/
-`import`/`export`/`async`/`(...)=>`/`{`/`[`/`//`/`/*`). Any leading CFML or
-HTML tag keeps the file in `'cfml'` mode so the tag-aware indentation path
-runs (preserves the compact data-array layout style that `formatBraceCode`'s
-`{` → `{\n` splitting would otherwise explode vertically). User can always
-force `'js'` via the dropdown.
+`detectLanguage()` routes to `'js'` when BOTH:
+
+1. Input begins with a JS construct — `function` / `var` / `let` / `const` /
+   `class` / `import` / `export` / `async` / `if` / `for` / `while` / `do` /
+   `switch` / `return` / `throw` / `try` / `(…)=>` / `[` / `{` / `(` / `//` /
+   `/*`.
+2. Input has NO `<tag>` chars **outside string literals and comments**
+   (helper `hasTagsOutsideStrings` walks with JS lexer state — strings
+   with `\\` and `\'` escapes, template literals with `${…}`, `//` line
+   comments, `/* */` block comments).
+
+The string-aware check is what makes JS fragments like
+```js
+var html = '<div class="x">' + name + '</div>';
+```
+route correctly. Without it, `<div` inside the string matched and the
+file was misclassified as `'cfml'`, sending it through
+`splitAdjacentCFMLTags` (whose string-walker doesn't honor JS escapes)
+and corrupting the JS strings at runtime. The bug was data-loss class,
+not just whitespace drift — see `tests/run-tests.js` cases
+"HTML inside JS string literal preserved verbatim" and
+"JS string literals containing HTML are NOT corrupted".
+
+Any leading CFML/HTML tag OUTSIDE strings keeps the file in `'cfml'`
+mode. The user can also force `'js'` from the dropdown if auto-detect
+errs on a corner case.
 
 ## Token protection (key idea)
 

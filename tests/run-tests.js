@@ -756,6 +756,78 @@ assertEqual(
 	'cfml'
 );
 
+/* Regression: bare JS fragment that has HTML tags ONLY inside string
+ * literals must be detected as 'js', not 'cfml'. Repro from
+ * sample/ai_chatbox_js_runtime_send.cfm — a snippet like
+ *   if (m.role === 'user') {
+ *       var html = '<div class="x">' + name + '</div>';
+ *   }
+ * was routed to CFML mode because the regex `/<[a-zA-Z!\/]/` matched
+ * `<div` inside the string. CFML mode's splitAdjacentCFMLTags then
+ * injected newlines before `</div>` etc., corrupting the JS strings at
+ * runtime (a literal newline ended up INSIDE `'</div>'`). Fix: detect
+ * `<` outside strings/comments using JS lexer semantics. */
+assertEqual(
+	'js mode — auto-detect routes bare-JS-with-HTML-in-strings to js',
+	(function() {
+		var harness = makeContext('', 'auto');
+		return harness.context.detectLanguage(
+			"if (m.role === 'user') {\n\tvar html = '<div class=\"x\">' + name + '</div>';\n}"
+		);
+	})(),
+	'js'
+);
+
+assertEqual(
+	'js mode — HTML inside JS string literal preserved verbatim (no splitAdjacentCFMLTags corruption)',
+	(function() {
+		var harness = makeContext('', 'auto');
+		// Verify hasTagsOutsideStrings correctly skips strings + comments.
+		return [
+			harness.context.hasTagsOutsideStrings("var s = '<div>x</div>';"),         // false — tag in string
+			harness.context.hasTagsOutsideStrings("var s = \"<div>x</div>\";"),       // false — tag in string
+			harness.context.hasTagsOutsideStrings("/* <div> */ var x = 1;"),          // false — tag in block comment
+			harness.context.hasTagsOutsideStrings("// <div>\nvar x = 1;"),            // false — tag in line comment
+			harness.context.hasTagsOutsideStrings("var s = '\\'<div>'; var t;"),      // false — escape + tag in string
+			harness.context.hasTagsOutsideStrings("<cfif x>foo</cfif>"),              // true — real tag
+			harness.context.hasTagsOutsideStrings("var x = 1;\n<div>real</div>")      // true — tag outside any string
+		].join(',');
+	})(),
+	'false,false,false,false,false,true,true'
+);
+
+/* Idempotency on bare-JS-with-HTML-in-strings — second pass must equal
+ * first pass. Confirms the 'js' mode routing actually produces a fixed
+ * point (no further reformatting on re-run). */
+assertEqual(
+	'js mode — bare JS with HTML in strings is idempotent under auto',
+	(function() {
+		var input = "if (m.role === 'user') {\n\tvar html = '<div class=\"x\">' + name + '</div>';\n}";
+		var pass1 = runRouter(input, 'auto', false);
+		var pass2 = runRouter(pass1, 'auto', false);
+		return pass1 === pass2 ? 'idempotent' : 'NOT idempotent (pass1 != pass2)';
+	})(),
+	'idempotent'
+);
+
+/* Content preservation: bare JS with HTML in strings must NOT have its
+ * strings corrupted. The most damaging case is `' </div>'` getting split
+ * to `'\n</div>'` — a literal newline inside the JS string that breaks
+ * the code at runtime. Compare normalized content to ensure no chars
+ * leaked or were dropped. */
+assertEqual(
+	'js mode — JS string literals containing HTML are NOT corrupted',
+	(function() {
+		var input = "if (x) {\n\tvar html = ' </div>';\n\tvar h2 = '<span>x</span>';\n}";
+		var output = runRouter(input, 'auto', false);
+		// Normalize: collapse whitespace, lowercase. Output must contain
+		// the same characters as input (modulo whitespace).
+		function norm(s) { return s.replace(/\s+/g, '').toLowerCase(); }
+		return norm(input) === norm(output) ? 'preserved' : 'CORRUPTED (input: ' + JSON.stringify(input) + ', output: ' + JSON.stringify(output) + ')';
+	})(),
+	'preserved'
+);
+
 assertEqual(
 	'js mode — formatBraceCode protects template literal ${...}',
 	runRouter('var s = `hello ${user.name}; end`;\nif(x){foo();}', 'js', false),
