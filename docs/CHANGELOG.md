@@ -2,6 +2,47 @@
 
 ## v7 series (2026-05-14)
 
+### v7.0.1 — block comment re-indent + empty `{}` collapse
+
+Two follow-up fixes to v7.0.0 reported on
+sample/ai_chatbox_js_runtime_send.cfm:
+
+**Fix 1: multi-line block comments re-indent on restore.** Same bug
+class as the paren-token fix in v7.0.0 (commit 9156ba7) — a multi-line
+`/* ... */` block comment, captured as a token by `protectBraceCodeText`,
+kept its source's outer-wrap `\t` whitespace verbatim during restore.
+When formatBraceCode dedented the surrounding code to top level, the
+comment stayed at +1 tab. Result: file-header comment at indent 1
+above `var x = 1;` at indent 0.
+
+Fix: extended `restoreBraceCodeText` to detect multi-line block
+comments (token starts with `/*`) and re-indent their continuation
+lines. Strips the longest common leading TAB sequence (structural
+indent) from continuation lines, then prepends the placeholder's
+host-line baseIndent. Template literals and regex literals are
+restored verbatim (their content is syntactically significant).
+
+Also: `splitLeadingCommentBlock` no longer peels JS `/* */` or `//`
+comments into the leading region — those now stay in the body so the
+new restore-time re-indent fires. CFML markup `<!--- --->` and HTML
+`<!-- -->` are still peeled (formatBraceCode doesn't understand them).
+
+**Fix 2: empty `{}` and `[]` literals stay on one line.** Naive
+`{` → `{\n` / `}` → `\n}` rewrites turned `var x = {};` into
+`var x = {\n};` (two visually-noisy lines). Sentinel pre-pass replaces
+`{}` and `[]` with `__BRACECODE_EMPTY_OBJ__` / `__BRACECODE_EMPTY_ARR__`
+before the split, then restores at the end.
+
+Updated one existing test expectation (`'deep script preserves regex
+literal with semicolon'` — empty `if(x){}` now stays inline). 4 new
+regression tests:
+- "multi-line block comment re-indents to match dedented code"
+- "empty object literal {} stays inline"
+- "empty array literal [] stays inline"
+- "empty if body if(x){} stays inline"
+
+### v7.0.0 — bare-JS routing fixes (cumulative tag)
+
 ### Fix: `formatBraceCode` re-indents multi-line paren-token content on restore
 
 `protectBraceCodeParens` captures balanced `(...)` groups (including

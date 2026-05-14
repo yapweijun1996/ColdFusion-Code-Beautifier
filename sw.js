@@ -4,7 +4,7 @@
  *   - JS / CSS / SVG / manifest: stale-while-revalidate
  *   - Bump CACHE_VERSION on every release to evict old assets
  */
-const CACHE_VERSION = 'v7.0.0';
+const CACHE_VERSION = 'v7.0.1';
 const CACHE_NAME    = 'cfbeautifier-' + CACHE_VERSION;
 
 const PRECACHE_URLS = [

@@ -1319,6 +1319,15 @@ function formatBraceCode(code, splitAdjacentBlocks) {
 		normalized = normalized.replace(/}\s*(?=[.#A-Za-z_*[])/g, '}\n');
 	}
 
+	// Empty `{}` and `[]` literals stay on one line. Without this guard
+	// the naive `{` → `{\n` / `}` → `\n}` rewrites turn `var x = {};`
+	// into `var x = {\n};` (two lines) — visually verbose for empty
+	// container literals. Mark them with a sentinel so the splits skip
+	// them, then restore at the end.
+	normalized = normalized
+		.replace(/\{\s*\}/g, '__BRACECODE_EMPTY_OBJ__')
+		.replace(/\[\s*\]/g, '__BRACECODE_EMPTY_ARR__');
+
 	normalized = normalized
 		.replace(/{/g, '{\n')
 		.replace(/}/g, '\n}')
@@ -1354,6 +1363,11 @@ function formatBraceCode(code, splitAdjacentBlocks) {
 	}
 
 	var joined = output.join('\n');
+	// Restore empty `{}` and `[]` sentinels (see comment above the
+	// replace block — keeps `var x = {};` on one line).
+	joined = joined
+		.replace(/__BRACECODE_EMPTY_OBJ__/g, '{}')
+		.replace(/__BRACECODE_EMPTY_ARR__/g, '[]');
 	joined = restoreBraceCodeParens(joined, protectedParens.tokens);
 	return restoreBraceCodeText(joined, protectedText.tokens);
 }
@@ -1635,9 +1649,100 @@ function addBraceCodeToken(tokens, value) {
 	return id;
 }
 
+/* Restores text tokens captured by protectBraceCodeText.
+ *
+ * Single-line tokens (line comments, single-line block comments, regex,
+ * single-line strings): straight substring replace.
+ *
+ * Multi-line BLOCK COMMENTS only: re-indent continuation lines so they
+ * align under the placeholder's host-line baseIndent. Strip the source's
+ * outer-wrap indent (longest common leading TAB sequence across
+ * continuation lines — tabs are structural, spaces are visual alignment
+ * to `/* ` so they stay).
+ *
+ * Multi-line TEMPLATE LITERALS and REGEX: NEVER modify content (string
+ * characters are syntactically significant). Restored verbatim even if
+ * mis-aligned in output — fixing those requires content-aware logic
+ * that's out of scope here.
+ *
+ * Real-world repro: sample/ai_chatbox_js_runtime_send.cfm L14-16 — file-
+ * header block comment kept its source `\t` prefix after the surrounding
+ * code got dedented to top-level. Same bug class as the paren-token
+ * restore fix in commit 9156ba7 — multi-line tokens need indent
+ * reconstruction from output context, not from source. */
 function restoreBraceCodeText(code, tokens) {
 	for (var i = 0; i < tokens.length; i++) {
-		code = code.split('__BRACETOKEN_' + i + '__').join(tokens[i]);
+		var placeholder = '__BRACETOKEN_' + i + '__';
+		var value = tokens[i];
+		if (value.indexOf('\n') === -1) {
+			code = code.split(placeholder).join(value);
+			continue;
+		}
+		// Multi-line — only block comments are safe to re-indent.
+		// Template literals and regex content is significant; restore
+		// verbatim.
+		if (value.charAt(0) !== '/' || value.charAt(1) !== '*') {
+			code = code.split(placeholder).join(value);
+			continue;
+		}
+		var pieces = code.split(placeholder);
+		var rebuilt = pieces[0];
+		for (var k = 1; k < pieces.length; k++) {
+			var hostLineStart = rebuilt.lastIndexOf('\n') + 1;
+			var leadMatch = rebuilt.slice(hostLineStart).match(/^(\t*)/);
+			var baseIndent = leadMatch ? leadMatch[1] : '';
+			rebuilt += reindentMultilineBlockComment(value, baseIndent) + pieces[k];
+		}
+		code = rebuilt;
 	}
 	return code;
+}
+
+/* Re-indents the continuation lines of a multi-line block comment.
+ * Line 0 stays inline with the placeholder (the main loop already
+ * rendered baseIndent before it). Continuation lines lose their
+ * source outer-wrap (longest common leading TAB prefix — tabs are
+ * structural indent, while spaces typically align text visually under
+ * `/* ` and must be preserved). Then prefixed with baseIndent.
+ *
+ * For example, source:
+ *     \t/* Header
+ *     \t   Continuation A
+ *     \t   Continuation B *<slash>
+ * Captured token (lines):
+ *     /* Header
+ *     \t   Continuation A
+ *     \t   Continuation B *<slash>
+ * Common leading tabs across continuations: `\t`. Strip → leaves
+ * `   Continuation A`, `   Continuation B *<slash>`. Prepend
+ * baseIndent (which is whatever the main loop applied to host line).
+ * Result if baseIndent is empty:
+ *     /* Header
+ *        Continuation A
+ *        Continuation B *<slash> */
+function reindentMultilineBlockComment(value, baseIndent) {
+	var lines = value.split('\n');
+	if (lines.length < 2) return value;
+	// Find longest common leading TAB sequence across continuation lines
+	// (skip blank lines). Tabs only — spaces preserve text alignment.
+	var sourceTabs = null;
+	for (var k = 1; k < lines.length; k++) {
+		var line = lines[k];
+		if (line.replace(/[ \t]/g, '') === '') continue;  // blank
+		var lt = line.match(/^\t*/)[0];
+		if (sourceTabs === null || lt.length < sourceTabs.length) {
+			sourceTabs = lt;
+		}
+	}
+	if (sourceTabs === null || sourceTabs === '') return value;
+	var out = [lines[0]];
+	for (var j = 1; j < lines.length; j++) {
+		var ln = lines[j];
+		if (ln.indexOf(sourceTabs) === 0) {
+			out.push(baseIndent + ln.slice(sourceTabs.length));
+		} else {
+			out.push(ln);
+		}
+	}
+	return out.join('\n');
 }

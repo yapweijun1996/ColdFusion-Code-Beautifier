@@ -525,9 +525,13 @@ assertEqual(
 );
 
 assertEqual(
-	'deep script preserves regex literal with semicolon',
+	'deep script preserves regex literal with semicolon — empty {} stays inline',
+	// Expected updated 2026-05-14 commit-followup: empty `{}` no longer
+	// splits to `{\n}`. The verbose split was visually noisy for
+	// `var x = {};` and `if (x) {}` patterns common in real code.
+	// See formatBraceCode's empty-{} sentinel handling.
 	runRouter('<script>\nvar r = /^a;b$/gi;\nif(x){}\n</script>', 'cfml', true),
-	'<script>\n\tvar r = /^a;b$/gi;\n\tif(x){\n\t}\n</script>'
+	'<script>\n\tvar r = /^a;b$/gi;\n\tif(x){}\n</script>'
 );
 
 assertEqual(
@@ -822,6 +826,45 @@ assertEqual(
 		'js', false
 	),
 	'AgentLog.subscribe(function(evt) {\n\tactivityDrawer.render();\n\tif (x) y();\n});'
+);
+
+// Regression: multi-line block comments must re-indent on restore to
+// match the dedented surrounding code. Repro from
+// sample/ai_chatbox_js_runtime_send.cfm L14-16 — source had file-header
+// block comment at 1 tab (CFML include outer-wrap) AND following code
+// at 1 tab. formatBraceCode dedented the code to indent 0 but the block
+// comment kept its source `\t` prefix, producing comment at indent 1
+// above code at indent 0. Fix: restoreBraceCodeText strips source's
+// common-leading-tabs from continuation lines and prepends host-line
+// baseIndent. Tabs only — spaces preserve visual alignment under `/* `.
+assertEqual(
+	'js mode — multi-line block comment re-indents to match dedented code',
+	runRouter(
+		'\t/* line one\n\t   line two\n\t   line three */\n\tvar x = 1;',
+		'js', false
+	),
+	'/* line one\n   line two\n   line three */\nvar x = 1;'
+);
+
+// Regression: empty {} and [] literals stay on one line. Source like
+// `var x = {};` was being split to `var x = {\n};` by formatBraceCode's
+// naive `{` → `{\n` rewrite.
+assertEqual(
+	'js mode — empty object literal {} stays inline',
+	runRouter('var x = {};', 'js', false),
+	'var x = {};'
+);
+
+assertEqual(
+	'js mode — empty array literal [] stays inline',
+	runRouter('var x = [];', 'js', false),
+	'var x = [];'
+);
+
+assertEqual(
+	'js mode — empty if body if(x){} stays inline',
+	runRouter('if (x) {}', 'js', false),
+	'if (x) {}'
 );
 
 assertEqual(

@@ -771,14 +771,24 @@ function detectLanguage(code) {
 	return 'cfml';
 }
 
-/* Strip leading CFML markup comments + JS block/line comments from `code`
- * and return {leading, body}. Lets formatJsWithLeadingComments preserve
- * file-header comments verbatim while still routing the JS body through
- * formatBraceCode (which would otherwise reflow indentation inside the
- * comment regions or skip them entirely depending on token-protection).
- *
- * `leading` includes the trailing newline(s) after the last comment so
- * the body's first line starts at column 0. */
+// Strip leading CFML/HTML markup comments from `code` and return
+// {leading, body}. CFML markup <!--- ---> and HTML <!-- --> are
+// peeled off because formatBraceCode doesn't understand those —
+// they're emitted verbatim back at the top of the output.
+//
+// JS-style comments (block /* ... */ and line //) are NOT peeled.
+// They stay in the body where protectBraceCodeText /
+// restoreBraceCodeText handle them — including the multi-line block
+// comment re-indent that aligns continuation lines with the current
+// output baseIndent (introduced 2026-05-14 commit-followup).
+// Previously we peeled all 4 comment forms into `leading`, which got
+// emitted verbatim and kept the source's outer-wrap indent even
+// after the body was dedented — producing a comment at indent 1
+// above code at indent 0. Real-world repro:
+// sample/ai_chatbox_js_runtime_send.cfm L14-16 block comment.
+//
+// `leading` includes the trailing newline(s) after the last
+// <!--- ---> / <!-- --> so the body's first line starts at column 0.
 function splitLeadingCommentBlock(code) {
 	var i = 0;
 	var n = code.length;
@@ -798,20 +808,6 @@ function splitLeadingCommentBlock(code) {
 			var endH = code.indexOf('-->', i + 4);
 			if (endH === -1) break;
 			i = endH + 3;
-			continue;
-		}
-		// JS block comment /* ... */
-		if (code.substr(i, 2) === '/*') {
-			var endB = code.indexOf('*/', i + 2);
-			if (endB === -1) break;
-			i = endB + 2;
-			continue;
-		}
-		// JS line comment // ...
-		if (code.substr(i, 2) === '//') {
-			var endL = code.indexOf('\n', i + 2);
-			if (endL === -1) { i = n; break; }
-			i = endL;
 			continue;
 		}
 		break;
