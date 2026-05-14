@@ -34,6 +34,35 @@ Real cases where the formatter does not produce ideal output. None of these corr
 - **Unterminated string literals** stop at the next line break for safety. The broken input is preserved as-is rather than consuming the rest of the file, but the output still reflects the original bug.
 - **Object literal formatting** — every `{` triggers a newline. Small inline `{a:1}` becomes multi-line. This is verbose but not incorrect.
 
+## Bare JS outside `<script>` (CFML files containing pure JS fragments)
+
+CFML files that contain bare JS (no `<script>` wrapper) — e.g. files included
+into another `.cfm` page that already provides the `<script>` boundary —
+take the `beautifyCFML` per-line indentation path, NOT `formatBraceCode`.
+Implications:
+
+- **Per-line brace counter** (`countBracesOutsideStrings` in
+  `js/beautifier.js`) string-protects single/double/template quotes, line
+  comments, single-line block comments, **and regex literals**. Multi-line
+  strings via `\`-continuation are NOT tracked across lines — if a string
+  begins on one line and ends on another, `{`/`}`/`[`/`]` on the
+  continuation line may be miscounted. Rare in real code; not seen in any
+  committed fixture.
+- **Object literal layout preserved as compact** when the source already
+  has it compact (e.g., `{ skillName: 'x', toolName: 'y', args: {} },` on
+  one line). Routing such a file through `'js'` mode would explode each
+  `{` onto its own line via `formatBraceCode` — visually verbose. Auto-
+  detect leaves CFML files in `'cfml'` mode for this reason; users wanting
+  full `formatBraceCode` treatment must select `JavaScript` in the
+  dropdown explicitly.
+- **Idempotency does not prove correct alignment** — a wrong indent can be
+  a fixed point if both passes drift equally. The `sample/` idempotency
+  suite catches drift between passes, but a fixture that drifts on pass 1
+  and stably reproduces the drift on pass 2 will still PASS. Pair the
+  suite with manual visual inspection on first add, or with a brace-
+  balance check on output (verified 2026-05-14: regex literal `[\s\S]`
+  leak was idempotent but mis-aligned by 3 tabs).
+
 ## CSS (Deep CSS)
 
 - **`@media` / `@keyframes` with nested rules** — opening `{` triggers a new line and increments indent, but the simple formatter does not separately format each inner rule. Complex animations may need manual tidy-up.

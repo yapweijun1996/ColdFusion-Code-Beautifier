@@ -40,6 +40,40 @@ assertEqual(
 
 Use `\n` for line breaks and `\t` for tabs in expected strings. When debugging, tabs print as `->` so differences are visible.
 
+## Sample idempotency suite
+
+`tests/run-tests.js` `runSampleIdempotencySuite()` walks `sample/*.cfm`,
+beautifies each file twice (in both deep-OFF and deep-ON modes), and
+asserts `pass2 === pass1` byte-by-byte. Logs `PASS sample idempotency: N
+file/mode pairs across M fixture(s)` on success, or `FAIL idempotency:
+<file> (deep=...)` with a line-level diff on failure.
+
+**Folder convention**:
+
+```
+sample/.gitkeep        ← committed, keeps folder visible to git
+sample/README.md       ← committed, developer-facing instructions
+sample/*.cfm           ← gitignored — drop YOUR proprietary fixtures here
+```
+
+Empty `sample/` triggers `SKIP idempotency (no *.cfm in sample/) — drop a
+fixture to enable`; CI stays green without any committed fixture. Drop one
+`.cfm` locally and the regression catch activates automatically.
+
+**Caveat: idempotency is necessary but not sufficient.** A wrong-but-stable
+indent will pass the suite. The regex literal bug fixed in commit `83aea8a`
+was idempotent on `sample/ai_chatbox_js_runtime_send.cfm` BUT mis-aligned
+the file's final `}` by 3 tabs. To catch alignment bugs that pass through
+idempotency, also verify:
+
+- **Brace balance**: count `{` vs `}` (string + comment + regex aware) on
+  the output — must equal 0 at EOF.
+- **Top-level anchor**: for a file whose source has a known top-level
+  `function name() {`, assert its matching `}` lands at column 0.
+- **Content preservation**: `normalize(input) === normalize(output)` where
+  `normalize` collapses whitespace and lowercases — same invariant used by
+  `assertContentPreserved` at the bottom of `run-tests.js`.
+
 ## Regression-check philosophy
 
 - Every fix commit ships at least one new test covering the pattern the fix targets.

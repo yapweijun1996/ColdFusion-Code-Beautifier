@@ -61,7 +61,10 @@ runs `node tests/run-tests.js` then deploys via `actions/deploy-pages@v4`.
 beautifyCodes()                       router (DOM I/O)
   ├─ language = auto → detectLanguage(code)
   ├─ language == 'sql' → beautifySQL(code)
-  └─ else
+  ├─ language == 'js'  → formatJsWithLeadingComments(code)
+  │                       (preserve leading <!---/<!--/`/*`/`//` banner,
+  │                        run formatBraceCode on the JS body)
+  └─ else (cfml)
        ├─ beautifyCFML(code, split_html_tag)   stage 1: outer CFML indent
        └─ if any deep_* checkbox on:
             deepFormatEmbedded(result, {sql, css, js})   stage 2
@@ -69,6 +72,14 @@ beautifyCodes()                       router (DOM I/O)
               ├─ if js  → <script>  body → formatBraceCode
               └─ if css → <style>   body → formatCSSCode
 ```
+
+`detectLanguage()` routes to `'js'` only when the input has zero `<` tag
+chars AND begins with a JS construct (`function`/`var`/`let`/`const`/`class`/
+`import`/`export`/`async`/`(...)=>`/`{`/`[`/`//`/`/*`). Any leading CFML or
+HTML tag keeps the file in `'cfml'` mode so the tag-aware indentation path
+runs (preserves the compact data-array layout style that `formatBraceCode`'s
+`{` → `{\n` splitting would otherwise explode vertically). User can always
+force `'js'` via the dropdown.
 
 ## Token protection (key idea)
 
@@ -99,6 +110,47 @@ Major clauses do not break inside `funcDepth > 0` (window function `OVER(PARTITI
 ## CFML formatter state
 
 `beautifyCFML` is line-based. Key state: `indentLevel`, plus `inMarkupComment` / `inBlockComment` so multi-line `<!--- … --->` / `/* … */` bodies are re-indented as comments, not re-parsed as code. Tag classification uses `CF_TAGS.inline` / `CF_TAGS.block` / `CF_TAGS.middle` and `HTML_VOID_TAGS`. Middle tags (`cfelse`, `cfelseif`) decrement then re-increment indent so the content after them lines up with the content before.
+
+## Per-line brace counter (non-tag lines)
+
+For lines that aren't CFML/HTML tags — bare JS / CSS / JSON-shaped content
+between tags — `beautifyCFML` uses two helpers in `js/beautifier.js`:
+
+- **`countBracesOutsideStrings(s)`** — counts `{` `[` (openers) and `}` `]`
+  (closers) on one line, skipping these lexical contexts:
+  1. Single/double-quoted strings (with `\` escapes)
+  2. Template literals `` `…` `` (with `\` escapes; `${…}` braces DO count)
+  3. Line comments `// …` (rest of line)
+  4. Single-line block comments `/* … */`
+  5. **Regex literals `/.../flags`** — `/` in operator position opens a
+     regex (scan to matching `/` respecting `\` escapes and `[...]`
+     character classes where `/` is literal, then consume `gimsuy`).
+     `/` in value position is the division operator. Tracked via a
+     `lastSig` (`'value'` | `'operator'`) state mirroring
+     `protectBraceCodeText` in `js/deep-format.js`.
+
+- **`leadingClosersOf(s)`** — counts consecutive `}` `]` at the start of
+  the trimmed line (no intervening whitespace between closers). Used to
+  pre-decrement `indentLevel` so the line's *display* position matches
+  its visual depth before `applyIndent()` runs. Example: `} },` has
+  `leadingClosers = 1` (second `}` is trailing) so the line displays
+  at parent level, and the trailing `}` only affects next-line indent.
+
+The math:
+```
+indentLevel -= leadingClosers
+applyIndent()
+indentLevel += (openers - closers + leadingClosers)
+```
+which simplifies to `indentLevel += (openers - closers)` net, but the
+pre-decrement matters for the display level of THIS line.
+
+**Why this matters**: without regex protection, `var markers = [ /\[a\][\s\S]*/, /\[b\][\s\S]*/ ]` leaks +1 indent per regex literal — each
+regex contributes 2 `[` (escaped + character-class opener) but only 1 `]`.
+Across a multi-regex array, the final closing `}` of the enclosing
+function lands N tabs too deep. See `tests/run-tests.js` cases
+"regex literal `[\s\S]` does not leak indent" and "division operator vs
+regex literal disambiguation".
 
 ## Test harness
 

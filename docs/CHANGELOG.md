@@ -1,5 +1,103 @@
 # Changelog
 
+## v7 series (2026-05-14)
+
+### Fix: balanced brace counter — multi-line JS object literals no longer drift indent
+
+Commit `aa7cb4e`. The CFML beautifier's per-line brace logic for non-tag lines
+used `includes("{") && !includes("}")` to decide indent increments/decrements.
+That heuristic only fired once for a line containing two trailing `}`, so each
+multi-line JS object literal in an array leaked **+1 indent per entry**.
+
+Real-world repro: `sample/ai_chatbox_js_runtime_prompt_catalog.cfm` (a CFML
+file containing a bare JS `_g3RuntimeToolCallExampleCatalog()` array of object
+literals) drifted to 30+ tabs deep before this fix.
+
+Replaced the heuristic with `countBracesOutsideStrings(line)` — string-aware
+balanced counting of `{ [` openers vs `} ]` closers — plus `leadingClosersOf`
+for pre-decrement before `applyIndent()`. Algebraically the net change is just
+`indentLevel += (openers - closers)`, but pre-decrement matters because the
+displayed indent of a line like `} },` must reflect the line's visual depth
+(parent level), not the carry-over level.
+
+Two new helpers in `js/beautifier.js`:
+
+- `countBracesOutsideStrings(s)` — per-line `{}` `[]` counter that protects
+  strings (single/double/template), line comments, block comments, **and
+  regex literals** (see next entry).
+- `leadingClosersOf(s)` — counts consecutive leading `}`/`]` for pre-decrement.
+
+### Fix: regex literal awareness in `countBracesOutsideStrings`
+
+Commit `83aea8a`. The brace counter above missed `[` inside regex literals.
+Real-world repro: `sample/ai_chatbox_js_runtime_send.cfm` had
+
+```js
+var markers = [
+    /\n\s*\[OBSERVER CRITIC\b[\s\S]*$/i,
+    /\n\s*\[HOST EVIDENCE\b[\s\S]*$/i,
+    /\n\s*\[HOST CONTINUATION\b[\s\S]*$/i,
+    ...
+];
+```
+
+Each regex contributed 2 `[` (one escaped literal `\[`, one `[\s\S]` character
+class) but only 1 `]` — leaking +3 indent across the file. The closing `}` of
+the outer `async function sendMessage()` landed at column 3 instead of 0.
+
+Ported the `lastSig` mechanism from `protectBraceCodeText` in
+`js/deep-format.js`: track whether the previous significant token was a
+VALUE or OPERATOR. `/` in operator position opens a regex; `/` in value
+position is the division operator. Inside the regex, scan to matching `/`
+respecting `\` escapes and `[...]` character classes (where `/` is literal),
+then consume `gimsuy` flags.
+
+### Feat: `'js'` language mode for bare JS without `<script>` wrapper
+
+Commit `aa7cb4e`. Files that are mostly bare JS with leading CFML/JS comment
+banners can now route through `formatBraceCode` (`js/deep-format.js`) — the
+robust JS formatter that token-protects template literals, regex literals,
+strings, and parenthesized groups.
+
+- New dropdown option `<option value="js">JavaScript</option>` in
+  `index.html`.
+- `detectLanguage()` routes auto-detected JS-only input (no `<` tag chars
+  anywhere) to `'js'`. Conservative: any single `<cf*>` / `<html>` / `<!--`
+  keeps the file in `cfml` mode (preserves the compact layout style the
+  CFML beautifier produces).
+- `formatJsWithLeadingComments()` strips leading `<!---...--->` / `<!-- -->`
+  / `/* */` / `// ` comment banner, runs `formatBraceCode` on the JS body,
+  and re-prepends the banner verbatim.
+
+### Test: `sample/` idempotency suite
+
+Commit `aa7cb4e`. New `tests/run-tests.js` `runSampleIdempotencySuite()` walks
+`sample/*.cfm`, runs `beautifyCodes()` twice on each file, and asserts the
+second pass is byte-identical to the first.
+
+- Two variants per file: deep-format-OFF and deep-format-ON.
+- Cleanly SKIPs when `sample/` has no `*.cfm` — CI stays green without any
+  committed fixture.
+- `.gitignore` now keeps the folder visible (via `sample/.gitkeep` +
+  `sample/README.md`) but ignores `*.cfm` contents — each developer drops
+  their own proprietary fixtures without leaking them to the repo.
+
+Caveat: idempotency is **necessary but not sufficient** to prove alignment is
+correct. The regex literal bug above produced an idempotent (wrong) output —
+both passes equally drifted. Pair the idempotency check with brace-balance
+and content-preservation invariants.
+
+### Test: 10 new unit tests in `tests/run-tests.js`
+
+- 4 brace-counter regression cases (multi-line object literals, `} },`
+  multi-close, braces inside strings, regex literal `[\s\S]`).
+- 6 `'js'` mode cases (auto-detect picks tag-free JS, stays cfml when `<`
+  present, template literal protection, regex literal protection, leading
+  CFML comment header preserved, idempotency of `formatBraceCode` output).
+
+All 33+ assertions + 22 content-preservation invariants + 2 sample
+idempotency pairs pass.
+
 ## v6 series (2026-05-11 → 2026-05-12)
 
 ### Tooling: `tools/diagnose-corpus.js` — consolidated corpus audit
