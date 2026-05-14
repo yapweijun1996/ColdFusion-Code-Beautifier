@@ -780,6 +780,45 @@ assertEqual(
 	'cfml'
 );
 
+// Regression: hasTagsOutsideStrings must handle regex literals — a `'` or
+// `"` inside `/.../` (regex) is part of the regex body, NOT a string
+// delimiter. Without this, `src.domain.replace(/'/g, '')` poisons string
+// parity and subsequent `<TAG>` chars (even those inside real JS strings)
+// get flagged as "real tags" → file mis-routed to cfml → content corruption.
+// Real-world repro: sample/ai_chatbox_js_runtime_send.cfm L177-180.
+assertEqual(
+	'js mode — regex literal /...\'.../ does not poison string parity in detection',
+	(function() {
+		var harness = makeContext('', 'auto');
+		// Regex contains `'`; later JS string contains `<a ...>` HTML.
+		// Without regex-aware lastSig tracking, the `'` inside the regex
+		// gets mis-treated as a string start, the closing matched `'`
+		// exits a phantom string, and the `<a` is then seen as "outside
+		// strings" → flagged as a real tag → returns 'cfml'.
+		return harness.context.detectLanguage(
+			"function f(src) {\n" +
+			"\tvar x = src.replace(/'/g, '');\n" +
+			"\tvar html = '<a href=\"' + src.href + '\">link</a>';\n" +
+			"}"
+		);
+	})(),
+	'js'
+);
+
+assertEqual(
+	'js mode — regex with character class [/] does not poison parity',
+	(function() {
+		var harness = makeContext('', 'auto');
+		// `[/]` is a character class containing `/` — the `/` inside is
+		// NOT the regex closer. Walker must respect [...] state.
+		return harness.context.detectLanguage(
+			"var pat = /[/'\"]+/g;\n" +
+			"var html = '<div>x</div>';"
+		);
+	})(),
+	'js'
+);
+
 /* Regression: bare JS fragment that has HTML tags ONLY inside string
  * literals must be detected as 'js', not 'cfml'. Repro from
  * sample/ai_chatbox_js_runtime_send.cfm — a snippet like

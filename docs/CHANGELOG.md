@@ -2,6 +2,33 @@
 
 ## v7 series (2026-05-14)
 
+### Fix: regex literal awareness in `hasTagsOutsideStrings` — string parity preserved across `/'/g` patterns
+
+Third variant of the same content-corruption bug class. User-supplied
+fixture had a real-world JS function with both:
+- A regex literal containing a quote char: `src.domain.replace(/'/g, '')`
+- Later, a JS string containing HTML: `html += '<a class="...">link</a>'`
+
+`hasTagsOutsideStrings` already skipped strings + JS comments + CFML/HTML
+comments, but did NOT skip regex literals. The `'` inside `/'/g` was
+mis-treated as a string start → walker exited at the next real `'` →
+string-parity off by one → the `<a` chars in subsequent JS strings were
+seen as "outside any string" → flagged as real tags → detectLanguage
+returned `'cfml'` → CFML mode corrupted the JS strings.
+
+Fix: port the `lastSig` mechanism that `countBracesOutsideStrings` already
+uses (commit 83aea8a). `/` in OPERATOR position opens a regex literal —
+scan to matching `/` respecting `\` escapes and `[...]` character classes
+where `/` is literal, then consume `gimsuy` flags. `/` in VALUE position
+is the division operator.
+
+2 new regression tests:
+- "regex literal /...'.../ does not poison string parity in detection"
+- "regex with character class [/] does not poison parity"
+
+Verified on the user's fixture: detectLanguage='js', content-preserved
+PASS, idempotent PASS, all JS strings + regex literals preserved verbatim.
+
 ### Fix: comment-banner-aware detection — CFML markup banner over JS body now routes to `'js'`
 
 The previous string-aware detection fix (same commit day) protected

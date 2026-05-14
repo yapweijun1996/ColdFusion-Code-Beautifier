@@ -663,13 +663,28 @@ function hasTagsOutsideStrings(code) {
 	var inQ = null;        // null | "'" | '"' | '`'
 	var inLC = false;       // // line comment
 	var inBC = false;       // /* block comment */
+	// `lastSig` tracks whether the previous significant token was a
+	// VALUE (identifier, number, `)`, `]`, string close) or an OPERATOR
+	// (`=`, `(`, `,`, `:`, `;`, `+`, etc.). `/` in operator position
+	// starts a regex literal — its body is opaque (in particular `'`/`"`
+	// inside the regex are NOT string delimiters). `/` in value position
+	// is the division operator. Without this, a line like
+	//   src.domain.replace(/'/g, '')
+	// loses string parity: walker enters a "fake string" at the `'`
+	// inside `/'/g`, exits on the next real `'`, and from then on every
+	// `<TAG>` it sees is mis-classified as "outside a string". Real-
+	// world repro: sample/ai_chatbox_js_runtime_send.cfm L177 — without
+	// regex protection, detectLanguage incorrectly returned 'cfml' for
+	// a bare-JS file, triggering the same content-corruption pipeline
+	// commits 8bf1843 and 6e668e8 already partially fixed.
+	var lastSig = null;    // null | 'value' | 'operator'
 	while (i < n) {
 		var c = code[i], c2 = code[i + 1];
 		if (inLC) { if (c === '\n') inLC = false; i++; continue; }
 		if (inBC) { if (c === '*' && c2 === '/') { inBC = false; i += 2; continue; } i++; continue; }
 		if (inQ) {
 			if (c === '\\') { i += 2; continue; }  // JS escape
-			if (c === inQ) { inQ = null; i++; continue; }
+			if (c === inQ) { inQ = null; lastSig = 'value'; i++; continue; }
 			i++; continue;
 		}
 		if (c === '/' && c2 === '/') { inLC = true; i += 2; continue; }
@@ -686,10 +701,37 @@ function hasTagsOutsideStrings(code) {
 			if (endHtm === -1) return false;
 			i = endHtm + 3; continue;
 		}
+		// Regex literal — `/` in operator position. Scan to matching `/`
+		// respecting `\` escapes and `[...]` character classes (where
+		// `/` is literal). Mirrors the same logic in
+		// countBracesOutsideStrings.
+		if (c === '/' && (lastSig === null || lastSig === 'operator')) {
+			var rs = i + 1, inClass = false, closed = false;
+			while (rs < n) {
+				var rc = code[rs];
+				if (rc === '\\') { rs += 2; continue; }
+				if (rc === '\n') break;
+				if (rc === '[') inClass = true;
+				else if (rc === ']') inClass = false;
+				else if (rc === '/' && !inClass) { rs++; closed = true; break; }
+				rs++;
+			}
+			if (closed) {
+				while (rs < n && /[gimsuy]/.test(code[rs])) rs++;
+				i = rs;
+				lastSig = 'value';
+				continue;
+			}
+			// Not a closed regex on this line — `/` becomes division.
+		}
 		if (c === '"' || c === "'" || c === '`') { inQ = c; i++; continue; }
 		// Real tag opener: `<` + letter or `<` + `/`. NOT `<!` (handled
 		// above) and NOT `<` followed by space/digit/punctuation.
 		if (c === '<' && c2 && /[a-zA-Z\/]/.test(c2)) return true;
+		// Update lastSig for next iteration.
+		if (c === ' ' || c === '\t' || c === '\n' || c === '\r') { i++; continue; }
+		if (c === ')' || c === ']' || /[A-Za-z0-9_$]/.test(c)) { lastSig = 'value'; }
+		else { lastSig = 'operator'; }
 		i++;
 	}
 	return false;

@@ -84,11 +84,23 @@ beautifyCodes()                       router (DOM I/O)
    check, so a `.cfm` file that opens with a documentation banner over
    bare JS still routes correctly.
 2. The full source has NO real `<TAG>` chars outside string literals
-   AND outside comments. `hasTagsOutsideStrings` walks with JS lexer
-   state — strings with `\\`/`\'`/`\"` escapes, template literals with
-   `${…}`, `//` line comments, `/* */` block comments, **and full
-   `<!--- --->` / `<!-- -->` comment regions**. Only `<TAG>` (alpha or
-   `/` after `<`) outside all of those is a real tag.
+   AND outside comments AND outside regex literals. `hasTagsOutsideStrings`
+   walks with JS lexer state across **six** opaque regions:
+   - Strings with `\\`/`\'`/`\"` escapes
+   - Template literals with `${…}`
+   - `//` line comments
+   - `/* */` block comments
+   - `<!--- --->` CFML markup comments + `<!-- -->` HTML comments
+   - **Regex literals `/.../flags`** — `/` in operator position opens a
+     regex (scan to matching `/` respecting `\` escapes and `[...]`
+     character classes where `/` is literal, then consume `gimsuy`).
+     Without this, `src.replace(/'/g, '')` poisons string parity:
+     the `'` inside the regex is mistaken for a string start, and
+     subsequent `<TAG>` chars in real JS strings get flagged as real
+     tags → file mis-routed to cfml → content corruption.
+
+   Only `<TAG>` (alpha or `/` after `<`) outside all six contexts is
+   a real tag.
 
 The string-aware check is what makes JS fragments like
 ```js
