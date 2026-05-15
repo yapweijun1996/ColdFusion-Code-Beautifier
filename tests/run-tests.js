@@ -42,6 +42,9 @@ function makeContext(input, language, splitHtmlTag, deepFormat, autoCopy, autoCl
 		deep_js: {
 			checked: deepFormat == true
 		},
+		preserve_continuation_alignment: {
+			checked: true
+		},
 		input: {
 			value: input || ''
 		},
@@ -999,12 +1002,18 @@ assertEqual(
  * decremented ONCE for a line containing two trailing `}`, leaking +1
  * indent per array entry. Reproduced from sample/ai_chatbox_js_runtime_*.cfm. */
 assertEqual(
+	/* Source: `args:` has 2-space leading indent. With detect-and-anchor
+	 * (v7.1.0) the author's exact whitespace prefix is preserved as the
+	 * delta from the parent anchor (`{ a: 2, b: 3,`), so the line emits
+	 * as parentNewPrefix + "  " + body = `\t\t  args:`. The test still
+	 * verifies the original invariant: trailing `} },` does NOT leak
+	 * indent — the next `{ a: 4, ...` row returns to `\t\t`. */
 	'js array of object literals between cfml tags closes back to base indent',
 	runRouter(
 		'function f() {\nreturn [\n{ a: 1, args: {} },\n{ a: 2, b: 3,\n  args: { x: 1, y: 2 } },\n{ a: 4, args: { nested: { z: 9 } } }\n];\n}',
 		'cfml', false
 	),
-	'function f() {\n\treturn [\n\t\t{ a: 1, args: {} },\n\t\t{ a: 2, b: 3,\n\t\t\targs: { x: 1, y: 2 } },\n\t\t{ a: 4, args: { nested: { z: 9 } } }\n\t];\n}'
+	'function f() {\n\treturn [\n\t\t{ a: 1, args: {} },\n\t\t{ a: 2, b: 3,\n\t\t  args: { x: 1, y: 2 } },\n\t\t{ a: 4, args: { nested: { z: 9 } } }\n\t];\n}'
 );
 
 assertEqual(
@@ -2183,6 +2192,102 @@ USER_CASE_INPUTS.forEach(function(pair) {
 	});
 	console.log('PASS sample idempotency: ' + pass + ' file/mode pairs across ' + entries.length + ' fixture(s)' + (fail ? ' (' + fail + ' failed)' : ''));
 })();
+
+/* ============================================================
+ * Detect-and-anchor continuation alignment (v7.1.0)
+ *
+ * Verifies that multi-line ternary / && / || / + / comma-leading
+ * continuation lines inside <script> blocks preserve their visual
+ * column delta from the parent statement's anchor column. Anchor is
+ * the column of the first non-whitespace char of the most recent
+ * non-continuation JS line; continuations get
+ *   '\t' * parentIndentLevel + ' ' * (origCol - parentOrigCol) + trim(line)
+ * so the parent is re-indented canonically and the relative offset
+ * survives.
+ *
+ * Each fixture wraps the JS body in <script>...</script> so the
+ * inJsBlock gate fires. SQL/CFML markup outside <script> never hits
+ * this code path (Risk R3 mitigation).
+ * ============================================================ */
+assertEqual(
+	'continuation alignment: ternary chain inside <script>',
+	runRouter(
+		'<script>\n' +
+		'function f() {\n' +
+		'\tvar rows = Array.isArray(raw.data)    ? raw.data\n' +
+		'\t         : Array.isArray(raw.rows)    ? raw.rows\n' +
+		'\t         : Array.isArray(raw.records) ? raw.records\n' +
+		'\t         : null;\n' +
+		'}\n' +
+		'</script>',
+		'cfml', false
+	),
+	'<script>\n' +
+	'\tfunction f() {\n' +
+	'\t\tvar rows = Array.isArray(raw.data)    ? raw.data\n' +
+	'\t\t         : Array.isArray(raw.rows)    ? raw.rows\n' +
+	'\t\t         : Array.isArray(raw.records) ? raw.records\n' +
+	'\t\t         : null;\n' +
+	'\t}\n' +
+	'</script>'
+);
+
+assertEqual(
+	'continuation alignment: string concat + inside <script>',
+	runRouter(
+		'<script>\n' +
+		'var msg = "hello "\n' +
+		'        + "world "\n' +
+		'        + "goodbye";\n' +
+		'</script>',
+		'cfml', false
+	),
+	'<script>\n' +
+	'\tvar msg = "hello "\n' +
+	'\t        + "world "\n' +
+	'\t        + "goodbye";\n' +
+	'</script>'
+);
+
+assertEqual(
+	'continuation alignment: && || chain inside <script>',
+	runRouter(
+		'<script>\n' +
+		'if (a > 0\n' +
+		'\t&& b < 10\n' +
+		'\t|| c === null) {\n' +
+		'\tgo();\n' +
+		'}\n' +
+		'</script>',
+		'cfml', false
+	),
+	'<script>\n' +
+	'\tif (a > 0\n' +
+	'\t\t&& b < 10\n' +
+	'\t\t|| c === null) {\n' +
+	'\t\tgo();\n' +
+	'\t}\n' +
+	'</script>'
+);
+
+assertEqual(
+	'continuation alignment: comma-leading object inside <script>',
+	runRouter(
+		'<script>\n' +
+		'var cfg = { name: "x"\n' +
+		'          , port: 8080\n' +
+		'          , host: "localhost"\n' +
+		'          };\n' +
+		'</script>',
+		'cfml', false
+	),
+	'<script>\n' +
+	'\tvar cfg = { name: "x"\n' +
+	'\t          , port: 8080\n' +
+	'\t          , host: "localhost"\n' +
+	'\t          };\n' +
+	'</script>'
+);
 
 if (!process.exitCode) {
 	console.log('All tests passed (including ' + USER_CASE_INPUTS.length + ' content-preservation invariants).');
