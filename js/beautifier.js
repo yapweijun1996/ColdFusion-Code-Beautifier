@@ -300,9 +300,30 @@ function splitAdjacentCFMLTags(code) {
  * literals in sample/ai_chatbox_js_runtime_send.cfm leaked +3 indent
  * because each regex contributed 2 opens and 1 close.
  *
- * Returns {open, close}. */
+ * Returns extended shape:
+ *   {open, close}                  — aggregate {} + [] counts (back-compat)
+ *   {braceOpen, braceClose}        — only {}
+ *   {bracketOpen, bracketClose}    — only []
+ *   {parenOpen, parenClose}        — only ()
+ *   {lastTerm}                     — last non-ws masked token (',?:&&||+-* / =([{=>.<>!~^%' or '')
+ *   {firstTerm}                    — first non-ws masked token if ∈ joiner set
+ *                                    ({':','?','&&','||',',','.','+','-',')',']','}'}), else ''
+ * Used by isContinuationLine() for detect-and-anchor continuation alignment. */
 function countBracesOutsideStrings(s) {
-	var open = 0, close = 0;
+	var braceOpen = 0, braceClose = 0;
+	var bracketOpen = 0, bracketClose = 0;
+	var parenOpen = 0, parenClose = 0;
+	var lastTerm = '';
+	var firstTerm = '';
+	var firstTermCaptured = false;
+	var JOINER = {':':1,'?':1,'&&':1,'||':1,',':1,'.':1,'+':1,'-':1,')':1,']':1,'}':1};
+	function setTerm(t) {
+		lastTerm = t;
+		if (!firstTermCaptured) {
+			firstTermCaptured = true;
+			if (JOINER[t]) firstTerm = t;
+		}
+	}
 	var i = 0;
 	var inQ = null;        // null | "'" | '"' | '`'
 	var inBlockComment = false;
@@ -320,7 +341,7 @@ function countBracesOutsideStrings(s) {
 		}
 		if (inQ) {
 			if (c === '\\') { i += 2; continue; }
-			if (c === inQ) { inQ = null; lastSig = 'value'; i++; continue; }
+			if (c === inQ) { inQ = null; lastSig = 'value'; setTerm('STR'); i++; continue; }
 			i++; continue;
 		}
 		// Line comment — bail until EOL (single-line input → end).
@@ -350,19 +371,58 @@ function countBracesOutsideStrings(s) {
 				while (rs < s.length && /[gimsuy]/.test(s[rs])) rs++;
 				i = rs;
 				lastSig = 'value';
+				setTerm('REGEX');
 				continue;
 			}
 			// Not a closed regex on this line — `/` becomes division.
 		}
 		if (c === '"' || c === "'" || c === '`') { inQ = c; i++; continue; }
 		if (c === ' ' || c === '\t') { i++; continue; }
-		if (c === '{' || c === '[') { open++; lastSig = 'operator'; i++; continue; }
-		if (c === '}' || c === ']') { close++; lastSig = 'value'; i++; continue; }
-		if (c === ')' || /[A-Za-z0-9_$]/.test(c)) { lastSig = 'value'; }
-		else { lastSig = 'operator'; }
+		if (c === '{') { braceOpen++;   lastSig = 'operator'; setTerm('{'); i++; continue; }
+		if (c === '[') { bracketOpen++; lastSig = 'operator'; setTerm('['); i++; continue; }
+		if (c === '(') { parenOpen++;   lastSig = 'operator'; setTerm('('); i++; continue; }
+		if (c === '}') { braceClose++;   lastSig = 'value'; setTerm('}'); i++; continue; }
+		if (c === ']') { bracketClose++; lastSig = 'value'; setTerm(']'); i++; continue; }
+		if (c === ')') { parenClose++;   lastSig = 'value'; setTerm(')'); i++; continue; }
+		// Multi-char operators — peek ahead so `&&`, `||`, `=>`, `==`, `===`,
+		// `!=`, `<=`, `>=` are classified correctly. `==`/`===`/`!=`/`!==`
+		// are NOT open terminals (they yield a value); `&&`/`||`/`=>` ARE.
+		if (c === '&' && s[i + 1] === '&') { setTerm('&&'); lastSig = 'operator'; i += 2; continue; }
+		if (c === '|' && s[i + 1] === '|') { setTerm('||'); lastSig = 'operator'; i += 2; continue; }
+		if (c === '=' && s[i + 1] === '>') { setTerm('=>'); lastSig = 'operator'; i += 2; continue; }
+		if (c === '=' && s[i + 1] === '=') {
+			var eq = (s[i + 2] === '=') ? 3 : 2;
+			setTerm('=='); lastSig = 'operator'; i += eq; continue;
+		}
+		if (c === '!' && s[i + 1] === '=') {
+			var ne = (s[i + 2] === '=') ? 3 : 2;
+			setTerm('!='); lastSig = 'operator'; i += ne; continue;
+		}
+		if (/[A-Za-z0-9_$]/.test(c)) {
+			// Identifier / number run — collect, classify as value.
+			var js = i;
+			while (i < s.length && /[A-Za-z0-9_$]/.test(s[i])) i++;
+			setTerm(s.substring(js, i));
+			lastSig = 'value';
+			continue;
+		}
+		// Single-char operators / punctuation.
+		setTerm(c);
+		lastSig = 'operator';
 		i++;
 	}
-	return { open: open, close: close };
+	return {
+		open:         braceOpen + bracketOpen,    // back-compat aggregate
+		close:        braceClose + bracketClose,  // back-compat aggregate
+		braceOpen:    braceOpen,
+		braceClose:   braceClose,
+		bracketOpen:  bracketOpen,
+		bracketClose: bracketClose,
+		parenOpen:    parenOpen,
+		parenClose:   parenClose,
+		lastTerm:     lastTerm,
+		firstTerm:    firstTerm
+	};
 }
 
 /* Count consecutive `}`/`]` characters at the start of `s` (after any
@@ -386,7 +446,43 @@ function leadingClosersOf(s) {
 	return n;
 }
 
-function beautifyCFML(rawCode, split_html_tag) {
+/* Column (in character cells, tab = 1 cell) of the first non-whitespace
+ * char of `s`. Returns s.length when the line is all whitespace.
+ * Tab/space both count as 1 cell — parent and child are measured the
+ * same way, so the delta reflects original visual difference without
+ * needing to expand tabs to a particular width. */
+function getLeadingCol(s) {
+	var i = 0;
+	while (i < s.length && (s[i] === ' ' || s[i] === '\t')) i++;
+	return i;
+}
+
+/* Continuation-line classifier. A line is a continuation iff ANY of:
+ *   (a) prior logical line's lastTerm is in OPEN_TERMS (trailing-open)
+ *   (b) current line's firstTerm is in JOINER (leading-joiner; already
+ *       filtered by countBracesOutsideStrings → only non-empty when
+ *       firstTerm is a joiner)
+ *   (c) paren/bracket depth at line start > 0 (unclosed expression)
+ * Returns true iff this line should anchor to the prior parent's column.
+ *
+ * `{` is deliberately OMITTED from OPEN_TERMS: in JS, a line-trailing `{`
+ * almost always opens a statement block whose body is NOT a continuation
+ * (its own indent comes from indentLevel++ via braceCounts.open). Object-
+ * literal `{` continuations are still caught via the parenDepth>0 signal
+ * (when the literal is an argument or array element) or via the next
+ * line's firstTerm being a joiner (`,` / `}`). */
+function isContinuationLine(tokens, prevLastTerm, parenDepth, bracketDepth) {
+	var OPEN_TERMS = {
+		',':1,'?':1,':':1,'&&':1,'||':1,'+':1,'-':1,
+		'*':1,'/':1,'=':1,'(':1,'[':1,'=>':1,'.':1
+	};
+	if (prevLastTerm && OPEN_TERMS[prevLastTerm]) return true;
+	if (tokens.firstTerm) return true;
+	if (parenDepth > 0 || bracketDepth > 0) return true;
+	return false;
+}
+
+function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) {
 
 	if(split_html_tag == true){
 		rawCode = rawCode.replace(/></g, '>\n<');
@@ -405,6 +501,42 @@ function beautifyCFML(rawCode, split_html_tag) {
 	var inMultiLineTag = false;
 	var multiLineTagName = "";
 
+	/* Detect-and-anchor continuation alignment state.
+	 *   preserveContAlign       — config gate (UI checkbox, default ON)
+	 *   inJsBlock               — true only inside <script>...</script>;
+	 *                             gates SQL/<cfquery> from leaking into
+	 *                             continuation logic (Risk R3 in plan).
+	 *   parenDepth/bracketDepth — running ()/[] depth across JS lines;
+	 *                             {} depth lives in indentLevel.
+	 *   prevLastTerm            — lastTerm of prior non-comment JS line
+	 *                             (open terminal triggers continuation).
+	 *   parentAnchorOrigPrefix  — raw leading-whitespace prefix string of
+	 *                             the most recent non-continuation JS
+	 *                             line; '' = no anchor recorded yet.
+	 *                             Stored as a STRING (not a column count)
+	 *                             so we can slice the continuation's
+	 *                             extra-whitespace verbatim — preserving
+	 *                             tab-vs-space choice in alignment.
+	 *   parentAnchorActive      — explicit flag (since '' is a valid
+	 *                             prefix for col-0 parents).
+	 *   parentAnchorIndentLevel — indentLevel at which parent was emitted
+	 *                             (so continuation can inherit it). */
+	var preserveContAlign = (preserve_continuation_alignment === undefined)
+		? true : !!preserve_continuation_alignment;
+	/* `inJsBlock` defaults TRUE so bare-JS-in-.cfm files (no enclosing
+	 * <script> wrapper — common in legacy ColdFusion projects where JS
+	 * fragments live directly inside .cfm files with CFML comment
+	 * headers) get continuation alignment too. Toggled OFF only inside
+	 * <cfquery> (SQL) and <style> (CSS) regions, where the JS-shaped
+	 * continuation classifier would misfire. */
+	var inJsBlock = true;
+	var parenDepth = 0;
+	var bracketDepth = 0;
+	var prevLastTerm = '';
+	var parentAnchorOrigPrefix = '';
+	var parentAnchorActive = false;
+	var parentAnchorIndentLevel = 0;
+
 	function applyIndent() {
 		if(indentLevel != 0 && indentSize != 0){
 			indentSpace = indentLevel * indentSize;
@@ -420,6 +552,12 @@ function beautifyCFML(rawCode, split_html_tag) {
 		if(indentLevel < 0){
 			indentLevel = 0;
 		}
+		/* Capture original leading whitespace BEFORE trim — needed by
+		 * continuation alignment to compute the relative prefix from
+		 * the parent anchor. Stored as a raw string (not column count)
+		 * so tab-vs-space mixture is preserved verbatim when sliced. */
+		var origCol    = getLeadingCol(lines[i]);
+		var origPrefix = lines[i].substring(0, origCol);
 		var line = lines[i].trim();
 		var line_data = line.toLowerCase();
 
@@ -565,8 +703,36 @@ function beautifyCFML(rawCode, split_html_tag) {
 			//lines[i] = ''.padStart(indentLevel * indentSize) + line;
 			applyIndent();
 
-
-
+			/* inJsBlock boundary tracking (Risk R3 gate). Toggle when we
+			 * see <script> open or </script> close. Reset continuation
+			 * state on entry AND exit so a fresh script body starts with
+			 * no anchor, and SQL/markup that follows is never accidentally
+			 * classified as a continuation of dangling JS state. */
+			/* Tag boundaries that affect inJsBlock + reset continuation
+			 * state. <script>: always JS, reset anchors on entry/exit.
+			 * <cfquery>/<style>: NOT JS, suppress continuation logic
+			 * inside the body. Other tags don't change inJsBlock. */
+			if (tag_name === 'script') {
+				inJsBlock = true;
+				parenDepth = 0;
+				bracketDepth = 0;
+				prevLastTerm = '';
+				parentAnchorOrigPrefix  = '';
+				parentAnchorActive      = false;
+				parentAnchorIndentLevel = 0;
+			} else if (tag_name === 'cfquery' || tag_name === 'style') {
+				if (line_data.startsWith('</')) {
+					inJsBlock = true;
+				} else {
+					inJsBlock = false;
+				}
+				parenDepth = 0;
+				bracketDepth = 0;
+				prevLastTerm = '';
+				parentAnchorOrigPrefix  = '';
+				parentAnchorActive      = false;
+				parentAnchorIndentLevel = 0;
+			}
 
 			/* Increase [start] */
 			if(maintain_yn != "y"){
@@ -616,8 +782,71 @@ function beautifyCFML(rawCode, split_html_tag) {
 			var leadingCl   = leadingClosersOf(line);
 			indentLevel -= leadingCl;
 
-			// indentation
-			applyIndent();
+			/* Detect-and-anchor continuation alignment. Three OR'd signals
+			 * (see isContinuationLine): prior line ends in open terminal,
+			 * current line starts with joiner, or unclosed ()/[] depth.
+			 * Only active inside <script>...</script> (inJsBlock gate)
+			 * with at least one anchor recorded.
+			 *
+			 * Emission strategy — preserve the *raw whitespace* suffix
+			 * that the child added beyond the parent's prefix, so the
+			 * author's tab/space mixture survives verbatim:
+			 *   parentNewPrefix + (childOrigPrefix - parentOrigPrefix) + trim(line)
+			 * When the child's prefix doesn't start with the parent's
+			 * (different whitespace style), fall back to space-padding by
+			 * the column delta. When delta is negative (child outdented
+			 * past parent, e.g. `})` on its own line), fall back to
+			 * applyIndent so leadingClosersOf pre-decrement applies. */
+			var isCont = preserveContAlign
+				&& inJsBlock
+				&& parentAnchorActive
+				&& isContinuationLine(braceCounts, prevLastTerm, parenDepth, bracketDepth);
+
+			if (isCont) {
+				var extraWs;
+				if (origPrefix.indexOf(parentAnchorOrigPrefix) === 0) {
+					extraWs = origPrefix.substring(parentAnchorOrigPrefix.length);
+				} else {
+					var deltaCols = origCol - parentAnchorOrigPrefix.length;
+					extraWs = deltaCols > 0 ? ' '.repeat(deltaCols) : '';
+				}
+				/* Bail to applyIndent when:
+				 *   (a) child outdented past parent (delta < 0), or
+				 *   (b) child has same prefix as parent (extraWs empty) —
+				 *       implies child is at parent's level, NOT extending
+				 *       it; pre-decrement via leadingClosersOf must apply
+				 *       (e.g. bare `}` closing a function block where the
+				 *       parent is a prior statement at the same column). */
+				if (origCol < parentAnchorOrigPrefix.length || extraWs === '') {
+					applyIndent();
+					if (inJsBlock) {
+						parentAnchorOrigPrefix  = origPrefix;
+						parentAnchorActive      = true;
+						parentAnchorIndentLevel = indentLevel;
+					}
+				} else {
+					indentSpace = parentAnchorIndentLevel * indentSize;
+					lines[i] = ''.padStart(indentSpace, '\t') + extraWs + line;
+					// Anchor unchanged — chain continues to same parent.
+				}
+			} else {
+				applyIndent();
+				if (inJsBlock) {
+					parentAnchorOrigPrefix  = origPrefix;
+					parentAnchorActive      = true;
+					parentAnchorIndentLevel = indentLevel;
+				}
+			}
+
+			/* Update running state for next iteration's continuation
+			 * classifier. Floor depths at 0 to recover gracefully from
+			 * stray closers without a matching opener (e.g. mid-string
+			 * `)` that the regex masker missed). */
+			parenDepth   += braceCounts.parenOpen   - braceCounts.parenClose;
+			bracketDepth += braceCounts.bracketOpen - braceCounts.bracketClose;
+			if (parenDepth   < 0) parenDepth   = 0;
+			if (bracketDepth < 0) bracketDepth = 0;
+			prevLastTerm = braceCounts.lastTerm;
 
 			indentLevel += (braceCounts.open - braceCounts.close + leadingCl);
 		}
@@ -846,6 +1075,8 @@ function beautifyCodes() {
 	var deep_sql = document.getElementById('deep_sql').checked;
 	var deep_css = document.getElementById('deep_css').checked;
 	var deep_js = document.getElementById('deep_js').checked;
+	var preserveContEl = document.getElementById('preserve_continuation_alignment');
+	var preserve_continuation_alignment = preserveContEl ? preserveContEl.checked : true;
 	var proSqlEl = document.getElementById('pro_sql');
 	var pro_sql = proSqlEl ? proSqlEl.checked : false;
 	var dialectEl = document.getElementById('pro_sql_dialect');
@@ -903,7 +1134,7 @@ function beautifyCodes() {
 				output.value = beautifySQL(rawCode);
 			}
 		}else{
-			var result = beautifyCFML(rawCode, split_html_tag);
+			var result = beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment);
 			if(deep_sql || deep_css || deep_js){
 				result = deepFormatEmbedded(result, {
 					sql: deep_sql,

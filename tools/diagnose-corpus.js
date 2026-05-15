@@ -135,6 +135,7 @@ function runBeautifier(input, dialect) {
         deep_sql:          { checked: true },
         deep_css:          { checked: false },
         deep_js:           { checked: false },
+        preserve_continuation_alignment: { checked: true },
         pro_sql:           { checked: !!sqlFormatter },
         pro_sql_dialect:   { value: dialect },
         input:             { value: input },
