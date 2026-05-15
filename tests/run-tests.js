@@ -2384,6 +2384,42 @@ assertEqual(
 	'}'
 );
 
+/* v7.1.3 regression: regex literal AFTER a JS keyword (`return`,
+ * `typeof`, `throw`, …) must NOT be mis-classified as division. The
+ * v7.1.2 fix added CFML-comment masking but exposed an older latent
+ * bug in protectBraceCodeText — its lexer treated identifiers as
+ * value-terminating, so `return /\b...{0,80}.../` failed the regex
+ * scan and leaked the regex content (including `{0,80}` quantifiers)
+ * through to the brace-rewrite step, which shattered the regex across
+ * lines and produced syntactically invalid JS. */
+assertEqual(
+	'v7.1.3: regex literal after `return` keyword survives intact',
+	runRouter(
+		'function check(s) {\n' +
+		'\treturn /\\b(total|amount)\\b[^.\\n]{0,80}\\b(all|overall)\\b/.test(s);\n' +
+		'}',
+		'js', false
+	),
+	'function check(s) {\n' +
+	'\treturn /\\b(total|amount)\\b[^.\\n]{0,80}\\b(all|overall)\\b/.test(s);\n' +
+	'}'
+);
+
+assertEqual(
+	'v7.1.3: regex after `typeof` keyword survives intact',
+	runRouter(
+		'function f(x) {\n' +
+		'\tvar t = typeof /pattern{1,3}/.exec(x);\n' +
+		'\treturn t;\n' +
+		'}',
+		'js', false
+	),
+	'function f(x) {\n' +
+	'\tvar t = typeof /pattern{1,3}/.exec(x);\n' +
+	'\treturn t;\n' +
+	'}'
+);
+
 if (!process.exitCode) {
 	console.log('All tests passed (including ' + USER_CASE_INPUTS.length + ' content-preservation invariants).');
 }

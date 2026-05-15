@@ -1404,6 +1404,15 @@ function formatCSSCode(code) {
 	return output.join('\n');
 }
 
+/* JS keywords that introduce an expression context — a `/` following
+ * any of these is a regex literal, NOT a division operator. Used by
+ * protectBraceCodeText's identifier-run handler to set lastSig back
+ * to 'operator' so the regex masking branch fires correctly. */
+var REGEX_CONTEXT_KEYWORDS = {
+	'return':1,'typeof':1,'throw':1,'void':1,'delete':1,'new':1,
+	'in':1,'of':1,'instanceof':1,'yield':1,'await':1,'case':1
+};
+
 function protectBraceCodeText(code) {
 	var tokens = [];
 	var output = "";
@@ -1543,7 +1552,26 @@ function protectBraceCodeText(code) {
 			continue;
 		}
 
-		if (char == ')' || char == ']' || /[A-Za-z0-9_$]/.test(char)) {
+		/* Identifier / keyword run. Consume the full word so we can
+		 * classify regex-context keywords (`return`, `typeof`, `throw`,
+		 * `void`, `delete`, `in`, `of`, `new`, `yield`, `await`,
+		 * `instanceof`, `case`) — they precede an EXPRESSION, so the
+		 * next `/` must be a regex, not division. Without this, lines
+		 * like `return /\b...{0,80}.../` get mis-classified as
+		 * division, the regex isn't masked as a token, and the next
+		 * `{` → `{\n` rewrite SHATTERS the regex literal across lines
+		 * (real-world repro: ai_chatbox_js_runtime_send.cfm L26252,
+		 * v7.1.2 production regression). */
+		if (/[A-Za-z_$]/.test(char)) {
+			var idStart = i;
+			while (i < code.length && /[A-Za-z0-9_$]/.test(code[i])) i++;
+			var word = code.slice(idStart, i);
+			output += word;
+			lastSig = REGEX_CONTEXT_KEYWORDS[word] ? 'operator' : 'value';
+			continue;
+		}
+
+		if (char == ')' || char == ']') {
 			lastSig = 'value';
 		} else {
 			lastSig = 'operator';
