@@ -4,7 +4,7 @@
  *   - JS / CSS / SVG / manifest: stale-while-revalidate
  *   - Bump CACHE_VERSION on every release to evict old assets
  */
-const CACHE_VERSION = 'v7.1.1';
+const CACHE_VERSION = 'v7.1.2';
 const CACHE_NAME    = 'cfbeautifier-' + CACHE_VERSION;
 
 const PRECACHE_URLS = [
@@ -30,7 +30,15 @@ const PRECACHE_URLS = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(PRECACHE_URLS))
+      .then((cache) => cache.addAll(
+        /* `cache: 'reload'` bypasses the browser's HTTP cache so the SW
+         * precache picks up fresh source on every install, not whatever
+         * happened to be HTTP-cached when the user hard-reloaded. Without
+         * this, bumping CACHE_VERSION evicts the SW cache but the new
+         * cache is populated from the BROWSER cache — stale files leak
+         * through and the version bump is a no-op. */
+        PRECACHE_URLS.map((u) => new Request(u, { cache: 'reload' }))
+      ))
       .then(() => self.skipWaiting())
   );
 });

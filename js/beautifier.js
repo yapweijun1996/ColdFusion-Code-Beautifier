@@ -497,12 +497,44 @@ function computeJsLineClassification(lines) {
 	var prevLastTerm = '';
 	var parentIdx = -1;
 	var inBlockComment = false;
+	var inCfmlComment = false;
 	for (var i = 0; i < lines.length; i++) {
 		var line = lines[i];
 		var trimmed = line.trim();
 		if (trimmed === '') { out[i] = { isBlank: true }; continue; }
 
-		/* Crude block-comment tracker — sufficient because JS block
+		/* CFML markup comment tracker — `<!--- ... --->` (and HTML
+		 * `<!-- ... -->`). Mid-file CFML comments are common in legacy
+		 * ColdFusion files (dated change tags) and would otherwise be
+		 * tokenized as code by countBracesOutsideStrings, polluting
+		 * paren/bracket depth and lastTerm tracking. */
+		if (inCfmlComment) {
+			if (trimmed.indexOf('--->') >= 0 || trimmed.indexOf('-->') >= 0) {
+				inCfmlComment = false;
+			}
+			out[i] = { isBlank: true };
+			continue;
+		}
+		var cfOpenIdx  = trimmed.indexOf('<!---');
+		var cfCloseIdx = trimmed.indexOf('--->');
+		if (cfOpenIdx === -1) {
+			cfOpenIdx  = trimmed.indexOf('<!--');
+			cfCloseIdx = trimmed.indexOf('-->');
+		}
+		if (cfOpenIdx >= 0 && cfCloseIdx < cfOpenIdx) {
+			inCfmlComment = true;
+			out[i] = { isBlank: true };
+			continue;
+		}
+		if (cfOpenIdx >= 0 && cfCloseIdx >= 0 && cfCloseIdx > cfOpenIdx
+		    && cfOpenIdx === 0
+		    && trimmed.length === cfCloseIdx + (trimmed.substr(cfCloseIdx, 4) === '--->' ? 4 : 3)) {
+			/* Whole line is a single-line CFML comment. */
+			out[i] = { isBlank: true };
+			continue;
+		}
+
+		/* Crude JS block-comment tracker — sufficient because JS block
 		 * comments cannot contain a close-marker mid-comment and cannot
 		 * nest. Comment-internal lines do not update cont state. */
 		var commentOpenIdx  = trimmed.indexOf('/*');

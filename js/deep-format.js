@@ -1437,6 +1437,44 @@ function protectBraceCodeText(code) {
 			continue;
 		}
 
+		/* CFML markup comment <!--- ... ---> and HTML comment <!-- ... -->.
+		 * Legacy ColdFusion files often embed dated/tagged CFML comments
+		 * MID-JS-BODY for change-tracking (e.g. `<!--- 20260429 [start]
+		 * Reason: ... --->`). These pass through splitLeadingCommentBlock
+		 * (which only strips comments at the file start) and reach
+		 * formatBraceCode verbatim. Without protection, any `{` or `}`
+		 * inside the comment text gets counted by the brace depth
+		 * tracker, accumulating mismatch and producing flat-depth output
+		 * for the entire JS body. Mask them as tokens so their content
+		 * is opaque to depth tracking, and restore verbatim at the end. */
+		if (char == '<' && code.substr(i, 5) == '<!---') {
+			var cfStart = i;
+			var cfEnd = code.indexOf('--->', i + 5);
+			if (cfEnd === -1) {
+				/* Unterminated CFML comment — bail out and treat as literal.
+				 * Mask remainder of input as a single token so brace count
+				 * is not contaminated. */
+				output += addBraceCodeToken(tokens, code.slice(cfStart));
+				i = code.length;
+				continue;
+			}
+			i = cfEnd + 4;
+			output += addBraceCodeToken(tokens, code.slice(cfStart, i));
+			continue;
+		}
+		if (char == '<' && code.substr(i, 4) == '<!--') {
+			var htStart = i;
+			var htEnd = code.indexOf('-->', i + 4);
+			if (htEnd === -1) {
+				output += addBraceCodeToken(tokens, code.slice(htStart));
+				i = code.length;
+				continue;
+			}
+			i = htEnd + 3;
+			output += addBraceCodeToken(tokens, code.slice(htStart, i));
+			continue;
+		}
+
 		if (char == '/' && (lastSig == null || lastSig == 'operator')) {
 			var regexStart = i;
 			var scan = i + 1;
