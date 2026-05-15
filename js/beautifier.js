@@ -482,6 +482,158 @@ function isContinuationLine(tokens, prevLastTerm, parenDepth, bracketDepth) {
 	return false;
 }
 
+/* Classify each line of a JS body as continuation or non-continuation,
+ * remembering each cont line's parent (the last non-cont line). Used by
+ * preserveContinuationAlignmentPostPass to re-apply column alignment
+ * after formatBraceCode produces canonical tab-indent output.
+ *
+ * Returns an array parallel to `lines` with entries:
+ *   { trimmed, isCont, parentIdx, isBlank }
+ * Blank/comment-only lines are skipped for cont state but get an entry
+ * with isBlank:true so the caller can index by lineNo. */
+function computeJsLineClassification(lines) {
+	var out = new Array(lines.length);
+	var parenDepth = 0, bracketDepth = 0;
+	var prevLastTerm = '';
+	var parentIdx = -1;
+	var inBlockComment = false;
+	for (var i = 0; i < lines.length; i++) {
+		var line = lines[i];
+		var trimmed = line.trim();
+		if (trimmed === '') { out[i] = { isBlank: true }; continue; }
+
+		/* Crude block-comment tracker — sufficient because JS block
+		 * comments cannot contain a close-marker mid-comment and cannot
+		 * nest. Comment-internal lines do not update cont state. */
+		var commentOpenIdx  = trimmed.indexOf('/*');
+		var commentCloseIdx = trimmed.indexOf('*/');
+		if (inBlockComment) {
+			if (commentCloseIdx >= 0) inBlockComment = false;
+			out[i] = { isBlank: true };
+			continue;
+		}
+		if (commentOpenIdx >= 0 && commentCloseIdx < commentOpenIdx) {
+			inBlockComment = true;
+			out[i] = { isBlank: true };
+			continue;
+		}
+		if (trimmed.indexOf('//') === 0) {
+			out[i] = { isBlank: true };
+			continue;
+		}
+
+		var tokens = countBracesOutsideStrings(trimmed);
+		var isCont = (parentIdx >= 0)
+			&& isContinuationLine(tokens, prevLastTerm, parenDepth, bracketDepth);
+
+		out[i] = {
+			trimmed:   trimmed,
+			isCont:    isCont,
+			parentIdx: isCont ? parentIdx : -1,
+			isBlank:   false
+		};
+
+		if (!isCont) {
+			parentIdx = i;
+		}
+		parenDepth   += tokens.parenOpen   - tokens.parenClose;
+		bracketDepth += tokens.bracketOpen - tokens.bracketClose;
+		if (parenDepth   < 0) parenDepth   = 0;
+		if (bracketDepth < 0) bracketDepth = 0;
+		prevLastTerm = tokens.lastTerm;
+	}
+	return out;
+}
+
+/* Post-pass: re-applies the original author's continuation column
+ * alignment on top of formatBraceCode's canonical-tab output, so that
+ *
+ *     var rows = Array.isArray(raw.data)    ? raw.data
+ *              : Array.isArray(raw.rows)    ? raw.rows;
+ *
+ * survives the bare-JS-in-CFM beautify path (detectLanguage='js' →
+ * formatJsWithLeadingComments → formatBraceCode), which previously
+ * collapsed the 9-space `:` alignment to a single tab.
+ *
+ * Strategy: build a FIFO queue of continuation lines from the original
+ * input — each entry holds the line's trimmed content + the raw-prefix
+ * delta from its parent line. Walk the formatted output; whenever a
+ * continuation line in the formatted output trim-matches the next
+ * queue entry, splice in `parentFormattedPrefix + extraWs + trimmed`.
+ *
+ * Conservative: lines that don't match are left as formatBraceCode
+ * produced them. Order-preserving: queue is FIFO so duplicate trim
+ * contents (e.g., repeated `: x` in two unrelated chains) still pair up
+ * left-to-right between original and formatted. */
+function preserveContinuationAlignmentPostPass(formatted, original) {
+	var oLines = original.split('\n');
+	var fLines = formatted.split('\n');
+	var oClass = computeJsLineClassification(oLines);
+	var fClass = computeJsLineClassification(fLines);
+
+	/* Build FIFO of original continuation lines with their extra-prefix
+	 * relative to the parent.
+	 *
+	 * Conservative gate (v7.1.1 fine-tuning): ONLY enqueue lines whose
+	 * first non-whitespace char is an explicit joiner token. This rules
+	 * out body lines inside parens (e.g. callback bodies in
+	 * `subscribe(function(evt) { body... })`) which my paren-depth
+	 * classifier flags as continuations but where the author did NOT
+	 * intend column alignment — they're just nested statements that
+	 * formatBraceCode should reflow canonically. The narrower gate
+	 * preserves the cases we DO care about (ternary `:`, concat `+`,
+	 * boolean `&&`/`||`, comma-leading `,`) without over-reaching. */
+	/* First-char gate — only enqueue lines whose first non-ws character
+	 * is an unambiguous **expression-continuation operator**:
+	 *   `:` `?` `,` `.` `+` `-` `&` `|`
+	 *
+	 * Closers (`}` `]` `)`) are deliberately excluded: formatBraceCode
+	 * may reorganize structure (e.g. split `var x = { a:1, b:2 };` so
+	 * `{` lives on its own line), at which point the author's original
+	 * "close at column N" intent becomes ambiguous in the new layout.
+	 * Letting formatBraceCode's canonical close-indent stand is the
+	 * safest call; if the original structure WASN'T split, the closer
+	 * naturally lands at the canonical level anyway. */
+	var OPERATOR_FIRSTCHAR = {':':1, '?':1, ',':1, '.':1, '+':1, '-':1, '&':1, '|':1};
+	var queue = [];
+	for (var oi = 0; oi < oClass.length; oi++) {
+		var info = oClass[oi];
+		if (!info || info.isBlank || !info.isCont) continue;
+		var firstChar = info.trimmed.charAt(0);
+		if (!OPERATOR_FIRSTCHAR[firstChar]) continue;
+		var parentLn  = oLines[info.parentIdx] || '';
+		var childLn   = oLines[oi];
+		var parentPfx = (parentLn.match(/^[ \t]*/) || [''])[0];
+		var childPfx  = (childLn.match(/^[ \t]*/)  || [''])[0];
+		var extra;
+		if (childPfx.indexOf(parentPfx) === 0) {
+			extra = childPfx.substring(parentPfx.length);
+		} else {
+			var delta = childPfx.length - parentPfx.length;
+			extra = delta > 0 ? new Array(delta + 1).join(' ') : '';
+		}
+		if (extra === '') continue;
+		queue.push({ trimmed: info.trimmed, extra: extra });
+	}
+
+	if (queue.length === 0) return formatted;
+
+	/* Walk formatted output. For each continuation line whose trim
+	 * matches the queue head, splice in preserved alignment. */
+	for (var fi = 0; fi < fClass.length; fi++) {
+		if (queue.length === 0) break;
+		var fInfo = fClass[fi];
+		if (!fInfo || fInfo.isBlank || !fInfo.isCont) continue;
+		if (fInfo.trimmed !== queue[0].trimmed) continue;
+		var head = queue.shift();
+		var fParent = fLines[fInfo.parentIdx] || '';
+		var fParentPfx = (fParent.match(/^[ \t]*/) || [''])[0];
+		fLines[fi] = fParentPfx + head.extra + fInfo.trimmed;
+	}
+
+	return fLines.join('\n');
+}
+
 function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) {
 
 	if(split_html_tag == true){
@@ -1063,6 +1215,20 @@ function formatJsWithLeadingComments(code) {
 	// newline so the boundary is predictable and idempotent.
 	var leading = split.leading.replace(/[ \t\r\n]+$/, '');
 	var body = formatBraceCode(split.body, false);
+
+	/* v7.1.1 — formatBraceCode emits canonical tab-indent and strips any
+	 * column alignment the author used on continuation lines (ternary
+	 * chains, +-concat, &&||, comma-leading). Re-apply preservation as
+	 * a post-pass over the ORIGINAL split.body. Gated by the same UI
+	 * checkbox as beautifyCFML's inline path. */
+	var preserveEl = (typeof document !== 'undefined' && document.getElementById)
+		? document.getElementById('preserve_continuation_alignment')
+		: null;
+	var preserveContAlign = preserveEl ? !!preserveEl.checked : true;
+	if (preserveContAlign && typeof preserveContinuationAlignmentPostPass === 'function') {
+		body = preserveContinuationAlignmentPostPass(body, split.body);
+	}
+
 	if (leading === '') return body;
 	return leading + '\n' + body;
 }

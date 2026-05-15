@@ -2289,6 +2289,101 @@ assertEqual(
 	'</script>'
 );
 
+/* ============================================================
+ * v7.1.1 — post-pass continuation alignment on the BARE-JS path.
+ *
+ * Files like sample/ai_chatbox_js_runtime_*.cfm (CFML comment header
+ * followed by a large JS body, no <script> wrapper) are auto-detected
+ * as language='js' by detectLanguage() and routed through
+ * formatJsWithLeadingComments → formatBraceCode. v7.1.0's beautifyCFML
+ * fix did NOT cover this path. v7.1.1 adds a post-pass that re-applies
+ * column alignment after formatBraceCode produces canonical output.
+ *
+ * Each fixture uses language='js' (or auto-detection) to confirm the
+ * JS path now preserves alignment too. ============================ */
+assertEqual(
+	'v7.1.1 post-pass: ternary chain on bare-JS path',
+	runRouter(
+		'function f() {\n' +
+		'\tvar rows = Array.isArray(raw.data)    ? raw.data\n' +
+		'\t         : Array.isArray(raw.rows)    ? raw.rows\n' +
+		'\t         : Array.isArray(raw.records) ? raw.records\n' +
+		'\t         : null;\n' +
+		'}',
+		'js', false
+	),
+	'function f() {\n' +
+	'\tvar rows = Array.isArray(raw.data)    ? raw.data\n' +
+	'\t         : Array.isArray(raw.rows)    ? raw.rows\n' +
+	'\t         : Array.isArray(raw.records) ? raw.records\n' +
+	'\t         : null;\n' +
+	'}'
+);
+
+assertEqual(
+	'v7.1.1 post-pass: string concat + on bare-JS path',
+	runRouter(
+		'function f() {\n' +
+		'\tvar msg = "hello "\n' +
+		'\t        + "world "\n' +
+		'\t        + "goodbye";\n' +
+		'}',
+		'js', false
+	),
+	'function f() {\n' +
+	'\tvar msg = "hello "\n' +
+	'\t        + "world "\n' +
+	'\t        + "goodbye";\n' +
+	'}'
+);
+
+assertEqual(
+	'v7.1.1 post-pass: && || chain on bare-JS path',
+	runRouter(
+		'function f() {\n' +
+		'\tif (a > 0\n' +
+		'\t\t&& b < 10\n' +
+		'\t\t|| c === null) {\n' +
+		'\t\tgo();\n' +
+		'\t}\n' +
+		'}',
+		'js', false
+	),
+	'function f() {\n' +
+	'\tif (a > 0\n' +
+	'\t\t&& b < 10\n' +
+	'\t\t|| c === null) {\n' +
+	'\t\tgo();\n' +
+	'\t}\n' +
+	'}'
+);
+
+assertEqual(
+	/* formatBraceCode splits `{ name: "x"` so `{` is on its own line and
+	 * `name: "x"` is at object-body indent. The comma-leading lines
+	 * keep their 10-space alignment relative to the (now-deeper) parent
+	 * `name: "x"` — relative offset preserved, absolute column shifts.
+	 * Closing `};` defers to canonical close-indent (closers excluded
+	 * from post-pass queue). */
+	'v7.1.1 post-pass: comma-leading object on bare-JS path',
+	runRouter(
+		'function f() {\n' +
+		'\tvar cfg = { name: "x"\n' +
+		'\t          , port: 8080\n' +
+		'\t          , host: "localhost"\n' +
+		'\t          };\n' +
+		'}',
+		'js', false
+	),
+	'function f() {\n' +
+	'\tvar cfg = {\n' +
+	'\t\tname: "x"\n' +
+	'\t\t          , port: 8080\n' +
+	'\t\t          , host: "localhost"\n' +
+	'\t};\n' +
+	'}'
+);
+
 if (!process.exitCode) {
 	console.log('All tests passed (including ' + USER_CASE_INPUTS.length + ' content-preservation invariants).');
 }
