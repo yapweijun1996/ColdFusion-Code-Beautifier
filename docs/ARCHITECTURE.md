@@ -10,8 +10,10 @@ Browser-side code beautifier for CFML/HTML/CSS/JS/SQL. No build step, no depende
 js/cf-tags.js          ← CF_TAGS config (inline / block / middle + HTML_VOID_TAGS)
 js/sql-keywords.js     ← SQL_MAJOR_CLAUSES, SQL_UPPERCASE_KEYWORDS, SQL_FUNCTION_KEYWORDS
 js/sql-beautifier.js   ← beautifySQL + tokenizeSQL + matchSQLMajorClause
+js/js-lexer-utils.js   ← shared JS regex/string lexical helpers
 js/deep-format.js      ← deepFormatEmbedded + token protection layers
 js/tag-utils.js        ← get_tag_name / start / end
+js/cfml-splitter.js    ← splitAdjacentCFMLTags pre-pass
 js/toast.js            ← notification UI
 js/clipboard.js        ← copy_output_data / clear_data
 js/beautifier.js       ← beautifyCFML + detectLanguage + beautifyCodes (router)
@@ -65,6 +67,7 @@ beautifyCodes()                       router (DOM I/O)
   │                       (preserve leading <!---/<!--/`/*`/`//` banner,
   │                        run formatBraceCode on the JS body)
   └─ else (cfml)
+       ├─ splitAdjacentCFMLTags(code)          stage 0: safe tag splitting
        ├─ beautifyCFML(code, split_html_tag)   stage 1: outer CFML indent
        └─ if any deep_* checkbox on:
             deepFormatEmbedded(result, {sql, css, js})   stage 2
@@ -193,9 +196,16 @@ Major clauses do not break inside `funcDepth > 0` (window function `OVER(PARTITI
 ## Per-line brace counter (non-tag lines)
 
 For lines that aren't CFML/HTML tags — bare JS / CSS / JSON-shaped content
-between tags — `beautifyCFML` uses two helpers in `js/beautifier.js`:
+between tags — `beautifyCFML` uses helpers split across focused files:
 
-- **`countBracesOutsideStrings(s)`** — counts `{` `[` (openers) and `}` `]`
+- **`splitAdjacentCFMLTags(code)`** in `js/cfml-splitter.js` — inserts safe
+  line breaks between adjacent CFML/HTML tags before outer indentation.
+
+- **`scanJSRegexLiteralEnd(code, pos, prefix, opts)`** in
+  `js/js-lexer-utils.js` — shared lightweight regex literal scanner used by
+  the CFML splitter to avoid treating `/</g` as a real `</g>` tag.
+
+- **`countBracesOutsideStrings(s)`** in `js/beautifier.js` — counts `{` `[` (openers) and `}` `]`
   (closers) on one line, skipping these lexical contexts:
   1. Single/double-quoted strings (with `\` escapes)
   2. Template literals `` `…` `` (with `\` escapes; `${…}` braces DO count)

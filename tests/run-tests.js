@@ -5,8 +5,10 @@ var scripts = [
 	'js/cf-tags.js',
 	'js/sql-keywords.js',
 	'js/sql-beautifier.js',
+	'js/js-lexer-utils.js',
 	'js/deep-format.js',
 	'js/tag-utils.js',
+	'js/cfml-splitter.js',
 	'js/toast.js',
 	'js/clipboard.js',
 	'js/beautifier.js'
@@ -265,6 +267,23 @@ assertEqual(
 	'auto-split skips contents of <script> block (JS strings can contain anything)',
 	runRouter('<script>var x = "<cfset y=1>";</script>', 'cfml', false),
 	'<script>var x = "<cfset y=1>";</script>'
+);
+
+assertEqual(
+	'auto-split preserves JS regex literal containing < in bare CFM JS',
+	(function() {
+		var input = '<cfsilent><!--- header ---></cfsilent>\n'
+			+ '(function() {\n'
+			+ 'window.enabled = <cfoutput>#flag ? "true" : "false"#</cfoutput>;\n'
+			+ 'var escaped = String(s).replace(/</g, "&lt;");\n'
+			+ '})();';
+		var output = runRouter(input, 'auto', true);
+		return output.indexOf('replace(/</g, "&lt;")') !== -1
+			&& output.indexOf('replace(/\n</g') === -1
+			? 'preserved'
+			: output;
+	})(),
+	'preserved'
 );
 
 assertEqual(
