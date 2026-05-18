@@ -136,6 +136,129 @@ function assertEqual(name, actual, expected) {
 	}
 }
 
+function findJsStringLiteralLineBreaks(code) {
+	var s = String(code || '').replace(/\r\n?/g, '\n');
+	var hits = [];
+	var quote = null;
+	var start = null;
+	var escaped = false;
+	var inLineComment = false;
+	var inBlockComment = false;
+	var inCfmlComment = false;
+	var lastSig = null;
+	var line = 1;
+	var col = 0;
+
+	for (var i = 0; i < s.length; i++) {
+		var c = s[i];
+		var n = s[i + 1];
+		col++;
+
+		if (c === '\n') {
+			if (quote && quote !== '`' && !escaped) {
+				hits.push(start);
+				quote = null;
+			}
+			line++;
+			col = 0;
+			escaped = false;
+			inLineComment = false;
+			continue;
+		}
+
+		if (inCfmlComment) {
+			if (s.substr(i, 4) === '--->') {
+				inCfmlComment = false;
+				i += 3;
+				col += 3;
+			} else if (s.substr(i, 3) === '-->') {
+				inCfmlComment = false;
+				i += 2;
+				col += 2;
+			}
+			continue;
+		}
+		if (inLineComment) continue;
+		if (inBlockComment) {
+			if (c === '*' && n === '/') {
+				inBlockComment = false;
+				i++;
+				col++;
+			}
+			continue;
+		}
+
+		if (quote) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (c === '\\') {
+				escaped = true;
+				continue;
+			}
+			if (c === quote) quote = null;
+			continue;
+		}
+
+		if (s.substr(i, 4) === '<!--') {
+			inCfmlComment = true;
+			continue;
+		}
+		if (c === '/' && n === '/') {
+			inLineComment = true;
+			i++;
+			col++;
+			continue;
+		}
+		if (c === '/' && n === '*') {
+			inBlockComment = true;
+			i++;
+			col++;
+			continue;
+		}
+		if (c === '/' && (lastSig === null || lastSig === 'operator')) {
+			var rs = i + 1;
+			var inClass = false;
+			var closed = false;
+			while (rs < s.length) {
+				var rc = s[rs];
+				if (rc === '\\') {
+					rs += 2;
+					continue;
+				}
+				if (rc === '\n') break;
+				if (rc === '[') inClass = true;
+				else if (rc === ']') inClass = false;
+				else if (rc === '/' && !inClass) {
+					rs++;
+					closed = true;
+					break;
+				}
+				rs++;
+			}
+			if (closed) {
+				while (rs < s.length && /[gimsuy]/.test(s[rs])) rs++;
+				col += (rs - i - 1);
+				i = rs - 1;
+				lastSig = 'value';
+				continue;
+			}
+		}
+		if (c === '"' || c === "'" || c === '`') {
+			quote = c;
+			start = { line: line, col: col, quote: c };
+			lastSig = 'value';
+			continue;
+		}
+		if (c === ' ' || c === '\t') continue;
+		if (c === ')' || c === ']' || /[A-Za-z0-9_$]/.test(c)) lastSig = 'value';
+		else lastSig = 'operator';
+	}
+
+	return hits;
+}
+
 assertEqual(
 	'simple select',
 	runSQL('select u.id, u.name from users u where u.active = 1 order by u.id desc limit 10'),
@@ -980,6 +1103,32 @@ assertEqual(
 		// the same characters as input (modulo whitespace).
 		function norm(s) { return s.replace(/\s+/g, '').toLowerCase(); }
 		return norm(input) === norm(output) ? 'preserved' : 'CORRUPTED (input: ' + JSON.stringify(input) + ', output: ' + JSON.stringify(output) + ')';
+	})(),
+	'preserved'
+);
+
+assertEqual(
+	'js mode — beautifier output has no raw line break inside quoted strings',
+	(function() {
+		var input = "if (x) {\n\tvar html = '<div onclick=\"open(\\'x\\')\">' + name + '</div>';\n}";
+		var output = runRouter(input, 'auto', false);
+		var hits = findJsStringLiteralLineBreaks(output);
+		return hits.length === 0 ? 'clean' : JSON.stringify(hits);
+	})(),
+	'clean'
+);
+
+assertEqual(
+	'cfml mode — bare JS with cfoutput keeps escaped-quote HTML strings intact',
+	(function() {
+		var input = "<!--- header --->\n"
+			+ "var enabled = true;\n"
+			+ "<cfoutput>var isAdmin = #(_showAdmin ? 'true' : 'false')#;</cfoutput>\n"
+			+ "var html = '<img src=\"x\" onerror=\"this.style.display=\\'none\\'\">';\n"
+			+ "html += '</div>';";
+		var output = runRouter(input, 'auto', false);
+		var hits = findJsStringLiteralLineBreaks(output);
+		return hits.length === 0 && output.indexOf("html += '</div>';") !== -1 ? 'preserved' : output;
 	})(),
 	'preserved'
 );
@@ -2199,6 +2348,13 @@ USER_CASE_INPUTS.forEach(function(pair) {
 			var label = name + ' (deep=' + (deep ? 'on' : 'off') + ')';
 			var pass1 = runRouter(src, 'auto', deep);
 			var pass2 = runRouter(pass1, 'auto', deep);
+			var stringBreaks = findJsStringLiteralLineBreaks(pass1);
+			if (stringBreaks.length) {
+				fail++;
+				console.log('\nFAIL JS string syntax guard: ' + label);
+				console.log('  Raw newline inside quoted string at ' + JSON.stringify(stringBreaks.slice(0, 5)));
+				process.exitCode = 1;
+			}
 			if (pass1 === pass2) {
 				pass++;
 			} else {

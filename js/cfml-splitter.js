@@ -42,6 +42,17 @@ function splitAdjacentCFMLTags(code) {
 	var lower = code.toLowerCase();
 	var out = '';
 	var i = 0;
+	var useJsStringEscapes = shouldUseJsStringEscapes(code);
+
+	function shouldUseJsStringEscapes(src) {
+		/* Bare JS partials may still contain small server-side <cfoutput>
+		 * islands. In that shape, quoted HTML uses JS escapes (`\'`) and the
+		 * CFML splitter must not lose string parity before later `</div>`
+		 * fragments. Keep normal CFML semantics for ordinary tag-first files. */
+		var body = src.replace(/^\s*(?:<!---[\s\S]*?--->\s*)+/i, '').replace(/^\s+/, '');
+		return /^(?:\/\*|\/\/|function\b|var\b|let\b|const\b|class\b|if\b|\(\s*function\b)/.test(body)
+			&& /\\['"]/.test(src);
+	}
 
 	function leadingWsOfInputLine(pos) {
 		var lineStart = code.lastIndexOf('\n', pos) + 1;
@@ -60,6 +71,29 @@ function splitAdjacentCFMLTags(code) {
 		}
 		out += code.slice(i, j + endNeedle.length);
 		i = j + endNeedle.length;
+	}
+
+	function lineTailHasOpenQuote(text) {
+		var q = null;
+		for (var k = 0; k < text.length; k++) {
+			var ch = text[k];
+			if (q) {
+				if (useJsStringEscapes && ch === '\\') {
+					k++;
+					continue;
+				}
+				if (ch === q) {
+					if (!useJsStringEscapes && text[k + 1] === q) {
+						k++;
+						continue;
+					}
+					q = null;
+				}
+				continue;
+			}
+			if (ch === '"' || ch === "'" || (useJsStringEscapes && ch === '`')) q = ch;
+		}
+		return q !== null;
 	}
 
 	function maybeSplitBefore(pos) {
@@ -87,6 +121,7 @@ function splitAdjacentCFMLTags(code) {
 		var outLineTail = outLastNl === -1 ? out : out.slice(outLastNl + 1);
 		var trimmed = outLineTail.replace(/[ \t]+$/, '');
 		if (trimmed === '') return false;
+		if (lineTailHasOpenQuote(trimmed)) return false;
 
 		// (A) script/style — always split when line has content
 		if (ALWAYS_SPLIT_BEFORE_RE.test(slice)) {
@@ -242,12 +277,17 @@ function splitAdjacentCFMLTags(code) {
 		}
 		// Quote (string literal) — emit verbatim until matching close.
 		var c = code[i];
-		if (c === '"' || c === "'") {
+		if (c === '"' || c === "'" || (useJsStringEscapes && c === '`')) {
 			out += c;
 			i++;
 			while (i < code.length) {
+				if (useJsStringEscapes && code[i] === '\\') {
+					out += code.substr(i, 2);
+					i += 2;
+					continue;
+				}
 				if (code[i] === c) {
-					if (code[i + 1] === c) {  // SQL-style doubled-quote escape
+					if (!useJsStringEscapes && code[i + 1] === c) {  // SQL-style doubled-quote escape
 						out += c + c;
 						i += 2;
 						continue;
