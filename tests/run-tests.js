@@ -145,6 +145,7 @@ function findJsStringLiteralLineBreaks(code) {
 	var inLineComment = false;
 	var inBlockComment = false;
 	var inCfmlComment = false;
+	var inCfscriptBlock = false;
 	var lastSig = null;
 	var line = 1;
 	var col = 0;
@@ -193,11 +194,26 @@ function findJsStringLiteralLineBreaks(code) {
 				escaped = false;
 				continue;
 			}
-			if (c === '\\') {
+			if (!inCfscriptBlock && c === '\\') {
 				escaped = true;
 				continue;
 			}
 			if (c === quote) quote = null;
+			continue;
+		}
+
+		var cfscriptOpen = s.slice(i).match(/^<cfscript\b[^>]*>/i);
+		if (cfscriptOpen) {
+			inCfscriptBlock = true;
+			i += cfscriptOpen[0].length - 1;
+			col += cfscriptOpen[0].length - 1;
+			continue;
+		}
+		var cfscriptClose = s.slice(i).match(/^<\/cfscript\s*>/i);
+		if (cfscriptClose) {
+			inCfscriptBlock = false;
+			i += cfscriptClose[0].length - 1;
+			col += cfscriptClose[0].length - 1;
 			continue;
 		}
 
@@ -625,6 +641,16 @@ assertEqual(
 		true
 	),
 	"<cfset p = replace(\"..\\..\\..\\#x#\\\",\"\\\\\", \"\\\\\\\\\", \"ALL\")>\n<cfquery name=\"q\">\n\tSELECT id\n\tFROM t\n</cfquery>"
+);
+
+assertEqual(
+	'cfscript replace backslash string keeps following statement aligned',
+	runRouter(
+		"<cfscript>\nif (mode == \"contains\") {\nraw = replace(raw, \"\\\", \"\\\\\", \"all\");\nvar bound = \"\";\nif (mode == \"prefix\") bound = raw & \"%\";\n}\n</cfscript>",
+		'cfml',
+		false
+	),
+	"<cfscript>\n\tif (mode == \"contains\") {\n\t\traw = replace(raw, \"\\\", \"\\\\\", \"all\");\n\t\tvar bound = \"\";\n\t\tif (mode == \"prefix\") bound = raw & \"%\";\n\t}\n</cfscript>"
 );
 
 assertEqual(

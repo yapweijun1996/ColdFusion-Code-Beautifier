@@ -29,7 +29,8 @@
  *   {firstTerm}                    — first non-ws masked token if ∈ joiner set
  *                                    ({':','?','&&','||',',','.','+','-',')',']','}'}), else ''
  * Used by isContinuationLine() for detect-and-anchor continuation alignment. */
-function countBracesOutsideStrings(s) {
+function countBracesOutsideStrings(s, options) {
+	var useJsStringEscapes = !options || options.useJsStringEscapes !== false;
 	var braceOpen = 0, braceClose = 0;
 	var bracketOpen = 0, bracketClose = 0;
 	var parenOpen = 0, parenClose = 0;
@@ -60,7 +61,7 @@ function countBracesOutsideStrings(s) {
 			i++; continue;
 		}
 		if (inQ) {
-			if (c === '\\') { i += 2; continue; }
+			if (useJsStringEscapes && c === '\\') { i += 2; continue; }
 			if (c === inQ) { inQ = null; lastSig = 'value'; setTerm('STR'); i++; continue; }
 			i++; continue;
 		}
@@ -434,6 +435,7 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 	 * <cfquery> (SQL) and <style> (CSS) regions, where the JS-shaped
 	 * continuation classifier would misfire. */
 	var inJsBlock = true;
+	var inCfscriptBlock = false;
 	var parenDepth = 0;
 	var bracketDepth = 0;
 	var prevLastTerm = '';
@@ -618,6 +620,16 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 			 * inside the body. Other tags don't change inJsBlock. */
 			if (tag_name === 'script') {
 				inJsBlock = true;
+				inCfscriptBlock = false;
+				parenDepth = 0;
+				bracketDepth = 0;
+				prevLastTerm = '';
+				parentAnchorOrigPrefix  = '';
+				parentAnchorActive      = false;
+				parentAnchorIndentLevel = 0;
+			} else if (tag_name === 'cfscript') {
+				inJsBlock = true;
+				inCfscriptBlock = !line_data.startsWith('</');
 				parenDepth = 0;
 				bracketDepth = 0;
 				prevLastTerm = '';
@@ -630,6 +642,7 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 				} else {
 					inJsBlock = false;
 				}
+				inCfscriptBlock = false;
 				parenDepth = 0;
 				bracketDepth = 0;
 				prevLastTerm = '';
@@ -682,7 +695,9 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 			 * but the pre-decrement matters because applyIndent() must
 			 * see the *display* level (leading-closer-discounted), not
 			 * the carry-over level. */
-			var braceCounts = countBracesOutsideStrings(line);
+			var braceCounts = countBracesOutsideStrings(line, {
+				useJsStringEscapes: !inCfscriptBlock
+			});
 			var leadingCl   = leadingClosersOf(line);
 			indentLevel -= leadingCl;
 
