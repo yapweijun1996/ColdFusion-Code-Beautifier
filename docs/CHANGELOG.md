@@ -2,6 +2,23 @@
 
 ## v7 series (2026-05-14)
 
+### Fix: multi-line `<cfset>` struct alignment with HTML strings
+
+Real-world repro: `sample/ai_dashboard_inventory_render_kpi.cfm`.
+A multi-line `<cfset arrayAppend(..., { ... })>` contains CFML string
+values with HTML snippets such as `'<span class="ccy">SGD</span>'`.
+The CFML formatter treated the `>` inside those strings as the end of
+the outer `<cfset ...` tag, so the remaining struct keys drifted left.
+
+Fix: multi-line tag close detection now ignores `>` inside quoted text.
+Inline CFML expression tags also align closing `})>` lines with their
+opening `<cfset>` and preserve extra continuation whitespace for wrapped
+function arguments.
+
+Regression coverage:
+- "multi-line cfset struct ignores html tag close chars inside strings"
+- "multi-line cfset struct html-string close is stable with deep format enabled"
+
 ### v7.0.1 — block comment re-indent + empty `{}` collapse
 
 Two follow-up fixes to v7.0.0 reported on

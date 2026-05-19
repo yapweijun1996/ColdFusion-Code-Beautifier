@@ -872,6 +872,26 @@ assertEqual(
 );
 
 assertEqual(
+	'multi-line cfset struct ignores html tag close chars inside strings',
+	runRouter(
+		'<cfsilent>\n<cfset _cards = []>\n<cfset arrayAppend(_cards, {\nlabelMetaVars : { "date": dateFormat(_dateTo, "mmm d, yyyy") },\nvalueHtml     : \'<span class="ccy">SGD</span>\' & fmtMoney(_qohAmt),\nsubHtml       : numberFormat(_qohSku, "0") & \' <span data-i18n="x">SKUs</span>\',\ndeltaHtml     : deltaChip(_grnAmt, _grnPrev, true,\n\t                "Goods Receipt vs prior FY"),\nprompt        : "Show inventory",\nbuttonKey     : "dash.inventory.kpi.btn.qoh"\n})>\n<cfset after = 1>\n</cfsilent>',
+		'cfml',
+		false
+	),
+	'<cfsilent>\n\t<cfset _cards = []>\n\t<cfset arrayAppend(_cards, {\n\t\tlabelMetaVars : { "date": dateFormat(_dateTo, "mmm d, yyyy") },\n\t\tvalueHtml     : \'<span class="ccy">SGD</span>\' & fmtMoney(_qohAmt),\n\t\tsubHtml       : numberFormat(_qohSku, "0") & \' <span data-i18n="x">SKUs</span>\',\n\t\tdeltaHtml     : deltaChip(_grnAmt, _grnPrev, true,\n\t\t                "Goods Receipt vs prior FY"),\n\t\tprompt        : "Show inventory",\n\t\tbuttonKey     : "dash.inventory.kpi.btn.qoh"\n\t})>\n\t<cfset after = 1>\n</cfsilent>'
+);
+
+assertEqual(
+	'multi-line cfset struct html-string close is stable with deep format enabled',
+	runRouter(
+		'<cfsilent>\n<cfset arrayAppend(_cards, {\nvalueHtml : \'<span class="ccy">SGD</span>\' & fmtMoney(_qohAmt),\nbuttonKey : "dash.inventory.kpi.btn.qoh"\n})>\n</cfsilent>',
+		'cfml',
+		true
+	),
+	'<cfsilent>\n\t<cfset arrayAppend(_cards, {\n\t\tvalueHtml : \'<span class="ccy">SGD</span>\' & fmtMoney(_qohAmt),\n\t\tbuttonKey : "dash.inventory.kpi.btn.qoh"\n\t})>\n</cfsilent>'
+);
+
+assertEqual(
 	'multi-line cfqueryparam (cf inline) pops back to parent level after close',
 	runRouter(
 		'<cfquery name="q">\nselect * from t where id =\n<cfqueryparam value="#x#"\ncfsqltype="cf_sql_integer">\n</cfquery>',

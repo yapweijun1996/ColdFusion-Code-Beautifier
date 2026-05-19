@@ -178,6 +178,30 @@ function getLeadingCol(s) {
 	return i;
 }
 
+/* Returns true when a CFML/HTML tag-closing `>` appears outside quoted
+ * text. Multi-line tags can contain HTML snippets inside CFML strings, e.g.
+ * `valueHtml : '<span>...</span>'`; those inner `>` chars must not end the
+ * outer `<cfset ...` tag. */
+function hasTagCloseOutsideStrings(s) {
+	var quote = null;
+	for (var i = 0; i < s.length; i++) {
+		var c = s[i];
+		if (quote) {
+			if (c === quote) {
+				if (s[i + 1] === quote) { i++; continue; }
+				quote = null;
+			}
+			continue;
+		}
+		if (c === '"' || c === "'") {
+			quote = c;
+			continue;
+		}
+		if (c === '>') return true;
+	}
+	return false;
+}
+
 /* Continuation-line classifier. A line is a continuation iff ANY of:
  *   (a) prior logical line's lastTerm is in OPEN_TERMS (trailing-open)
  *   (b) current line's firstTerm is in JOINER (leading-joiner; already
@@ -405,6 +429,7 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 	var commentNewPrefix = "";
 	var inMultiLineTag = false;
 	var multiLineTagName = "";
+	var multiLineTagOrigPrefix = "";
 
 	/* Detect-and-anchor continuation alignment state.
 	 *   preserveContAlign       — config gate (UI checkbox, default ON)
@@ -477,14 +502,36 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 		//     children indent under it; the matching `</tag>` decrements
 		//     back to the opener's level via existing logic.
 		if (inMultiLineTag) {
+			var closesMultiLineTag = hasTagCloseOutsideStrings(line);
+			var inlineExpressionClose = closesMultiLineTag
+				&& CF_TAGS.inline.indexOf(multiLineTagName) !== -1
+				&& /^[})\]]/.test(line);
+			var inlineContExtraWs = "";
+			if (CF_TAGS.inline.indexOf(multiLineTagName) !== -1
+				&& origPrefix.indexOf(multiLineTagOrigPrefix) === 0) {
+				var inlineRelPrefix = origPrefix.substring(multiLineTagOrigPrefix.length);
+				if (inlineRelPrefix.length > 1) {
+					inlineContExtraWs = inlineRelPrefix.substring(1);
+				}
+			}
+			if (inlineExpressionClose) {
+				indentLevel -= 1;
+			}
 			applyIndent();
-			if (line.indexOf('>') !== -1) {
+			if (inlineContExtraWs !== "") {
+				lines[i] = ''.padStart(indentSpace, '\t') + inlineContExtraWs + line;
+			}
+			if (inlineExpressionClose) {
+				indentLevel += 1;
+			}
+			if (closesMultiLineTag) {
 				var selfClose = /\/\s*>/.test(line);
 				inMultiLineTag = false;
 				if (selfClose || HTML_VOID_TAGS.indexOf(multiLineTagName) !== -1 || CF_TAGS.inline.indexOf(multiLineTagName) !== -1) {
 					indentLevel -= 1;
 				}
 				multiLineTagName = "";
+				multiLineTagOrigPrefix = "";
 			}
 			continue;
 		}
@@ -569,15 +616,17 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 		// of the next iteration via inMultiLineTag) sit one level
 		// deeper than the opener. Skip comment openers — they have
 		// their own handling above.
-		if (line_data.startsWith("<") && !line_data.includes(">") && tag_name && !line_data.startsWith('<!')) {
+		var hasOuterTagClose = hasTagCloseOutsideStrings(line);
+		if (line_data.startsWith("<") && !hasOuterTagClose && tag_name && !line_data.startsWith('<!')) {
 			applyIndent();
 			multiLineTagName = tag_name;
+			multiLineTagOrigPrefix = origPrefix;
 			inMultiLineTag = true;
 			indentLevel += 1;
 			continue;
 		}
 
-		if (line_data.startsWith("<") && line_data.includes(">")) { // Handle HTML Coldfusion
+		if (line_data.startsWith("<") && hasOuterTagClose) { // Handle HTML Coldfusion
 			/* Maintain [start] */
 			if (line_data.startsWith("<") && line_data.includes("/>")) {
 				maintain_yn = "y";
