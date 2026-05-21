@@ -2667,6 +2667,46 @@ assertEqual(
 	'}'
 );
 
+/* Regression: identifier-assignment patterns like `_dict.en = {` must be
+ * auto-detected as JS (not CFML). Prior to this fix jsPrefix only covered
+ * keyword constructs; bare `identifier.prop = {` fell through to 'cfml',
+ * so the dict file stayed un-reformatted and misaligned source tabs were
+ * silently preserved. Real-world repro: sample/ai_chatbox_i18n_en.cfm. */
+assertEqual(
+	'js mode — auto-detect routes `identifier.prop = {` to js',
+	(function() {
+		var harness = makeContext('', 'auto');
+		return harness.context.detectLanguage(
+			'<!--- ai_chatbox_i18n_en.cfm — English dictionary --->\n' +
+			'_dict.en = {\n' +
+			"\t'header.title': 'Globe3 AI',\n" +
+			"\t'chat.welcome': 'How can I help you?'\n" +
+			'};'
+		);
+	})(),
+	'js'
+);
+
+assertEqual(
+	'js mode — `window.G3i18n = {` auto-detects as js',
+	(function() {
+		var harness = makeContext('', 'auto');
+		return harness.context.detectLanguage('window.G3i18n = {\n\ten: {},\n\tzh: {}\n};');
+	})(),
+	'js'
+);
+
+assertEqual(
+	'js mode — identifier assignment in CFML file with real tags still routes to cfml',
+	(function() {
+		var harness = makeContext('', 'auto');
+		return harness.context.detectLanguage(
+			'_dict.en = {\n\t"key": "val"\n};\n<cfset x = 1>'
+		);
+	})(),
+	'cfml'
+);
+
 if (!process.exitCode) {
 	console.log('All tests passed (including ' + USER_CASE_INPUTS.length + ' content-preservation invariants).');
 }

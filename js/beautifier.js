@@ -958,7 +958,12 @@ function detectLanguage(code) {
 	// string as real tags — injecting newlines INSIDE the JS string
 	// literal at runtime. Routing to 'js' lets formatBraceCode (which
 	// has proper JS escape handling) preserve the strings verbatim.
-	var jsPrefix = /^\s*(\/\/|\/\*|function\b|var\b|let\b|const\b|class\b|import\b|export\b|async\b|if\b|for\b|while\b|do\b|switch\b|return\b|throw\b|try\b|\(\s*\)\s*=>|[\[{(])/;
+	// Identifier assignment patterns like `_dict.en = {`, `window.X = {`,
+	// `module.exports = [` are also unambiguous JS. The guard
+	// !hasTagsOutsideStrings() below ensures CFML files with similar
+	// top-level assignments (e.g. cfset-free scripts later followed by
+	// CFML tags) still route correctly to cfml.
+	var jsPrefix = /^\s*(\/\/|\/\*|function\b|var\b|let\b|const\b|class\b|import\b|export\b|async\b|if\b|for\b|while\b|do\b|switch\b|return\b|throw\b|try\b|\(\s*\)\s*=>|[A-Za-z_$][A-Za-z0-9_.]*\s*=\s*[{\[(]|[\[{(])/;
 	var bodyAfterBanner = (typeof splitLeadingCommentBlock === 'function')
 		? splitLeadingCommentBlock(code).body
 		: code;
