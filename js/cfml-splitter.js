@@ -43,6 +43,7 @@ function splitAdjacentCFMLTags(code) {
 	var out = '';
 	var i = 0;
 	var useJsStringEscapes = shouldUseJsStringEscapes(code);
+	var inHtmlTagContext = false;  // true between `<` and `>` of an HTML/CFML tag
 
 	function shouldUseJsStringEscapes(src) {
 		/* Bare JS partials may still contain small server-side <cfoutput>
@@ -275,9 +276,15 @@ function splitAdjacentCFMLTags(code) {
 		if (code[i] === '<' && maybeSplitBefore(i)) {
 			continue;
 		}
+		// Track whether we are inside an HTML/CFML tag's attribute zone.
+		if (code[i] === '<') inHtmlTagContext = true;
+		else if (code[i] === '>') inHtmlTagContext = false;
 		// Quote (string literal) — emit verbatim until matching close.
+		// Single-quote `'` is only a string delimiter inside a tag attribute or
+		// in JS-escape mode; bare apostrophes in HTML text content (e.g. "Lucee's")
+		// must NOT trigger string-consuming mode.
 		var c = code[i];
-		if (c === '"' || c === "'" || (useJsStringEscapes && c === '`')) {
+		if (c === '"' || (c === "'" && (inHtmlTagContext || useJsStringEscapes)) || (useJsStringEscapes && c === '`')) {
 			out += c;
 			i++;
 			while (i < code.length) {

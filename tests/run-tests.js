@@ -146,6 +146,11 @@ function findJsStringLiteralLineBreaks(code) {
 	var inBlockComment = false;
 	var inCfmlComment = false;
 	var inCfscriptBlock = false;
+	// For HTML documents, only scan for JS string issues inside <script> blocks.
+	// Apostrophes in HTML text content (e.g. "Lucee's") must not be treated as
+	// JS string delimiters.
+	var isHtmlDocument = /<(?:!DOCTYPE|html\b)/i.test(s);
+	var inScriptBlock = false;
 	var lastSig = null;
 	var line = 1;
 	var col = 0;
@@ -217,23 +222,44 @@ function findJsStringLiteralLineBreaks(code) {
 			continue;
 		}
 
+		if (isHtmlDocument) {
+			var scriptOpen = s.slice(i).match(/^<script\b[^>]*>/i);
+			if (scriptOpen) {
+				inScriptBlock = true;
+				i += scriptOpen[0].length - 1;
+				col += scriptOpen[0].length - 1;
+				continue;
+			}
+			var scriptClose = s.slice(i).match(/^<\/script\s*>/i);
+			if (scriptClose) {
+				inScriptBlock = false;
+				i += scriptClose[0].length - 1;
+				col += scriptClose[0].length - 1;
+				continue;
+			}
+		}
+
 		if (s.substr(i, 4) === '<!--') {
 			inCfmlComment = true;
 			continue;
 		}
-		if (c === '/' && n === '/') {
+
+		// For HTML documents, only check for JS string issues inside script/cfscript.
+		var inJsCtx = !isHtmlDocument || inScriptBlock || inCfscriptBlock;
+
+		if (inJsCtx && c === '/' && n === '/') {
 			inLineComment = true;
 			i++;
 			col++;
 			continue;
 		}
-		if (c === '/' && n === '*') {
+		if (inJsCtx && c === '/' && n === '*') {
 			inBlockComment = true;
 			i++;
 			col++;
 			continue;
 		}
-		if (c === '/' && (lastSig === null || lastSig === 'operator')) {
+		if (inJsCtx && c === '/' && (lastSig === null || lastSig === 'operator')) {
 			var rs = i + 1;
 			var inClass = false;
 			var closed = false;
@@ -261,7 +287,7 @@ function findJsStringLiteralLineBreaks(code) {
 				continue;
 			}
 		}
-		if (c === '"' || c === "'" || c === '`') {
+		if (inJsCtx && (c === '"' || c === "'" || c === '`')) {
 			quote = c;
 			start = { line: line, col: col, quote: c };
 			lastSig = 'value';
