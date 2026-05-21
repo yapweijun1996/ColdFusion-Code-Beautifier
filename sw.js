@@ -4,7 +4,7 @@
  *   - JS / CSS / SVG / manifest: stale-while-revalidate
  *   - Bump CACHE_VERSION on every release to evict old assets
  */
-const CACHE_VERSION = 'v7.1.4';
+const CACHE_VERSION = 'v7.1.5';
 const CACHE_NAME    = 'cfbeautifier-' + CACHE_VERSION;
 
 const PRECACHE_URLS = [
@@ -41,7 +41,17 @@ self.addEventListener('install', (event) => {
          * through and the version bump is a no-op. */
         PRECACHE_URLS.map((u) => new Request(u, { cache: 'reload' }))
       ))
-      .then(() => self.skipWaiting())
+    /* Do NOT call self.skipWaiting() here. skipWaiting is driven by
+     * pwa.js sending SKIP_WAITING via postMessage, which only fires
+     * when navigator.serviceWorker.controller already exists (i.e.
+     * an update, not first install). Calling it unconditionally here
+     * causes two problems:
+     *   1. On first install (no prior controller) the SW immediately
+     *      claims the page, firing controllerchange → location.reload()
+     *      for no reason — the user sees an unexpected first-visit reload.
+     *   2. It bypasses pwa.js's control gate entirely, making the
+     *      SKIP_WAITING postMessage path dead code and preventing the
+     *      guarded "only reload on real updates" behaviour. */
   );
 });
 
