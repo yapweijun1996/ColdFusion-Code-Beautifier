@@ -595,6 +595,67 @@ assertEqual(
 	'<cfif disp_numberToEnglishProper EQ "y">\n\t<td #style_padding#>desc: &nbsp;\n\t\t<script Language="JavaScript">\n\t\t\tdocument.write(numberToEnglish(\'#amount_forex#\'));\n\t\t</script>\n\t\t<cfif set_language is \'english\'>Only</cfif>.\n\t</td>\n</cfif>'
 );
 
+/* ===================================================================
+ * Indent-leak regression suite (2026-06-02).
+ *
+ * Two bugs found beautifying a 1.7k-line real dashboard, both rooted in
+ * the per-line indenter only accounting for the SINGLE tag at line start:
+ *
+ *   Bug #1 — a raw-body block (<style>/<script>/<cfquery>) whose closing
+ *            tag is GLUED to the end of a CSS/JS/SQL content line
+ *            (`h1{…}</style>`). That line starts with content, so the
+ *            tag-close path never saw it → the open's +1 leaked to every
+ *            following sibling until a coincidental re-balance.
+ *
+ *   Bug #2 — a packed markup line that opens MORE than one block tag
+ *            (`<h2>x<span …><span …>`). Only the first was counted, so the
+ *            matching closes (arriving on later lines) dragged the whole
+ *            file's indent the wrong way.
+ *
+ * Plus the two guardrail cases the fix must NOT break: a CFML less-than
+ * operator inside a tag (`<cfset y = a<b>`) must stay an operator, and the
+ * CFML conditional-attribute idiom (`<option …<cfif C> selected</cfif>>`)
+ * must count the nested <cfif> as a real tag. deep-format is OFF so each
+ * case exercises the outer beautifyCFML pass in isolation.
+ * =================================================================== */
+assertEqual(
+	'indent leak Bug #1: glued </style> on a CSS content line no longer leaks +1 — </head> realigns with <head>',
+	runRouter('<head>\n<style>a{x:1}\nb{y:2}</style>\n</head>', 'cfml', false),
+	'<head>\n\t<style>a{x:1}\n\t\tb{y:2}</style>\n</head>'
+);
+
+assertEqual(
+	'indent leak Bug #2: line opening h2 + two spans counts all three — </h2> realigns with <h2>, sibling <p> does not drift',
+	runRouter(
+		'<div>\n'
+		+ '<h2>T <span class="m"><cfoutput>#a#</cfoutput> more <span class="n"><cfoutput>#b#</cfoutput></span></span></h2>\n'
+		+ '<p>after</p>\n'
+		+ '</div>',
+		'cfml', false
+	),
+	'<div>\n'
+	+ '\t<h2>T <span class="m">\n'
+	+ '\t\t\t<cfoutput>#a#</cfoutput> more <span class="n">\n'
+	+ '\t\t\t\t<cfoutput>#b#</cfoutput>\n'
+	+ '\t\t\t</span>\n'
+	+ '\t\t</span>\n'
+	+ '\t</h2>\n'
+	+ '\t<p>after</p>\n'
+	+ '</div>'
+);
+
+assertEqual(
+	'indent guard: `<` inside <cfset> is a less-than operator, NOT a <b> tag — </cfif> stays at column 0',
+	runRouter('<cfif a LT b>\n<cfset y = a<b>\n</cfif>', 'cfml', false),
+	'<cfif a LT b>\n\t<cfset y = a<b>\n</cfif>'
+);
+
+assertEqual(
+	'indent guard: CFML conditional-attribute <option …<cfif C> selected</cfif>> stays balanced (nested <cfif> counted, options align)',
+	runRouter('<select name="lim">\n<option value="1"<cfif x EQ 1> selected</cfif>>One</option>\n</select>', 'cfml', false),
+	'<select name="lim">\n\t<option value="1"<cfif x EQ 1> selected</cfif>>One</option>\n</select>'
+);
+
 /* Lite path keyword coverage: cfquery with structural cfif inside takes the
  * Tier 2 verbatim path. Even though full Pro SQL re-format is skipped, the
  * Lite uppercase pass MUST still uppercase common SQL keywords like `as`,
