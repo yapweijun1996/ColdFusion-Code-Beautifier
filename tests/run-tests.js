@@ -764,7 +764,10 @@ assertEqual(
 assertEqual(
 	'deep cfquery preserves cfml comment inside sql body',
 	runRouter('<cfquery name="q">\nselect a,\n<!--- inline note --->\nb\nfrom t\n</cfquery>', 'cfml', true),
-	'<cfquery name="q">\n\tSELECT a,\n\t\t<!--- inline note ---> b\n\tFROM t\n</cfquery>'
+	// The masked comment must NOT be fused onto the following column
+	// (`<!--- inline note ---> b`). It keeps its own line — matching the
+	// author's original own-line layout. See splitMergedSQLComments().
+	'<cfquery name="q">\n\tSELECT a,\n\t\t<!--- inline note --->\n\t\tb\n\tFROM t\n</cfquery>'
 );
 
 assertEqual(
@@ -915,6 +918,22 @@ assertEqual(
 		true
 	),
 	'<cfsilent>\n\t<cfset arrayAppend(_cards, {\n\t\tvalueHtml : \'<span class="ccy">SGD</span>\' & fmtMoney(_qohAmt),\n\t\tbuttonKey : "dash.inventory.kpi.btn.qoh"\n\t})>\n</cfsilent>'
+);
+
+// Regression: a trailing CFML markup comment (`<!--- ... --->`) on a
+// continuation line of a multi-line tag must NOT be read as the tag's
+// closing `>`. The `>` in `--->` previously tripped hasTagCloseOutsideStrings,
+// which popped indentLevel early (cfset is "inline") and collapsed every
+// following struct line + the `}>` close to column 0. Real-world repro:
+// sample/ai_chatbox_aic_api.cfm _msg struct literal (regen_group_id comment).
+assertEqual(
+	'multi-line cfset struct: trailing <!--- ---> comment does not collapse following lines',
+	runRouter(
+		'<cfset _msg = {\n"a": q.a,\n"regen_group_id": q.rg, <!--- note --->\n"version_no": q.v,\n"version_count": q.vc\n}>\n<cfset _next = 1>',
+		'cfml',
+		false
+	),
+	'<cfset _msg = {\n\t"a": q.a,\n\t"regen_group_id": q.rg, <!--- note --->\n\t"version_no": q.v,\n\t"version_count": q.vc\n}>\n<cfset _next = 1>'
 );
 
 assertEqual(

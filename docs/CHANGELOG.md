@@ -1,5 +1,52 @@
 # Changelog
 
+## v7 series (2026-06-02)
+
+### Fix: multi-line tag close detection ignores `>` inside CFML/HTML comments
+
+Real-world repro: `sample/ai_chatbox_aic_api.cfm` (the `_msg` struct literal
+with a trailing `<!--- 20260529 : regenerate versioning meta --->` annotation).
+
+Same bug class as the 2026-05-14 quoted-string fix below, but for the comment
+case that fix did not cover: a continuation line of a multi-line `<cfset _msg
+= { ... }>` that ends with a `<!--- … --->` comment had the `>` inside `--->`
+mistaken for the closing `>` of the `<cfset>` tag. Because `cfset` is an
+`inline` tag, `indentLevel` was popped a level early, collapsing every
+following struct key and the closing `}>` toward column 0 — cascading
+mis-indentation across large regions.
+
+Fix: `hasTagCloseOutsideStrings` (`js/beautifier.js`) now skips over
+`<!--- … --->` (CFML) and `<!-- … -->` (HTML) comment spans, so a `>` inside a
+comment is no longer treated as a tag close. Contract-correct — a `>` inside a
+comment never was a tag close.
+
+### Fix: CFML comment no longer fused onto the following SQL column
+
+Real-world repro: same file, the `WITH ranked AS (…)` column list
+(`regen_group_id,` … `<!--- … --->` … `version_no,`).
+
+Pro SQL masks CFML markup comments as opaque identifier placeholders before
+handing the body to the vendored sql-formatter. Because a masked comment looks
+like a bare identifier, the formatter glued it to the FOLLOWING token, so after
+restore the comment was fused onto the next column: `<!--- … ---> version_no,`.
+Whether the author wrote the comment as a trailing annotation or on its own
+line is unrecoverable post-format (both mask to the identical token stream), so
+the fix gives the comment its own line — never fused to code, never wrongly
+re-attached to the previous item.
+
+Fix: new `splitMergedSQLComments` pass in `cleanRestoredCFMLTokenSpacing`
+(`js/deep-format.js`) splits a `<!--- … ---> code` line into a standalone
+comment line + the code line.
+
+Regression coverage:
+- "multi-line cfset struct: trailing <!--- ---> comment does not collapse following lines" (new)
+- "deep cfquery preserves cfml comment inside sql body" (expected output updated:
+  the masked comment keeps its own line instead of being fused onto the next column)
+
+Verified: full sample is idempotent across both fixes; a trimmed-whitespace diff
+of the 2790-line sample (pre-fix vs post-fix) shows the comment-split as the only
+non-indentation change.
+
 ## v7 series (2026-05-14)
 
 ### Fix: multi-line `<cfset>` struct alignment with HTML strings

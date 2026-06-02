@@ -193,6 +193,26 @@ function hasTagCloseOutsideStrings(s) {
 			}
 			continue;
 		}
+		/* Skip markup-comment spans so a `>` inside `<!--- ... --->`
+		 * (or HTML `<!-- ... -->`) is NOT mistaken for a tag-closing `>`.
+		 * Without this, a continuation line of a multi-line tag such as
+		 *   <cfset _msg = {
+		 *       "k": v, <!--- note --->
+		 * is misread as closing the <cfset> tag (the `>` in `--->`), which
+		 * pops indentLevel early and collapses the rest of the struct.
+		 * `<!---` (CFML, 5 chars) must be tested before `<!--` (HTML, 4). */
+		if (c === '<' && s.substr(i, 5) === '<!---') {
+			var endC = s.indexOf('--->', i + 5);
+			if (endC === -1) return false; // unterminated → no tag close after
+			i = endC + 3;                  // loop's i++ lands past `--->`
+			continue;
+		}
+		if (c === '<' && s.substr(i, 4) === '<!--') {
+			var endH = s.indexOf('-->', i + 4);
+			if (endH === -1) return false;
+			i = endH + 2;
+			continue;
+		}
 		if (c === '"' || c === "'") {
 			quote = c;
 			continue;
