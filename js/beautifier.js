@@ -431,6 +431,142 @@ function preserveContinuationAlignmentPostPass(formatted, original) {
 	return fLines.join('\n');
 }
 
+/* Does a tag of this (lowercase) name move the indent level? Mirrors the
+ * single-tag rule the per-line loop historically used:
+ *   - HTML void tags (br/img/meta/…)  → no (self-contained)
+ *   - inline CF tags (cfset/cfparam/…) → no
+ *   - middle markers (cfelse/cfelseif) → no (they divide, never net)
+ *   - unknown cf* tag not in the block list → no (treated as inline)
+ *   - everything else (HTML non-void OR a known CF block tag) → yes
+ * Used by tagIndentDelta so every tag on a line is classified the same
+ * way the old code classified the single line-leading tag. */
+function isIndentingTag(name) {
+	if (!name) return false;
+	if (HTML_VOID_TAGS.indexOf(name) !== -1) return false;
+	if (CF_TAGS.inline.indexOf(name) !== -1) return false;
+	if (CF_TAGS.middle.indexOf(name) !== -1) return false;
+	if (name.indexOf('cf') === 0 && CF_TAGS.block.indexOf(name) === -1) return false;
+	return true;
+}
+
+/* Bug #2 — net block-tag indent delta for ONE already-trimmed CFML/HTML
+ * line, counting EVERY tag on the line rather than only the one at line
+ * start. The old heuristic looked at a single leading tag, so a packed
+ * markup line like
+ *     <h2>Heatmap <span …>(<cfoutput>#x#</cfoutput>; more <span …>
+ * was scored +1 when it really opens THREE blocks (h2 + two spans); the
+ * three matching `</span>/</h2>` closes then arrive on later lines and
+ * drag the whole file's indent down by the missing count.
+ *
+ * Guardrails (a `<` is only a tag when it genuinely starts one):
+ *   - `<!--- --->` / `<!-- -->` comment spans are skipped wholesale.
+ *   - `<!…>` declarations (DOCTYPE) are skipped (net-zero).
+ *   - Inside an opening tag we scan to its own `>` honoring quoted
+ *     attribute values, so a `>` in class="a>b" or a `<` in a CFML
+ *     expression `<cfif a < b>` is never mistaken for a tag boundary.
+ *   - A `<` followed by space/digit/operator (a less-than, `i < n`) is
+ *     consumed as a plain char — it never starts a tag.
+ *   - Only isIndentingTag() names move the count; void/inline/middle and
+ *     unknown cf* tags are inert, exactly as before.
+ *   - A trailing OPEN tag with no `>` on the line is ignored (it is a
+ *     multi-line tag the caller handles separately), matching the old
+ *     single-tag behaviour.
+ *
+ * Returns {net, lead, openRawBlock}:
+ *   net          — opens minus closes over indenting tags
+ *   lead         — count of consecutive leading close tags (display
+ *                  pre-dedent, mirrors leadingClosersOf for braces)
+ *   openRawBlock — 'style'|'script'|'cfquery' when such a raw-body block
+ *                  is opened and left unclosed on this line, so the
+ *                  caller can watch for its (possibly glued) close. */
+function tagIndentDelta(line) {
+	var net = 0, lead = 0, leadActive = true, rawOpen = '';
+	/* `openStack` holds the opening tags whose `>` we have not yet seen,
+	 * so a `>` is matched to the correct tag. This is what makes the CFML
+	 * conditional-attribute pattern
+	 *     <option value="#x#"<cfif C> selected</cfif>>…</option>
+	 * count correctly: the inner <cfif>'s `>` pops the cfif (not the
+	 * option), and the option only closes at its own later `>`. Quotes are
+	 * string delimiters ONLY while a tag is open (openStack non-empty), so
+	 * an apostrophe in text content (`it's`) never starts a fake string. */
+	var openStack = [];
+	var i = 0, n = line.length;
+	while (i < n) {
+		var c = line.charAt(i);
+		if (c === '<' && line.substr(i, 5) === '<!---') {        // CFML comment
+			var ce = line.indexOf('--->', i + 5);
+			if (ce === -1) break;
+			i = ce + 4; continue;
+		}
+		if (c === '<' && line.substr(i, 4) === '<!--') {         // HTML comment
+			var he = line.indexOf('-->', i + 4);
+			if (he === -1) break;
+			i = he + 3; continue;
+		}
+		// Quoted attribute value — only meaningful inside an open tag.
+		if (openStack.length > 0 && (c === '"' || c === "'")) {
+			i++;
+			while (i < n && line.charAt(i) !== c) i++;
+			i++; continue;                                       // past closer
+		}
+		if (c === '>') {                                         // closes an opener
+			if (openStack.length > 0) {
+				var popped = openStack.pop();
+				if (line.charAt(i - 1) === '/' && popped.counted) net -= 1;  // self-close
+			}
+			i++; continue;
+		}
+		if (c === '<') {
+			var c2 = line.charAt(i + 1);
+			if (c2 === '/') {                                    // close tag </name>
+				var cm = line.substr(i + 2).match(/^([a-zA-Z][\w:.-]*)/);
+				if (cm && isIndentingTag(cm[1].toLowerCase())) {
+					net -= 1;
+					if (leadActive) lead += 1;
+					if (rawOpen === cm[1].toLowerCase()) rawOpen = '';
+				} else {
+					leadActive = false;
+				}
+				var cgt = line.indexOf('>', i);                 // consume its own `>`
+				i = (cgt === -1) ? n : cgt + 1; continue;
+			}
+			/* Inside another tag's attributes (openStack non-empty), a `<`
+			 * is only a NESTED tag when it is a CF tag — the CFML
+			 * conditional-attribute idiom `<option …<cfif C> sel</cfif>>`.
+			 * Any other `<` there is a less-than OPERATOR inside a CFML
+			 * expression, e.g. `<cfset x = a<b>` (the `<b` is `a < b`, not
+			 * a <b> tag). Treating it as a tag is the exact regression the
+			 * advisor flagged, so guard against it. */
+			if (openStack.length > 0) {
+				var isCf = (c2 === 'c' || c2 === 'C')
+					&& (line.charAt(i + 2) === 'f' || line.charAt(i + 2) === 'F');
+				if (!isCf) { leadActive = false; i++; continue; }
+			}
+			if (c2 === '!') {                                    // <!DOCTYPE …> (top level)
+				var de = line.indexOf('>', i);
+				leadActive = false;
+				i = (de === -1) ? n : de + 1; continue;
+			}
+			if (/[a-zA-Z]/.test(c2)) {                           // open tag <name …>
+				var om = line.substr(i + 1).match(/^([a-zA-Z][\w:.-]*)/);
+				var oname = om[1].toLowerCase();
+				var counts = isIndentingTag(oname);
+				if (counts) net += 1;
+				leadActive = false;
+				openStack.push({ name: oname, counted: counts });
+				if (oname === 'style' || oname === 'script' || oname === 'cfquery') rawOpen = oname;
+				i += 1 + om[1].length; continue;
+			}
+			// `<` + space/digit/operator → a literal less-than, not a tag.
+			leadActive = false;
+			i++; continue;
+		}
+		if (leadActive && c !== ' ' && c !== '\t') leadActive = false;
+		i++;
+	}
+	return { net: net, lead: lead, openRawBlock: rawOpen };
+}
+
 function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) {
 
 	if(split_html_tag == true){
@@ -487,6 +623,15 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 	var parentAnchorOrigPrefix = '';
 	var parentAnchorActive = false;
 	var parentAnchorIndentLevel = 0;
+
+	/* Bug #1 state — a raw-body block (`<style>`/`<script>`/`<cfquery>`)
+	 * opened on an earlier line whose matching `</tag>` we still owe a
+	 * dedent for. The close can arrive GLUED to the end of a CSS/JS/SQL
+	 * content line (e.g. `h1{…}</style>`); because that line does NOT
+	 * start with `<`, the normal tag-close path never sees it and the
+	 * open's `+1` leaks to every following sibling. Holds the lowercase
+	 * tag name we are waiting to close, or '' when none is pending. */
+	var pendingRawClose = '';
 
 	function applyIndent() {
 		if(indentLevel != 0 && indentSize != 0){
@@ -647,46 +792,35 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 		}
 
 		if (line_data.startsWith("<") && hasOuterTagClose) { // Handle HTML Coldfusion
-			/* Maintain [start] */
-			if (line_data.startsWith("<") && line_data.includes("/>")) {
-				maintain_yn = "y";
-			}
-			else if (line_data.startsWith(start_width_tag) && line_data.includes(end_width_tag) && start_width_tag != "" && end_width_tag != "") {
-				maintain_yn = "y";
-			}
-			else if (CF_TAGS.inline.includes(tag_name)) {
-				maintain_yn = "y";
-			}
-			else if (HTML_VOID_TAGS.includes(tag_name)) {
-				maintain_yn = "y";
-			}
-			/* Maintain [end  ] */
-
-			/* Decrease [start]   */
-			else if (CF_TAGS.middle.includes(tag_name)) {
+			/* Middle markers (<cfelse>/<cfelseif>) keep their bespoke
+			 * display dedent + same-line </cfif> net handling — the net
+			 * tag counter below would otherwise place them one column too
+			 * deep (a middle marker divides a block, it does not open one). */
+			if (CF_TAGS.middle.includes(tag_name)) {
 				indentLevel -= 1;
 				applyIndent();
 				indentLevel += 1;
-				/* A middle tag (<cfelse>/<cfelseif>) can share its line with
-				 * the parent block's close, e.g. `<cfelse>NULL</cfif>` in an
-				 * inline SQL VALUES list. The `continue` below skips the
-				 * normal `</cfif>` decrement, so without this every following
-				 * line leaks +1 indent. Apply the net block-close delta
-				 * (`</cfif>` count − `<cfif>` count) on this line. `<cfif\b`
-				 * does not match `<cfelseif`, so the middle tag itself is not
-				 * miscounted. */
+				/* A middle tag can share its line with the parent block's
+				 * close, e.g. `<cfelse>NULL</cfif>` in an inline SQL VALUES
+				 * list. The `continue` skips the normal `</cfif>` decrement,
+				 * so apply the net block-close delta here. `<cfif\b` does not
+				 * match `<cfelseif`, so the marker is not miscounted. */
 				var midNet = (line_data.match(/<\/cfif\b/g) || []).length
 				           - (line_data.match(/<cfif\b/g) || []).length;
 				indentLevel -= midNet;
 				continue;
 			}
-			else if (line_data.startsWith('</')) {
-				indentLevel -= 1;
-			}
-			/* Decrease [end  ] */
 
-			// indentation
-			//lines[i] = ''.padStart(indentLevel * indentSize) + line;
+			/* Net block-tag delta across EVERY tag on the line (Bug #2),
+			 * replacing the old single-tag maintain/increase/decrease
+			 * heuristic. Packed markup like `<h2>x<span>y<span>z` (three
+			 * opens) and mixed open/close lines are now counted in full, so
+			 * indent no longer drifts down the rest of the file. Display
+			 * sits at the post-leading-close depth (mirrors the brace
+			 * branch's leadingClosersOf pre-dedent); the full net delta is
+			 * carried to the next line below. */
+			var tagInfo = tagIndentDelta(line);
+			indentLevel -= tagInfo.lead;
 			applyIndent();
 
 			/* inJsBlock boundary tracking (Risk R3 gate). Toggle when we
@@ -731,15 +865,14 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 				parentAnchorIndentLevel = 0;
 			}
 
-			/* Increase [start] */
-			if(maintain_yn != "y"){
-				if (line_data.startsWith(start_width_tag) && !line_data.includes(end_width_tag) && start_width_tag != "" && end_width_tag != "") {
-					if (!tag_name.startsWith('cf') || CF_TAGS.block.includes(tag_name)) {
-						indentLevel += 1;
-					}
-				}
+			/* Carry the full net delta to the next line, and remember any
+			 * raw-body block (<style>/<script>/<cfquery>) left open on this
+			 * line so a later GLUED `</tag>` on a content line still gets
+			 * its dedent (Bug #1). */
+			indentLevel += tagInfo.lead + tagInfo.net;
+			if (tagInfo.openRawBlock) {
+				pendingRawClose = tagInfo.openRawBlock;
 			}
-			/* Increase [end  ] */
 		}else{ // Handle JavaScript CSS
 		/* maintain_yn [start] */
 		if(line_data.startsWith("//")){
@@ -850,6 +983,20 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 			indentLevel += (braceCounts.open - braceCounts.close + leadingCl);
 		}
 
+	}
+
+	/* Bug #1 — settle a pending raw-block close. Fires for BOTH the
+	 * own-line case (`</style>` on its own line, already dedented by the
+	 * tag-close path → here we only clear the flag) and the GLUED case
+	 * (`h1{…}</style>` handled by the JS/CSS branch, which never dedented
+	 * → apply the missing −1 now). A LITERAL `</tag>` match is used
+	 * deliberately: it can never false-fire on a `<` operator such as
+	 * `i<n` the way a generic tag scan would. */
+	if (pendingRawClose && line_data.indexOf('</' + pendingRawClose) !== -1) {
+		if (!line_data.startsWith('</' + pendingRawClose)) {
+			indentLevel -= 1;
+		}
+		pendingRawClose = '';
 	}
 
 	//console.log("line_data." + line_data);

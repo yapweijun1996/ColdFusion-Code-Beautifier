@@ -2,6 +2,53 @@
 
 ## v7 series (2026-06-02)
 
+### Fix: per-line indenter now counts EVERY tag, not just the line-leading one
+
+Real-world repro: `sample/aic_debug_dashboard.cfm` (a 1,758-line engineer
+dashboard). Two distinct indent leaks, both rooted in `beautifyCFML`'s per-line
+loop only accounting for the SINGLE tag at line start:
+
+- **Bug #1 — glued raw-block close.** The access-denied page's `<head>` block
+  has an inline `<style>` whose `</style>` is glued to the end of a CSS content
+  line (`h1{…}</style>`). That line starts with content, so it routed to the
+  JS/CSS brace branch and the tag-close path never saw the `</style>` — the
+  `<style>`'s `+1` leaked to `</head>`, `<body>` and every following sibling
+  (lines 68–84 sat one tab too deep) until a coincidental re-balance. Even with
+  Deep CSS on (which re-emits `</style>` cleanly) the downstream leak remained,
+  because it originates in the outer pass before deep-format runs.
+
+- **Bug #2 — multi-open markup line.** Packed lines such as
+  `<h2>Heatmap <span …>(<cfoutput>#x#</cfoutput>; … <span …>` open THREE blocks
+  but were scored `+1`; the three `</span>`/`</h2>` closes then arrived on later
+  lines and dragged the whole file's indent DOWN. Sibling panels drifted to
+  different columns and the trailing `</main></div></div>` collapsed all the
+  way to column 0.
+
+Fix:
+- Bug #1: track a `pendingRawClose` for the open `<style>`/`<script>`/`<cfquery>`
+  block and settle a LITERAL `</tag>` match wherever it appears (mid-line
+  included). A literal match can never false-fire on a `<` operator like `i<n`
+  the way a generic tag scan would.
+- Bug #2: new `tagIndentDelta(line)` computes the NET block-tag delta over every
+  tag on a line via a stack-based scan (so a `>` is matched to the correct
+  tag). Guardrails: quotes are string delimiters only inside a tag (apostrophes
+  in text like `it's` never desync); inside a tag, a `<` is a nested tag ONLY
+  when it begins `<cf…` (the CFML conditional-attribute idiom
+  `<option …<cfif C> selected</cfif>>`) or `</…` — any other `<` is a less-than
+  operator (`<cfset y = a<b>`); `<!doctype>` and comment spans are net-zero. The
+  middle-marker (`<cfelse>`/`<cfelseif>`) display dedent is preserved untouched.
+
+Result on the sample: the access page realigns (`</head>`↔`<head>`, `<p>`↔`</p>`,
+all closes match their opens) and the dashboard's trailing
+`</main></div></div>` go from a collapsed `T0/T0/T0` to a properly staggered
+`T4/T3/T2`. Sample stays idempotent under deep-on and deep-off.
+
+Regression coverage (`tests/run-tests.js`):
+- "indent leak Bug #1: glued </style> on a CSS content line no longer leaks +1"
+- "indent leak Bug #2: line opening h2 + two spans counts all three"
+- "indent guard: `<` inside <cfset> is a less-than operator, NOT a <b> tag"
+- "indent guard: CFML conditional-attribute <option …<cfif C> …</cfif>> stays balanced"
+
 ### Fix: single-line `<cfelse>...</cfif>` no longer leaks indent
 
 Real-world repro: `sample/ai_chatbox_aic_api.cfm` usage_log_append INSERT —
