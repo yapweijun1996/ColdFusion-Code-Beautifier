@@ -222,6 +222,58 @@ function hasTagCloseOutsideStrings(s) {
 	return false;
 }
 
+/* String-state-carrying scan of ONE physical line of a multi-line tag,
+ * looking for the tag-closing `>`. Unlike hasTagCloseOutsideStrings (which
+ * assumes every line starts OUTSIDE any string), this threads the open-quote
+ * state from the previous continuation line via `startQuote`.
+ *
+ * Why it matters — a multi-line CFML tag whose expression contains a string
+ * literal that spans lines, e.g.
+ *     <cfset q = dbgQuery(
+ *         "SELECT ... WHERE created >= now()      <- `>=` is INSIDE the string
+ *          ... FROM t", _dsn)>                    <- closing `"` then real `>`
+ * With per-line isolation the SQL `>` is mistaken for the tag close (false
+ * early close, indent drops a line early) AND the closing `"` is mistaken for
+ * an opening quote (so the real trailing `>` is hidden → the tag is never
+ * recognised as closed → its +1 continuation indent leaks to every following
+ * sibling until some later line happens to expose a bare `>`). Carrying the
+ * quote state fixes both.
+ *
+ * CFML escapes quotes by doubling ("" / ''), so a doubled quote stays inside
+ * the string. Markup-comment spans are skipped (their `>`/quotes are inert)
+ * but only when OUTSIDE a string. Returns { closes, endQuote }: `closes` is
+ * true once a `>` is seen outside strings/comments — that `>` ends the tag so
+ * endQuote is irrelevant (caller exits multi-line mode); otherwise `endQuote`
+ * is the open-quote char to carry into the next line, or null. */
+function scanMultiLineTagClose(s, startQuote) {
+	var quote = startQuote || null;
+	for (var i = 0; i < s.length; i++) {
+		var c = s[i];
+		if (quote) {
+			if (c === quote) {
+				if (s[i + 1] === quote) { i++; continue; } // "" / '' escape
+				quote = null;
+			}
+			continue;
+		}
+		if (c === '<' && s.substr(i, 5) === '<!---') {
+			var endC = s.indexOf('--->', i + 5);
+			if (endC === -1) return { closes: false, endQuote: null };
+			i = endC + 3;
+			continue;
+		}
+		if (c === '<' && s.substr(i, 4) === '<!--') {
+			var endH = s.indexOf('-->', i + 4);
+			if (endH === -1) return { closes: false, endQuote: null };
+			i = endH + 2;
+			continue;
+		}
+		if (c === '"' || c === "'") { quote = c; continue; }
+		if (c === '>') return { closes: true, endQuote: null };
+	}
+	return { closes: false, endQuote: quote };
+}
+
 /* Continuation-line classifier. A line is a continuation iff ANY of:
  *   (a) prior logical line's lastTerm is in OPEN_TERMS (trailing-open)
  *   (b) current line's firstTerm is in JOINER (leading-joiner; already
@@ -586,6 +638,11 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 	var inMultiLineTag = false;
 	var multiLineTagName = "";
 	var multiLineTagOrigPrefix = "";
+	/* Open-quote char ('"' or "'") carried across the continuation lines of a
+	 * multi-line tag so a string literal that spans those lines is tracked;
+	 * null when not inside such a string. Drives scanMultiLineTagClose so the
+	 * real tag-closing `>` is found (and an in-string `>` is ignored). */
+	var multiLineTagQuote = null;
 
 	/* Detect-and-anchor continuation alignment state.
 	 *   preserveContAlign       — config gate (UI checkbox, default ON)
@@ -667,7 +724,14 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 		//     children indent under it; the matching `</tag>` decrements
 		//     back to the opener's level via existing logic.
 		if (inMultiLineTag) {
-			var closesMultiLineTag = hasTagCloseOutsideStrings(line);
+			/* Scan WITH the carried open-quote state so a string spanning
+			 * these continuation lines is tracked. Update the carry only
+			 * while the tag stays open. */
+			var mlScan = scanMultiLineTagClose(line, multiLineTagQuote);
+			var closesMultiLineTag = mlScan.closes;
+			if (!closesMultiLineTag) {
+				multiLineTagQuote = mlScan.endQuote;
+			}
 			var inlineExpressionClose = closesMultiLineTag
 				&& CF_TAGS.inline.indexOf(multiLineTagName) !== -1
 				&& /^[})\]]/.test(line);
@@ -697,6 +761,7 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 				}
 				multiLineTagName = "";
 				multiLineTagOrigPrefix = "";
+				multiLineTagQuote = null;
 			}
 			continue;
 		}
@@ -786,6 +851,13 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 			applyIndent();
 			multiLineTagName = tag_name;
 			multiLineTagOrigPrefix = origPrefix;
+			/* Seed the cross-line quote state: if the opening line leaves a
+			 * string literal open (e.g. `<cfset q = dbgQuery(` then a later
+			 * line opens `"...`), the next iteration's scan must start inside
+			 * that string. The opening line has no tag close (we are in the
+			 * !hasOuterTagClose branch), so .closes is false and .endQuote is
+			 * the state to carry. */
+			multiLineTagQuote = scanMultiLineTagClose(line, null).endQuote;
 			inMultiLineTag = true;
 			indentLevel += 1;
 			continue;

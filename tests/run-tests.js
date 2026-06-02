@@ -656,6 +656,24 @@ assertEqual(
 	'<select name="lim">\n\t<option value="1"<cfif x EQ 1> selected</cfif>>One</option>\n</select>'
 );
 
+/* Indent leak Bug #3 — a multi-line tag whose expression holds a string
+ * literal spanning the continuation lines: `<cfset q = dbgQuery("…SQL…")>`
+ * where the SQL is multi-line. The per-line tag-close scanner used to read
+ * each continuation line as starting OUTSIDE any string, which broke TWO ways
+ * (one root cause): a `>` INSIDE the string (`a >= 1`) was mistaken for the
+ * tag close (false early dedent), and the closing `"` on the `…", _dsn)>` line
+ * was mistaken for an OPENING quote so the real `>` was hidden (tag never
+ * closed → +1 leaked to the next sibling). `scanMultiLineTagClose` now carries
+ * the open-quote state across these lines. This single byte-equality check
+ * pins both: `ORDER BY b` must stay at +1 (no early close at the `>=` line),
+ * and the sibling `<cfset n = 1>` must return to column 0 (no forward leak).
+ * The `>=` is the discriminating character. */
+assertEqual(
+	'indent leak Bug #3: multi-line <cfset = dbgQuery("…")> with a line-spanning string — in-string `>=` is not a tag close (ORDER BY stays +1) and the closing `">` is found (sibling <cfset> back to col 0)',
+	runRouter('<cfset q = dbgQuery(\n"SELECT * FROM t WHERE a >= 1\nORDER BY b", _dsn)>\n<cfset n = 1>', 'cfml', false),
+	'<cfset q = dbgQuery(\n\t"SELECT * FROM t WHERE a >= 1\n\tORDER BY b", _dsn)>\n<cfset n = 1>'
+);
+
 /* Lite path keyword coverage: cfquery with structural cfif inside takes the
  * Tier 2 verbatim path. Even though full Pro SQL re-format is skipped, the
  * Lite uppercase pass MUST still uppercase common SQL keywords like `as`,
@@ -2513,15 +2531,30 @@ USER_CASE_INPUTS.forEach(function(pair) {
 	}
 	entries.forEach(function(name) {
 		var src = fs.readFileSync(sampleDir + '/' + name, 'utf8');
+		/* Baseline: raw newlines inside string literals already present in the
+		 * SOURCE. CFML double/single-quoted strings legally span lines (a
+		 * multi-line SQL string in `dbgQuery("...")` is the canonical case), so
+		 * these are inherent, not formatter-introduced, and must NOT fail the
+		 * guard. Computed once — independent of the deep-format toggle. */
+		var srcBreaks = findJsStringLiteralLineBreaks(src);
 		[false, true].forEach(function(deep) {
 			var label = name + ' (deep=' + (deep ? 'on' : 'off') + ')';
 			var pass1 = runRouter(src, 'auto', deep);
 			var pass2 = runRouter(pass1, 'auto', deep);
-			var stringBreaks = findJsStringLiteralLineBreaks(pass1);
-			if (stringBreaks.length) {
+			/* The real invariant (commit d298e21 "Prevent JS string line-break
+			 * corruption"): the beautifier must never INTRODUCE a raw newline
+			 * inside a string literal. Only an INCREASE in break count over the
+			 * source means a string was split. Count comparison — not position
+			 * matching — because re-indentation shifts columns and tag-splitting
+			 * can shift line numbers, so positions are not stable across passes. */
+			var outBreaks = findJsStringLiteralLineBreaks(pass1);
+			if (outBreaks.length > srcBreaks.length) {
 				fail++;
 				console.log('\nFAIL JS string syntax guard: ' + label);
-				console.log('  Raw newline inside quoted string at ' + JSON.stringify(stringBreaks.slice(0, 5)));
+				console.log('  Beautifier INTRODUCED ' + (outBreaks.length - srcBreaks.length) +
+					' raw newline(s) inside string literals (source had ' + srcBreaks.length +
+					', output has ' + outBreaks.length + ')');
+				console.log('  Output break positions (first 5): ' + JSON.stringify(outBreaks.slice(0, 5)));
 				process.exitCode = 1;
 			}
 			if (pass1 === pass2) {

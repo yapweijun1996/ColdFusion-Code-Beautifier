@@ -2,6 +2,47 @@
 
 ## v7 series (2026-06-02)
 
+### Fix: multi-line tag close detection now tracks strings across lines
+
+Real-world repro: the `sample/aic_debug_dashboard_data_*.cfm` includes, whose
+data layer is full of multi-line `<cfset q = dbgQuery("…multi-line SQL…", _dsn)>`
+tags — the `<cfset>` tag's own `>` lands on the line that also closes the SQL
+string. `beautifyCFML`'s multi-line-tag path called `hasTagCloseOutsideStrings`
+once per line, and that helper assumes every line starts OUTSIDE any string. So
+the open-quote state of a string literal spanning continuation lines was lost,
+producing two failure modes from one root cause:
+
+- **Forward leak.** On the real closing line (`… DESC", _dsn)>`) the SQL string's
+  closing `"` was read as an *opening* quote, hiding the trailing `>`. The tag
+  was never recognised as closed, so its `+1` continuation indent leaked to every
+  following sibling — comments and sibling `<cfset>`s drifted one tab right, and
+  a later bare `>` (e.g. `<cfset _x = 0>`) was mis-consumed as the close. In
+  `…_drill.cfm` the leak never recovered (whole file +1); trailing blank lines
+  kept a stray tab.
+- **False early close.** A `>` *inside* the SQL string — `WHERE created >= now()`
+  — was seen outside any string (the line, in isolation, had no open quote) and
+  mistaken for the tag close, dedenting the block one line too early.
+
+Fix: new `scanMultiLineTagClose(s, startQuote)` threads the open-quote char
+across continuation lines (CFML `""`/`''` doubling respected, markup-comment
+spans skipped). `beautifyCFML` seeds the state when a multi-line tag opens,
+carries it while the tag stays open, and clears it on close. Behaviour is
+byte-identical for multi-line tags with no line-spanning string (state stays
+null → same path as before); only the buggy string-spanning case changes.
+
+Result: all four sample includes realign — each `<cfset … dbgQuery(` opener at
+its true level, SQL continuation at +1, following comments/siblings back at the
+parent level, trailing whitespace-only lines now truly empty. Output stays
+idempotent and introduces zero string breaks (output break count == source).
+
+Guard fix (`tests/run-tests.js`): the sample suite's "JS string syntax guard"
+flagged legal CFML multi-line strings (which are inherent to the source, not
+formatter-introduced). It now compares break COUNT against the source and fails
+only on an INCREASE — preserving the real invariant ("the beautifier must not
+*introduce* a string break", commit d298e21) while clearing inherent multi-line
+CFML strings. Count, not position: re-indentation shifts columns and tag-split
+can shift line numbers, so positions are not stable across passes.
+
 ### Fix: per-line indenter now counts EVERY tag, not just the line-leading one
 
 Real-world repro: `sample/aic_debug_dashboard.cfm` (a 1,758-line engineer
