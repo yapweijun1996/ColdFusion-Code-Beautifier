@@ -36,7 +36,7 @@ beautifyCodes()  → router reads DOM + dispatches
   ├─ beautifySQL(code)        standalone SQL mode
   └─ beautifyCFML(code)       CFML / HTML outer pass
        └─ deepFormatEmbedded(result, {sql, css, js})
-            ├─ <cfquery>  → protectCFMLTokens → beautifySQL → restore
+            ├─ <cfquery>  → protectCFMLTokens → formatProSQLSync (Pro SQL, if on) | beautifySQL (built-in) → restore
             ├─ <script>   → formatBraceCode  (strings / regex / templates / parens protected)
             └─ <style>    → formatCSSCode
 ```
@@ -66,11 +66,15 @@ styles.css              fullscreen grid layout + mobile media query
 js/cf-tags.js           CF_TAGS.inline / block / middle + HTML_VOID_TAGS
 js/sql-keywords.js      SQL_MAJOR_CLAUSES + SQL_UPPERCASE_KEYWORDS + SQL_FUNCTION_KEYWORDS
 js/sql-beautifier.js    tokenizer + formatter (caseLevel, funcDepth, listItemIndent, inBetween, clauseStack)
+js/pro-sql.js           Pro SQL — lazy-loaded vendored sql-formatter, PRO_SQL_DIALECTS, formatProSQLSync
+js/js-lexer-utils.js    shared JS lexer helpers (REGEX_CONTEXT_KEYWORDS, regex/string/comment scanning)
 js/deep-format.js       deepFormatEmbedded, protectCFMLTokens, protectBraceCodeText, protectBraceCodeParens, formatBraceCode, formatCSSCode
+js/cfml-splitter.js     splitAdjacentCFMLTags — break glued <tag><tag> lines (comment/string-safe)
 js/tag-utils.js         get_tag_name / start / end
 js/beautifier.js        beautifyCFML + detectLanguage + beautifyCodes (router)
 js/clipboard.js         copy_output_data / clear_data
 js/toast.js             notification UI
+js/pwa.js               service worker registration + force-reload-to-latest pipeline
 js/app.js               footer year
 tests/run-tests.js      Node VM harness + assertEqual cases
 ```
