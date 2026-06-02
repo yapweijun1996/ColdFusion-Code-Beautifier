@@ -667,6 +667,17 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 				indentLevel -= 1;
 				applyIndent();
 				indentLevel += 1;
+				/* A middle tag (<cfelse>/<cfelseif>) can share its line with
+				 * the parent block's close, e.g. `<cfelse>NULL</cfif>` in an
+				 * inline SQL VALUES list. The `continue` below skips the
+				 * normal `</cfif>` decrement, so without this every following
+				 * line leaks +1 indent. Apply the net block-close delta
+				 * (`</cfif>` count − `<cfif>` count) on this line. `<cfif\b`
+				 * does not match `<cfelseif`, so the middle tag itself is not
+				 * miscounted. */
+				var midNet = (line_data.match(/<\/cfif\b/g) || []).length
+				           - (line_data.match(/<cfif\b/g) || []).length;
+				indentLevel -= midNet;
 				continue;
 			}
 			else if (line_data.startsWith('</')) {
