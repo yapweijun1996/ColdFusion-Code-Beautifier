@@ -770,6 +770,23 @@ assertEqual(
 	'<cfquery name="q">\n\tSELECT a,\n\t\t<!--- inline note --->\n\t\tb\n\tFROM t\n</cfquery>'
 );
 
+// Regression: a single-line `<cfelse>...</cfif>` (e.g. `<cfelse>NULL</cfif>`
+// in an inline SQL VALUES list) must NOT leak +1 indent to every following
+// line. The middle-tag handler used to `continue` past the trailing </cfif>,
+// so its decrement was skipped. Here `<cfset after>` must stay at the cftry
+// body level (1 tab) and `</cftry>` at 0 — not 2 and 1. Real-world repro:
+// sample/ai_chatbox_aic_api.cfm usage_log_append INSERT (two such cfelse lines
+// leaked +2, mis-aligning the whole cfcase tail). See CF_TAGS.middle handler.
+assertEqual(
+	'single-line <cfelse>NULL</cfif> does not leak indent to following lines',
+	runRouter(
+		'<cftry>\n<cfquery name="q">\nINSERT INTO t (a, b) VALUES (\n<cfqueryparam value="#x#">,\n<cfif y>\n<cfqueryparam value="#z#">\n<cfelse>NULL</cfif>\n)\n</cfquery>\n<cfset after = 1>\n</cftry>',
+		'cfml',
+		false
+	),
+	'<cftry>\n\t<cfquery name="q">\n\t\tINSERT INTO t (a, b) VALUES (\n\t\t<cfqueryparam value="#x#">,\n\t\t<cfif y>\n\t\t\t<cfqueryparam value="#z#">\n\t\t<cfelse>NULL</cfif>\n\t\t)\n\t</cfquery>\n\t<cfset after = 1>\n</cftry>'
+);
+
 assertEqual(
 	'multiline cfml comment does not affect following live code indent',
 	runRouter('<cfif x>\n<!---\n<cfif y>\ncomment only\n</cfif>\n--->\n<cfset z = 1>\n</cfif>', 'cfml', false),

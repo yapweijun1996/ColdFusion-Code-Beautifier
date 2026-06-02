@@ -2,6 +2,31 @@
 
 ## v7 series (2026-06-02)
 
+### Fix: single-line `<cfelse>...</cfif>` no longer leaks indent
+
+Real-world repro: `sample/ai_chatbox_aic_api.cfm` usage_log_append INSERT —
+an inline SQL VALUES list with two `<cfelse>NULL</cfif>` branches. Everything
+after the `<cfquery>` (the `<cfset _response>`, `<cfcatch>`, `</cftry>`,
+`</cfloop>`, `</cfcase>`) drifted +2 tabs deeper than the rebuilt query block.
+
+Root cause: beautifyCFML's middle-tag handler (CF_TAGS.middle: `<cfelse>` /
+`<cfelseif>`) emits the tag at `indentLevel - 1` then `continue`s — which skips
+the normal `</cfif>` decrement when the close shares the line (`<cfelse>NULL
+</cfif>`). The matching `<cfif>`'s +1 was never undone, leaking +1 indent to
+every following line (two such lines → +2). Independent of the comment fixes
+above; pre-existing.
+
+Fix: the middle-tag handler now applies the net block-close delta on its line
+(`</cfif>` count − `<cfif>` count) before `continue`. `<cfif\b` does not match
+`<cfelseif`, so the middle tag itself is not miscounted.
+
+Regression coverage:
+- "single-line <cfelse>NULL</cfif> does not leak indent to following lines"
+
+Verified file-wide with a stack-based block-tag indent-pairing oracle (every
+`<cftag>` open must align with its `</cftag>`): the pre-fix sample had 9 such
+mismatches, the fixed sample has 0; sample remains idempotent.
+
 ### Fix: multi-line tag close detection ignores `>` inside CFML/HTML comments
 
 Real-world repro: `sample/ai_chatbox_aic_api.cfm` (the `_msg` struct literal
