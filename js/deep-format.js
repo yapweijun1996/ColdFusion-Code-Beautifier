@@ -1249,11 +1249,45 @@ function restoreCFMLTokens(code, tokens) {
 }
 
 function cleanRestoredCFMLTokenSpacing(code) {
-	return code
+	var cleaned = code
 		.replace(/\s+(<\/cf\w+\b[^>]*>)/gi, '$1')
 		.replace(/(<\/?cf\w+\b[^>]*>)(and|or)\s*\(/gi, function(match, cfTag, operator) {
 			return cfTag + operator.toUpperCase() + ' (';
 		});
+	return splitMergedSQLComments(cleaned);
+}
+
+/* sql-formatter is fed CFML markup comments (`<!--- ... --->`) masked as
+ * opaque identifier placeholders. Because a masked comment looks like a bare
+ * identifier, the formatter glues it to the FOLLOWING token instead of giving
+ * it its own line. After restore the comment ends up merged onto a code line,
+ * LEADING the next item:
+ *       regen_group_id,
+ *       <!--- why ---> version_no,        <-- comment wrongly fused to version_no
+ *
+ * Whether the author originally wrote that comment as a trailing annotation
+ * (`regen_group_id, <!--- why --->`) or on its own line (`<!--- why --->`
+ * above `version_no`) is UNRECOVERABLE here — both mask to the identical
+ * token stream `regen_group_id, __CFTOKEN__ version_no,` before formatting.
+ * So the safe, intent-neutral fix is to give the comment its OWN line: it is
+ * never fused to code, and never wrongly attached to the previous item.
+ *
+ * Only a comment at the START of a line followed by more content is split —
+ * a normal trailing comment (`<code> <!--- ... --->`, comment at line END) is
+ * left untouched. */
+function splitMergedSQLComments(code) {
+	var lines = code.split('\n');
+	var out = [];
+	for (var i = 0; i < lines.length; i++) {
+		var m = lines[i].match(/^(\s*)(<!---.*?--->)\s+(\S.*)$/);
+		if (m) {
+			out.push(m[1] + m[2]);   // comment alone, original indent
+			out.push(m[1] + m[3]);   // following code, same indent
+		} else {
+			out.push(lines[i]);
+		}
+	}
+	return out.join('\n');
 }
 
 function shouldFormatScript(openTag) {
