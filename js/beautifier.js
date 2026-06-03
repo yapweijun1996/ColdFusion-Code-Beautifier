@@ -629,30 +629,45 @@ function tagIndentDelta(line) {
 function normalizeLeadingSpacesToTabs(code) {
 	var lines = code.split('\n');
 
-	// Detect indent unit: smallest positive space-only leading run.
+	// Phase 1: detect from pure-space-leading lines (original, un-beautified file).
 	var unit = Infinity;
 	for (var d = 0; d < lines.length; d++) {
 		var dm = lines[d].match(/^( +)\S/);
 		if (dm && dm[1].length < unit) unit = dm[1].length;
 	}
-	if (unit === Infinity) return code; // no space-indented lines found → no-op
+
+	// Phase 2: if no pure-space lines found (file was already run through the
+	// beautifier and uses tab+space alignment), detect the original indent unit
+	// from the space portion of tab+space lines. The beautifier emits
+	// (N*origUnit - 1) spaces for N levels of depth, so minSpaces + 1 recovers
+	// the original unit.
+	if (unit === Infinity) {
+		var minSpc = Infinity;
+		for (var d2 = 0; d2 < lines.length; d2++) {
+			var dm2 = lines[d2].match(/^\t+( +)\S/);
+			if (dm2 && dm2[1].length < minSpc) minSpc = dm2[1].length;
+		}
+		if (minSpc < Infinity) unit = minSpc + 1;
+	}
+
+	if (unit === Infinity) return code; // purely tab-only file — no-op
 
 	return lines.map(function(line) {
 		var ws = 0;
 		while (ws < line.length && (line[ws] === ' ' || line[ws] === '\t')) ws++;
 		if (ws === 0) return line;
 
-		// Expand leading whitespace to space-columns using the detected unit.
+		// Expand leading whitespace to virtual columns using the detected unit.
 		var raw = line.substring(0, ws);
 		var expanded = 0;
 		for (var ci = 0; ci < raw.length; ci++) {
 			expanded += raw[ci] === '\t' ? (unit - (expanded % unit)) : 1;
 		}
 
-		// Re-encode: tabs fill first, remainder stays as spaces.
-		return '\t'.repeat(Math.floor(expanded / unit))
-			+ ' '.repeat(expanded % unit)
-			+ line.substring(ws);
+		// ceil: already-beautified lines have (N*unit - 1) spaces so they sit
+		// just below a tab stop; ceil maps them to the correct N tabs. For
+		// pure-space files expanded is an exact multiple so ceil == floor.
+		return '\t'.repeat(Math.ceil(expanded / unit)) + line.substring(ws);
 	}).join('\n');
 }
 
