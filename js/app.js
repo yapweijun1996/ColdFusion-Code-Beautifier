@@ -76,6 +76,36 @@ if (typeof document !== 'undefined' && document.querySelector) {
 	}
 })();
 
+/* Persist Semantic Indent (tree-sitter) opt-in across reloads. NOT gated by
+ * Safe Mode: it is a whitespace-only transform (re-indents flat nested-call
+ * chains; content is preserved — proven by tests/tree-sitter.test.mjs C4). */
+(function persistSemanticIndent() {
+	var KEY = 'cfb.semantic_indent';
+	function safeGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+	function safeSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+	function init() {
+		if (typeof document === 'undefined' || !document.getElementById) return;
+		var el = document.getElementById('semantic_indent');
+		if (!el) return;
+		var saved = safeGet(KEY);
+		if (saved === '1') el.checked = true;
+		else if (saved === '0') el.checked = false;
+		if (typeof el.addEventListener === 'function') {
+			el.addEventListener('change', function() {
+				safeSet(KEY, el.checked ? '1' : '0');
+			});
+		}
+	}
+
+	if (typeof document === 'undefined') return;
+	if (document.readyState === 'loading' && typeof document.addEventListener === 'function') {
+		document.addEventListener('DOMContentLoaded', init);
+	} else {
+		init();
+	}
+})();
+
 /* Persist Normalize Indent preferences (checkbox + tab-width selector) so
  * the user's last choice survives page reloads. */
 (function persistNormalizePrefs() {

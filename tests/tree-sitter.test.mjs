@@ -129,6 +129,11 @@ check('C3 Analysis line deepest',
 	'fraud=' + leadTabs(ppLines[1]) + ' analysis=' + leadTabs(ppLines[2]));
 check('C4 content preserved (trim-equal to input lines)',
 	ppLines.map((l) => l.trim()).join('\n') === realSample.split('\n').map((l) => l.trim()).join('\n'));
+// Exactly one tab per nesting level (locks the call-only-depth + per-line
+// factor fix; raw CST depth or all-node factor would give 2/4 here).
+check('C5 one tab per level: Fraud=1, Analysis=2',
+	leadTabs(ppLines[1]) === 1 && leadTabs(ppLines[2]) === 2,
+	'fraud=' + leadTabs(ppLines[1]) + ' analysis=' + leadTabs(ppLines[2]));
 
 // ── Part D: idempotency across the mechanism switch (advisor's key trap) ─────
 // beautify(flat) → indented;  post-pass(beautify(that)) must equal the first.

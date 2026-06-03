@@ -4,7 +4,7 @@
  *   - JS / CSS / SVG / manifest: stale-while-revalidate
  *   - Bump CACHE_VERSION on every release to evict old assets
  */
-const CACHE_VERSION = 'v7.1.5';
+const CACHE_VERSION = 'v7.2.0';
 const CACHE_NAME    = 'cfbeautifier-' + CACHE_VERSION;
 
 const PRECACHE_URLS = [
@@ -23,10 +23,15 @@ const PRECACHE_URLS = [
   './js/toast.js',
   './js/clipboard.js',
   './js/pro-sql.js',
+  './js/tree-sitter-cfml.js',
   './js/beautifier.js',
   './js/app.js',
   './js/pwa.js',
   './vendor/sql-formatter.min.js'
+  /* tree-sitter WASM (vendor/tree-sitter/*.wasm, ~2.8 MB) is intentionally
+   * NOT precached — it is lazy-fetched on first Semantic Indent use and then
+   * cached by the stale-while-revalidate fetch handler below. Precaching it
+   * would defeat the zero-cost-until-used design. */
 ];
 
 self.addEventListener('install', (event) => {

@@ -1420,6 +1420,8 @@ function beautifyCodes() {
 	var normalize_indent = normalizeIndentEl ? normalizeIndentEl.checked : false;
 	var normalizeTabWidthEl = document.getElementById('normalize_tab_width');
 	var normalize_tab_width = normalizeTabWidthEl ? parseInt(normalizeTabWidthEl.value, 10) || 0 : 0;
+	var semanticIndentEl = document.getElementById('semantic_indent');
+	var semantic_indent = semanticIndentEl ? semanticIndentEl.checked : false;
 	var proSqlEl = document.getElementById('pro_sql');
 	var pro_sql = proSqlEl ? proSqlEl.checked : false;
 	var dialectEl = document.getElementById('pro_sql_dialect');
@@ -1487,16 +1489,59 @@ function beautifyCodes() {
 					sqlDialect: pro_sql_dialect
 				}, rawCode);
 			}
+			/* Semantic-indent post-pass — re-indents flat multi-line
+			 * <cfset>/<cfparam> nested-call chains by call_expression CST
+			 * depth. Only runs when the user opted in AND the grammar is
+			 * already loaded (the lazy-load gate below pre-fetches it before
+			 * calling runFormat). If the parser isn't ready we silently skip,
+			 * leaving the line-scanner output untouched. */
+			if (semantic_indent
+				&& typeof isTreeSitterCFMLLoaded === 'function' && isTreeSitterCFMLLoaded()
+				&& typeof applySemanticIndentPostPass === 'function'
+				&& typeof getCfmlParser === 'function') {
+				var tsParser = getCfmlParser();
+				if (tsParser) {
+					try {
+						result = applySemanticIndentPostPass(result, tsParser);
+					} catch (e) {
+						if (typeof console !== 'undefined' && console.warn) {
+							console.warn('[tree-sitter] semantic indent post-pass threw, using line-scanner output:', e && e.message);
+						}
+					}
+				}
+			}
 			output.value = result;
 		}
 		finishOutput();
 	}
 
+	/* Lazy-load any async resources the chosen options need, THEN format.
+	 * Each preload swallows its own failure (resolves) so a single bad load
+	 * never blocks the others — runFormat then degrades gracefully (built-in
+	 * SQL formatter / line-scanner indent). */
+	var preloads = [];
+
 	if (pro_sql && typeof ensureProSQL === 'function' && (!(typeof isProSQLLoaded === 'function') || !isProSQLLoaded())) {
-		ensureProSQL().then(runFormat).catch(function(err) {
+		preloads.push(ensureProSQL().catch(function(err) {
 			console.warn('[pro-sql] load failed, falling back to built-in formatter:', err);
-			runFormat();
-		});
+		}));
+	}
+
+	/* Fetch the 2.6 MB CFML grammar ONLY when semantic indent is on, the input
+	 * is CFML, and a flat multi-line inline-tag block is actually present —
+	 * users who never hit that case pay zero bytes. */
+	if (semantic_indent
+		&& language == 'cfml'
+		&& typeof hasFlatInlineTagBlock === 'function' && hasFlatInlineTagBlock(rawCode)
+		&& typeof ensureTreeSitterCFML === 'function'
+		&& typeof isTreeSitterCFMLLoaded === 'function' && !isTreeSitterCFMLLoaded()) {
+		preloads.push(ensureTreeSitterCFML().catch(function(err) {
+			console.warn('[tree-sitter] load failed, skipping semantic indent:', err);
+		}));
+	}
+
+	if (preloads.length) {
+		Promise.all(preloads).then(runFormat);
 		return;
 	}
 

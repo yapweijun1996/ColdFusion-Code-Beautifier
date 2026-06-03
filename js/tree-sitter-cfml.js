@@ -37,11 +37,21 @@
 	function computeCallIndentByLine(parser, code) {
 		var tree = parser.parse(code);
 		var calls = [];
-		(function walk(node, depth) {
-			if (node.type === 'call_expression') {
-				calls.push({ depth: depth, line: node.startPosition.row + 1 });
+		/* Depth = number of call_expression ANCESTORS (call-only depth), NOT
+		 * raw CST depth. Raw depth counts the intervening assignment_expression
+		 * / arguments / member_expression nodes too, so it steps unevenly (a
+		 * Tlt(...) argument sits between fAy levels) and the shallowest-per-line
+		 * depths are no longer monotonic by nesting level. Counting only
+		 * call_expression ancestors makes each function-call nesting level
+		 * advance the depth by a fixed amount, so per-line depths are monotonic
+		 * and the factor normalizes cleanly to one tab per level. */
+		(function walk(node, callDepth) {
+			var isCall = node.type === 'call_expression';
+			var d = isCall ? callDepth + 1 : callDepth;
+			if (isCall) {
+				calls.push({ depth: d, line: node.startPosition.row + 1 });
 			}
-			for (var i = 0; i < node.childCount; i++) walk(node.child(i), depth + 1);
+			for (var i = 0; i < node.childCount; i++) walk(node.child(i), d);
 		})(tree.rootNode, 0);
 
 		if (calls.length === 0) return {};
@@ -54,17 +64,27 @@
 			}
 		}
 
-		var allDepths = calls.map(function (x) { return x.depth; });
-		var minDepth = Math.min.apply(null, allDepths);
+		var minDepth = Math.min.apply(null, Object.keys(byLine).map(function (k) { return byLine[k]; }));
 
-		// factor = smallest positive depth delta = one nesting level in CST terms
-		var deltaSet = {};
-		for (var d = 0; d < calls.length; d++) {
-			var delta = calls[d].depth - minDepth;
-			if (delta > 0) deltaSet[delta] = true;
+		/* factor = smallest positive gap between consecutive DISTINCT per-LINE
+		 * depths, so each nesting LEVEL maps to exactly one tab.
+		 *
+		 * Critical: derive the factor from the per-line depths (the depth of the
+		 * shallowest call that STARTS each line), NOT from every call node. An
+		 * argument call like Tlt(...) sits at an intermediate CST depth
+		 * (cfset→...→fAy.arguments.Tlt), so the raw call-node depth sequence is
+		 * 3,5,7,9,… (step 2) while real nesting levels step by 4. Using all
+		 * nodes would pick factor=2 and double every indent (0,2,4,6 instead of
+		 * 0,1,2,3). Per-line depths are 3,7,11,15 → gap 4 → one tab per level. */
+		var lineDepthSet = {};
+		Object.keys(byLine).forEach(function (k) { lineDepthSet[byLine[k]] = true; });
+		var sortedDepths = Object.keys(lineDepthSet).map(Number).sort(function (a, b) { return a - b; });
+		var factor = Infinity;
+		for (var s = 1; s < sortedDepths.length; s++) {
+			var gap = sortedDepths[s] - sortedDepths[s - 1];
+			if (gap > 0 && gap < factor) factor = gap;
 		}
-		var deltas = Object.keys(deltaSet).map(Number);
-		var factor = deltas.length ? Math.min.apply(null, deltas) : 1;
+		if (!isFinite(factor) || factor < 1) factor = 1;
 
 		var out = {};
 		Object.keys(byLine).forEach(function (lineStr) {
@@ -153,6 +173,20 @@
 	var _parser = null;
 	var _promise = null;
 
+	/* Resolve a vendor path against the DOCUMENT base, not this script's URL.
+	 * Critical: a dynamic import() inside a classic <script> resolves relative
+	 * specifiers against the SCRIPT's URL (/js/…), turning './vendor/…' into
+	 * '/js/vendor/…' (404), while fetch() resolves against document.baseURI
+	 * ('/…'). Anchoring both to document.baseURI makes them consistent AND
+	 * keeps it correct under a sub-path deploy (e.g. GitHub Pages project page
+	 * '/ColdFusion-Code-Beautifier/'). */
+	function tsUrl(file) {
+		if (typeof document !== 'undefined' && document.baseURI) {
+			return new URL(TS_BASE + file, document.baseURI).href;
+		}
+		return TS_BASE + file;
+	}
+
 	function isTreeSitterCFMLLoaded() {
 		return _parser !== null;
 	}
@@ -169,10 +203,10 @@
 		if (_promise) return _promise;
 
 		_promise = (async function () {
-			var TS = await import(TS_BASE + 'web-tree-sitter.js');
-			var runtimeBytes = await (await fetch(TS_BASE + 'web-tree-sitter.wasm')).arrayBuffer();
+			var TS = await import(tsUrl('web-tree-sitter.js'));
+			var runtimeBytes = await (await fetch(tsUrl('web-tree-sitter.wasm'))).arrayBuffer();
 			await TS.Parser.init({ wasmBinary: new Uint8Array(runtimeBytes) });
-			var grammarBytes = await (await fetch(TS_BASE + 'tree-sitter-cfml.wasm')).arrayBuffer();
+			var grammarBytes = await (await fetch(tsUrl('tree-sitter-cfml.wasm'))).arrayBuffer();
 			var lang = await TS.Language.load(new Uint8Array(grammarBytes));
 			var p = new TS.Parser();
 			p.setLanguage(lang);
