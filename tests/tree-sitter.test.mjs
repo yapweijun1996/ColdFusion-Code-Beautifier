@@ -254,6 +254,45 @@ const cfsNoParser = tsCfml.applySemanticIndentPostPass(cfsBeautified, parser, nu
 check('F5 cfscript block untouched when cfsParser absent',
 	cfsNoParser === cfsBeautified, 'cfscript mutated without its parser');
 
+// F6: idempotency on the REPLACE path (control-structure-free block). Re-running
+// beautify+post-pass must be stable (the trap that broke the ADD model).
+const cfsPass1 = tsCfml.applySemanticIndentPostPass(
+	bctx.beautifyCFML(cfscriptSample, false, true, false, 0), parser, cfsParser);
+const cfsPass2 = tsCfml.applySemanticIndentPostPass(
+	bctx.beautifyCFML(cfsPass1, false, true, false, 0), parser, cfsParser);
+check('F6 cfscript REPLACE path idempotent (pass1 === pass2)',
+	cfsPass1 === cfsPass2, 'cfscript not idempotent — REPLACE base not constant');
+
+// F7: a cfscript block WITH a control structure (statement_block) must be left
+// BYTE-IDENTICAL to the line-scanner output (skip guard fires). This is the
+// regression guard for the if-body-flatten bug.
+const cfsCtrl = [
+	'<cfscript>', 'if (x) {', 'y = 1;', 'menu = fAy(fAy(', 'fAy()', '));', '}', '</cfscript>'
+].join('\n');
+const cfsCtrlLS = bctx.beautifyCFML(cfsCtrl, false, true, false, 0);
+const cfsCtrlPP = tsCfml.applySemanticIndentPostPass(cfsCtrlLS, parser, cfsParser);
+check('F7 control-structure cfscript left identical to line-scanner (skip fires)',
+	cfsCtrlPP === cfsCtrlLS, 'control-structure block was mutated (if-body flatten regression)');
+// And the skip path is itself idempotent (line-scanner stability on that block).
+const cfsCtrlPP2 = tsCfml.applySemanticIndentPostPass(
+	bctx.beautifyCFML(cfsCtrlPP, false, true, false, 0), parser, cfsParser);
+check('F7b control-structure skip path idempotent',
+	cfsCtrlPP2 === cfsCtrlPP, 'line-scanner not idempotent on control-structure cfscript');
+
+// F8: a multi-line STRUCT literal in cfscript ({} is an `object` node, NOT a
+// statement_block) is NOT skipped → computeCfscriptIndent processes it. Its keys
+// carry no call_expression, so they resolve to extra 0 and land flat at base —
+// no garbage. (Watches the guard's discriminator fire on the struct case.)
+const cfsStruct = [
+	'<cfscript>', 'config = {', 'timeout: 30,', 'retries: 5', '};', '</cfscript>'
+].join('\n');
+const cfsStructPP = tsCfml.applySemanticIndentPostPass(
+	bctx.beautifyCFML(cfsStruct, false, true, false, 0), parser, cfsParser).split('\n');
+check('F8 struct literal in cfscript stays flat (no call → no garbage)',
+	cfsStructPP.map((l) => l.trim()).join('\n') === cfsStruct.split('\n').map((l) => l.trim()).join('\n')
+	&& leadTabs(cfsStructPP[2]) === leadTabs(cfsStructPP[3]),
+	'struct mis-indented: ' + JSON.stringify(cfsStructPP.map(leadTabs)));
+
 // ── Summary ──────────────────────────────────────────────────────────────────
 console.log('');
 if (failures === 0) {

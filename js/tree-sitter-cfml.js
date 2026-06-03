@@ -136,6 +136,21 @@
 	function computeCfscriptIndent(cfsParser, content) {
 		var tree = cfsParser.parse(content);
 		if (tree.rootNode.hasError) return {};
+
+		/* SCOPE GUARD: skip any block that contains a statement_block — the `{}`
+		 * of if/for/while/function/component. The REPLACE model in the post-pass
+		 * uses a constant base (tag + 1 tab), which would flatten brace-depth
+		 * indent the line-scanner already produced. Struct/object literals are a
+		 * DIFFERENT node type (`object`), so a `config = { … }` is NOT skipped —
+		 * its keys carry no call_expression, so they resolve to extra 0 and land
+		 * flat at the base, which is correct. Confirmed empirically (test F8). */
+		var hasBlock = (function find(node) {
+			if (node.type === 'statement_block') return true;
+			for (var i = 0; i < node.childCount; i++) if (find(node.child(i))) return true;
+			return false;
+		})(tree.rootNode);
+		if (hasBlock) return {};
+
 		var lines = content.split('\n');
 		var out = {};
 		var root = tree.rootNode;
@@ -182,7 +197,16 @@
 			 * Content between the tags is multiple statements, so indent is
 			 * computed PER STATEMENT (computeCfscriptIndent). Content sits one
 			 * level inside the <cfscript> tag, so its base indent is the tag's
-			 * indent + 1 tab. Tag lines themselves are left untouched. */
+			 * indent + 1 tab; each line is REPLACED with base + call-depth tabs.
+			 *
+			 * SCOPE (deliberate): computeCfscriptIndent returns {} when the block
+			 * contains ANY control structure (statement_block: if/for/while/
+			 * function/component braces), so such blocks are left to the
+			 * line-scanner untouched. The REPLACE model is idempotent only for
+			 * control-structure-free blocks (base is a constant tag+1); on a
+			 * block with braces it would flatten the brace indent. So this path
+			 * semantically re-indents ONLY flat top-level assignment/call chains
+			 * inside <cfscript> — see the limitation note in the commit/README. */
 			if (cfsParser && /^<cfscript\b/i.test(trimmed) && !/<\/cfscript>/i.test(trimmed)) {
 				var csOpen = i;
 				var csClose = -1;
@@ -196,7 +220,7 @@
 				var contentLines = lines.slice(csOpen + 1, csClose);
 				var contentTrim = contentLines.map(function (l) { return l.trim(); }).join('\n');
 
-				var cmap = computeCfscriptIndent(cfsParser, contentTrim);  // {} if hasError
+				var cmap = computeCfscriptIndent(cfsParser, contentTrim);  // {} if hasError / control structures
 				if (Object.keys(cmap).length > 0) {
 					for (var ck = 0; ck < contentLines.length; ck++) {
 						var cextra = cmap[ck + 1] || 0;   // 1-based within content
