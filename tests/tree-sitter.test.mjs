@@ -28,6 +28,10 @@ const cfmlLang = await TS.Language.load(fs.readFileSync(path.join(VENDOR, 'tree-
 const parser = new TS.Parser();
 parser.setLanguage(cfmlLang);
 
+const cfsLang = await TS.Language.load(fs.readFileSync(path.join(VENDOR, 'tree-sitter-cfscript.wasm')));
+const cfsParser = new TS.Parser();
+cfsParser.setLanguage(cfsLang);
+
 // ── Load the algorithm under test (CommonJS) ─────────────────────────────────
 const tsCfml = require('../js/tree-sitter-cfml.js');
 
@@ -214,6 +218,41 @@ const tenPass2 = tsCfml.applySemanticIndentPostPass(
 check('E4 idempotent on branched sample (close lines stable)',
 	tenPass2.map(leadTabs).join(',') === tenTabs.join(','),
 	'p1=' + tenTabs.join(',') + ' p2=' + tenPass2.map(leadTabs).join(','));
+
+// ── Part F: cfscript blocks (cfscript grammar, per-statement factoring) ──────
+// computeCfscriptIndent directly: per-statement factor must not cross-contaminate.
+const cfsMulti = ['a = fAy(fAy(', 'fAy()', '));', 'b = gAy(gAy(gAy(', 'gAy()', ')));'].join('\n');
+const cfsM = tsCfml.computeCfscriptIndent(cfsParser, cfsMulti);
+check('F1 cfscript per-statement factor (each deep line = 1 tab)',
+	cfsM[2] === 1 && cfsM[5] === 1 && !cfsM[1] && !cfsM[4],
+	'map=' + JSON.stringify(cfsM));
+
+// End-to-end: a <cfscript> block with a flat nested call, through the post-pass.
+const cfscriptSample = [
+	'<cfscript>',
+	'menu = fAy(Tlt("M"),"0",fAy(',
+	'fAy(Tlt("F"),"0",fAy(',
+	'fAy(Tlt("A"),"1")',
+	'),s1)',
+	'),s2);',
+	'</cfscript>'
+].join('\n');
+const cfsBeautified = bctx.beautifyCFML(cfscriptSample, false, true, false, 0);
+const cfsPP = tsCfml.applySemanticIndentPostPass(cfsBeautified, parser, cfsParser).split('\n');
+const cfsTabs = cfsPP.map(leadTabs);
+// Content sits inside <cfscript> (base 1 tab); nested calls add depth on top.
+check('F2 cfscript content opener at base (1 tab inside block)',
+	cfsTabs[1] === 1, 'tabs=' + JSON.stringify(cfsTabs));
+check('F3 cfscript nested calls step deeper (Fraud>opener, Analysis>Fraud)',
+	cfsTabs[2] > cfsTabs[1] && cfsTabs[3] > cfsTabs[2],
+	'tabs=' + JSON.stringify(cfsTabs));
+check('F4 cfscript content preserved',
+	cfsPP.map((l) => l.trim()).join('\n') === cfscriptSample.split('\n').map((l) => l.trim()).join('\n'));
+// cfscript path leaves cfset-less / parser-absent calls safe: passing only the
+// cfml parser (no cfsParser) must leave a cfscript block untouched.
+const cfsNoParser = tsCfml.applySemanticIndentPostPass(cfsBeautified, parser, null);
+check('F5 cfscript block untouched when cfsParser absent',
+	cfsNoParser === cfsBeautified, 'cfscript mutated without its parser');
 
 // ── Summary ──────────────────────────────────────────────────────────────────
 console.log('');

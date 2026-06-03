@@ -34,32 +34,41 @@
 	 * depth. Lines with no call_expression starting on them (closing-paren
 	 * lines, struct bodies, plain args) are ABSENT → caller leaves them at the
 	 * block's base indent. Returns {} when there is no nesting to express. */
-	function computeCallIndentByLine(parser, code) {
-		var tree = parser.parse(code);
+	/* Collect call_expression nodes under `root` as {depth, startRow, endRow},
+	 * where depth = number of call_expression ANCESTORS (call-only depth) and
+	 * rows are made RELATIVE to `rowBase`. Call-only depth (not raw CST depth)
+	 * is essential: raw depth counts intervening assignment/arguments/member
+	 * nodes too, so it steps unevenly (a Tlt(...) argument sits between fAy
+	 * levels) and per-line depths stop being monotonic by nesting level. */
+	function collectCalls(root, rowBase) {
 		var calls = [];
-		/* Depth = number of call_expression ANCESTORS (call-only depth), NOT
-		 * raw CST depth. Raw depth counts the intervening assignment_expression
-		 * / arguments / member_expression nodes too, so it steps unevenly (a
-		 * Tlt(...) argument sits between fAy levels) and the shallowest-per-line
-		 * depths are no longer monotonic by nesting level. Counting only
-		 * call_expression ancestors makes each function-call nesting level
-		 * advance the depth by a fixed amount, so per-line depths are monotonic
-		 * and the factor normalizes cleanly to one tab per level. */
 		(function walk(node, callDepth) {
 			var isCall = node.type === 'call_expression';
 			var d = isCall ? callDepth + 1 : callDepth;
 			if (isCall) {
-				calls.push({ depth: d, startRow: node.startPosition.row, endRow: node.endPosition.row });
+				calls.push({
+					depth: d,
+					startRow: node.startPosition.row - rowBase,
+					endRow: node.endPosition.row - rowBase
+				});
 			}
 			for (var i = 0; i < node.childCount; i++) walk(node.child(i), d);
-		})(tree.rootNode, 0);
+		})(root, 0);
+		return calls;
+	}
 
-		if (calls.length === 0) return {};
-
-		/* startByRow: shallowest call STARTING on each row → drives opening-line
-		 * indent. endByRow: shallowest call ENDING on each row → drives close-line
-		 * indent (a leading `)` aligns to the OUTERMOST call it closes, i.e. the
-		 * shallowest, whose opener line indent is the level we return to). */
+	/* Core: turn a set of calls (rows relative to `lines`) into a 1-based
+	 * { line: extraTabs } indent map. minDepth and factor are derived from THIS
+	 * call set only — so calling it per-statement gives per-statement factoring
+	 * (a deeper sibling statement can't rescale a shallower one's indent).
+	 *
+	 * Opening lines: indent from the shallowest call STARTING on the line.
+	 * Close lines (first non-ws char is `)`/`]`/`}`): align to the opener indent
+	 * of the shallowest (= outermost) call ENDING on the line, so a trailing
+	 * `))` returns to the OUTER level. A mixed `),fAy(` line is treated as close
+	 * (first-char wins) — documented edge, not built for. */
+	function _indentFromCalls(calls, lines) {
+		if (!calls.length) return {};
 		var startByRow = {};
 		var endByRow = {};
 		for (var c = 0; c < calls.length; c++) {
@@ -75,11 +84,10 @@
 		var startDepths = Object.keys(startByRow).map(function (k) { return startByRow[k]; });
 		var minDepth = Math.min.apply(null, startDepths);
 
-		/* factor = smallest positive gap between consecutive DISTINCT per-LINE
-		 * START depths, so each nesting LEVEL maps to exactly one tab. Derive it
-		 * from per-line START depths (not every call node): an argument call like
-		 * Tlt(...) sits at an intermediate call depth, so using all nodes would
-		 * halve the step and double the indent. */
+		/* factor = smallest positive gap between consecutive DISTINCT per-line
+		 * START depths → one tab per nesting level. Per-line (not every call
+		 * node) so an argument call like Tlt(...) at an intermediate depth does
+		 * not halve the step and double the indent. */
 		var depthSet = {};
 		startDepths.forEach(function (d) { depthSet[d] = true; });
 		var sortedDepths = Object.keys(depthSet).map(Number).sort(function (a, b) { return a - b; });
@@ -90,19 +98,11 @@
 		}
 		if (!isFinite(factor) || factor < 1) factor = 1;
 
-		/* Opening-line indent per 0-based row. */
 		var openingIndent = {};
 		Object.keys(startByRow).forEach(function (rowStr) {
 			openingIndent[rowStr] = Math.floor((startByRow[rowStr] - minDepth) / factor);
 		});
 
-		/* Walk the source lines: a line whose first non-ws char is a closer
-		 * (`)` `]` `}`) is a CLOSE line — align it to the opener indent of the
-		 * shallowest call ending on it. Otherwise, if a call starts on the line,
-		 * it is an OPENING line. A mixed `),fAy(` line is treated as close
-		 * (first-char wins) — a documented edge, not built for. Returns a
-		 * 1-based { line: extraTabs } map; lines that resolve to 0 are omitted. */
-		var lines = String(code).split('\n');
 		var out = {};
 		for (var idx = 0; idx < lines.length; idx++) {
 			var first = lines[idx].replace(/^[ \t]*/, '').charAt(0);
@@ -120,6 +120,40 @@
 		return out;
 	}
 
+	/* cfset/cfparam path: ONE expression → one scope, global factor is correct. */
+	function computeCallIndentByLine(parser, code) {
+		var tree = parser.parse(code);
+		var calls = collectCalls(tree.rootNode, 0);
+		return _indentFromCalls(calls, String(code).split('\n'));
+	}
+
+	/* cfscript path: MULTIPLE statements → factor MUST be per-statement, or a
+	 * deeper sibling statement rescales a shallower one's indent (verified: a
+	 * 2-deep and a 3-deep statement share a global factor of 1 and both get
+	 * doubled). Walk each top-level statement independently, compute its own
+	 * minDepth/factor scoped to its own line slice, then offset back. Guards on
+	 * hasError (whole subtree) like the cfset path. */
+	function computeCfscriptIndent(cfsParser, content) {
+		var tree = cfsParser.parse(content);
+		if (tree.rootNode.hasError) return {};
+		var lines = content.split('\n');
+		var out = {};
+		var root = tree.rootNode;
+		for (var s = 0; s < root.childCount; s++) {
+			var stmt = root.child(s);
+			var sr = stmt.startPosition.row;
+			var er = stmt.endPosition.row;
+			var calls = collectCalls(stmt, sr);          // rows relative to statement
+			if (!calls.length) continue;
+			var stmtLines = lines.slice(sr, er + 1);
+			var localMap = _indentFromCalls(calls, stmtLines);  // 1-based within stmt
+			Object.keys(localMap).forEach(function (k) {
+				out[sr + Number(k)] = localMap[k];        // → content 1-based
+			});
+		}
+		return out;
+	}
+
 	/* ── Block-aware post-pass ────────────────────────────────────────────────
 	 * Scans beautifier OUTPUT for multi-line inline-CF-tag expression blocks
 	 * (<cfset ...> / <cfparam ...> whose closing `>` is on a later line) and
@@ -133,8 +167,8 @@
 	 * Conservative: only fires when a block actually parses (isError false) AND
 	 * computeCallIndentByLine returns at least one indented line. Otherwise the
 	 * block is left exactly as the line-scanner produced it. */
-	function applySemanticIndentPostPass(output, parser) {
-		if (!parser) return output;
+	function applySemanticIndentPostPass(output, cfmlParser, cfsParser) {
+		if (!cfmlParser && !cfsParser) return output;
 		var hasClose = (typeof hasTagCloseOutsideStrings === 'function')
 			? hasTagCloseOutsideStrings
 			: localHasTagClose;
@@ -143,8 +177,41 @@
 		var i = 0;
 		while (i < lines.length) {
 			var trimmed = lines[i].trim();
+
+			/* ── <cfscript> … </cfscript> block (cfscript grammar) ──────────────
+			 * Content between the tags is multiple statements, so indent is
+			 * computed PER STATEMENT (computeCfscriptIndent). Content sits one
+			 * level inside the <cfscript> tag, so its base indent is the tag's
+			 * indent + 1 tab. Tag lines themselves are left untouched. */
+			if (cfsParser && /^<cfscript\b/i.test(trimmed) && !/<\/cfscript>/i.test(trimmed)) {
+				var csOpen = i;
+				var csClose = -1;
+				for (var cj = i + 1; cj < lines.length; cj++) {
+					if (/<\/cfscript>/i.test(lines[cj])) { csClose = cj; break; }
+				}
+				if (csClose === -1 || csClose === csOpen + 1) { i = (csClose === -1) ? i + 1 : csClose + 1; continue; }
+
+				var tagIndent = (lines[csOpen].match(/^[ \t]*/) || [''])[0];
+				var contentBase = tagIndent + '\t';
+				var contentLines = lines.slice(csOpen + 1, csClose);
+				var contentTrim = contentLines.map(function (l) { return l.trim(); }).join('\n');
+
+				var cmap = computeCfscriptIndent(cfsParser, contentTrim);  // {} if hasError
+				if (Object.keys(cmap).length > 0) {
+					for (var ck = 0; ck < contentLines.length; ck++) {
+						var cextra = cmap[ck + 1] || 0;   // 1-based within content
+						lines[csOpen + 1 + ck] = contentBase
+							+ new Array(cextra + 1).join('\t')
+							+ contentLines[ck].trim();
+					}
+				}
+				i = csClose + 1;
+				continue;
+			}
+
+			/* ── <cfset …> / <cfparam …> multi-line block (cfml grammar) ────────*/
 			var isInlineOpen = /^<(cfset|cfparam)\b/i.test(trimmed);
-			if (!isInlineOpen || hasClose(lines[i])) { i++; continue; }
+			if (!cfmlParser || !isInlineOpen || hasClose(lines[i])) { i++; continue; }
 
 			// Collect the block: from this line until the line whose `>` closes
 			// the tag (string/comment-aware via hasTagCloseOutsideStrings).
@@ -160,7 +227,7 @@
 			var blockLines = lines.slice(start, end + 1);
 			var trimmedBlock = blockLines.map(function (l) { return l.trim(); }).join('\n');
 
-			var tree = parser.parse(trimmedBlock);
+			var tree = cfmlParser.parse(trimmedBlock);
 			/* Guard on hasError (whole-subtree), NOT isError (this node only).
 			 * isError is true only when the node itself is an ERROR node — the
 			 * root `program` almost never is, even when the expression is full
@@ -171,7 +238,7 @@
 			 * — accessed as a property, no call. Malformed/incomplete input
 			 * therefore falls back to the line-scanner output untouched. */
 			if (!tree.rootNode.hasError) {
-				var indentMap = computeCallIndentByLine(parser, trimmedBlock);
+				var indentMap = computeCallIndentByLine(cfmlParser, trimmedBlock);
 				if (Object.keys(indentMap).length > 0) {
 					for (var k = 0; k < blockLines.length; k++) {
 						var extra = indentMap[k + 1] || 0;   // 1-based within block
@@ -201,12 +268,15 @@
 	}
 
 	/* ── Browser lazy-loader ──────────────────────────────────────────────────
-	 * Loads the vendored ESM glue + core runtime WASM + CFML grammar WASM on
-	 * first use, so users who never trigger semantic indent fetch zero bytes.
-	 * Idempotent: concurrent callers share one in-flight promise. */
+	 * Loads the vendored ESM glue + core runtime WASM once, then each grammar
+	 * (cfml ~2.6 MB, cfscript ~2.1 MB) on first use of its path — so a user who
+	 * only ever indents <cfset> blocks never fetches the cfscript grammar, and
+	 * vice-versa. Idempotent: concurrent callers share one in-flight promise. */
 	var TS_BASE = './vendor/tree-sitter/';
-	var _parser = null;
-	var _promise = null;
+	var _TS = null;              // glue module { Parser, Language }
+	var _initPromise = null;     // runtime init (once, shared by both grammars)
+	var _cfmlParser = null, _cfmlPromise = null;
+	var _cfsParser = null, _cfsPromise = null;
 
 	/* Resolve a vendor path against the DOCUMENT base, not this script's URL.
 	 * Critical: a dynamic import() inside a classic <script> resolves relative
@@ -222,35 +292,56 @@
 		return TS_BASE + file;
 	}
 
-	function isTreeSitterCFMLLoaded() {
-		return _parser !== null;
+	function _ensureRuntime() {
+		if (_TS) return Promise.resolve(_TS);
+		if (_initPromise) return _initPromise;
+		_initPromise = (async function () {
+			var TS = await import(tsUrl('web-tree-sitter.js'));
+			var runtimeBytes = await (await fetch(tsUrl('web-tree-sitter.wasm'))).arrayBuffer();
+			await TS.Parser.init({ wasmBinary: new Uint8Array(runtimeBytes) });
+			_TS = TS;
+			return TS;
+		})();
+		_initPromise.catch(function () { _initPromise = null; });
+		return _initPromise;
 	}
 
-	function getCfmlParser() {
-		return _parser;
+	function _loadGrammar(file) {
+		return _ensureRuntime().then(function (TS) {
+			return (async function () {
+				var bytes = await (await fetch(tsUrl(file))).arrayBuffer();
+				var lang = await TS.Language.load(new Uint8Array(bytes));
+				var p = new TS.Parser();
+				p.setLanguage(lang);
+				return p;
+			})();
+		});
 	}
 
+	function isTreeSitterCFMLLoaded() { return _cfmlParser !== null; }
+	function getCfmlParser() { return _cfmlParser; }
 	function ensureTreeSitterCFML() {
 		if (typeof window === 'undefined') {
 			return Promise.reject(new Error('tree-sitter CFML requires a browser environment.'));
 		}
-		if (_parser) return Promise.resolve(_parser);
-		if (_promise) return _promise;
+		if (_cfmlParser) return Promise.resolve(_cfmlParser);
+		if (_cfmlPromise) return _cfmlPromise;
+		_cfmlPromise = _loadGrammar('tree-sitter-cfml.wasm').then(function (p) { _cfmlParser = p; return p; });
+		_cfmlPromise.catch(function () { _cfmlPromise = null; });
+		return _cfmlPromise;
+	}
 
-		_promise = (async function () {
-			var TS = await import(tsUrl('web-tree-sitter.js'));
-			var runtimeBytes = await (await fetch(tsUrl('web-tree-sitter.wasm'))).arrayBuffer();
-			await TS.Parser.init({ wasmBinary: new Uint8Array(runtimeBytes) });
-			var grammarBytes = await (await fetch(tsUrl('tree-sitter-cfml.wasm'))).arrayBuffer();
-			var lang = await TS.Language.load(new Uint8Array(grammarBytes));
-			var p = new TS.Parser();
-			p.setLanguage(lang);
-			_parser = p;
-			return p;
-		})();
-		// On failure, clear the cached promise so a later attempt can retry.
-		_promise.catch(function () { _promise = null; });
-		return _promise;
+	function isTreeSitterCFScriptLoaded() { return _cfsParser !== null; }
+	function getCfsParser() { return _cfsParser; }
+	function ensureTreeSitterCFScript() {
+		if (typeof window === 'undefined') {
+			return Promise.reject(new Error('tree-sitter CFScript requires a browser environment.'));
+		}
+		if (_cfsParser) return Promise.resolve(_cfsParser);
+		if (_cfsPromise) return _cfsPromise;
+		_cfsPromise = _loadGrammar('tree-sitter-cfscript.wasm').then(function (p) { _cfsParser = p; return p; });
+		_cfsPromise.catch(function () { _cfsPromise = null; });
+		return _cfsPromise;
 	}
 
 	/* Cheap pre-check: is there a multi-line inline-CF-tag block whose
@@ -274,23 +365,60 @@
 		return false;
 	}
 
+	/* Cheap pre-check for the cfscript path: is there a <cfscript> block whose
+	 * body has a line ending in `(` followed by a non-more-indented line (a flat
+	 * multi-line nested call)? Gates the 2.1 MB cfscript grammar fetch. */
+	function hasFlatCfscriptBlock(code) {
+		var lines = String(code || '').split('\n');
+		var inScript = false;
+		for (var i = 0; i < lines.length; i++) {
+			var t = lines[i].trim();
+			if (!inScript) {
+				if (/^<cfscript\b/i.test(t) && !/<\/cfscript>/i.test(t)) inScript = true;
+				continue;
+			}
+			if (/<\/cfscript>/i.test(t)) { inScript = false; continue; }
+			// Inside cfscript body: a line ending in `(` that opens a call.
+			if (/\(\s*$/.test(lines[i])) {
+				for (var j = i + 1; j < lines.length; j++) {
+					if (lines[j].trim() === '') continue;
+					var openIndent = (lines[i].match(/^[ \t]*/) || [''])[0].length;
+					var contIndent = (lines[j].match(/^[ \t]*/) || [''])[0].length;
+					if (contIndent <= openIndent) return true;
+					break;
+				}
+			}
+		}
+		return false;
+	}
+
 	// ── Exports ────────────────────────────────────────────────────────────────
 	var api = {
 		computeCallIndentByLine: computeCallIndentByLine,
+		computeCfscriptIndent: computeCfscriptIndent,
 		applySemanticIndentPostPass: applySemanticIndentPostPass,
 		ensureTreeSitterCFML: ensureTreeSitterCFML,
 		isTreeSitterCFMLLoaded: isTreeSitterCFMLLoaded,
 		getCfmlParser: getCfmlParser,
-		hasFlatInlineTagBlock: hasFlatInlineTagBlock
+		ensureTreeSitterCFScript: ensureTreeSitterCFScript,
+		isTreeSitterCFScriptLoaded: isTreeSitterCFScriptLoaded,
+		getCfsParser: getCfsParser,
+		hasFlatInlineTagBlock: hasFlatInlineTagBlock,
+		hasFlatCfscriptBlock: hasFlatCfscriptBlock
 	};
 
 	// Browser globals (classic <script> usage).
 	global.computeCallIndentByLine = computeCallIndentByLine;
+	global.computeCfscriptIndent = computeCfscriptIndent;
 	global.applySemanticIndentPostPass = applySemanticIndentPostPass;
 	global.ensureTreeSitterCFML = ensureTreeSitterCFML;
 	global.isTreeSitterCFMLLoaded = isTreeSitterCFMLLoaded;
 	global.getCfmlParser = getCfmlParser;
+	global.ensureTreeSitterCFScript = ensureTreeSitterCFScript;
+	global.isTreeSitterCFScriptLoaded = isTreeSitterCFScriptLoaded;
+	global.getCfsParser = getCfsParser;
 	global.hasFlatInlineTagBlock = hasFlatInlineTagBlock;
+	global.hasFlatCfscriptBlock = hasFlatCfscriptBlock;
 
 	// Node/CommonJS (test harness).
 	if (typeof module !== 'undefined' && module.exports) {

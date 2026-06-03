@@ -9,9 +9,10 @@ instead.
 
 | File | Size | Source | Purpose |
 |------|------|--------|---------|
-| `web-tree-sitter.js`     | ~150 KB | npm `web-tree-sitter@0.26.9` (ESM glue) | JS API: `Parser`, `Language` |
-| `web-tree-sitter.wasm`   | ~196 KB | npm `web-tree-sitter@0.26.9` (core runtime) | tree-sitter engine compiled to WASM |
-| `tree-sitter-cfml.wasm`  | ~2.6 MB | https://cfmleditor.github.io/tree-sitter-cfml/ (playground build, grammar v0.26.20) | CFML grammar |
+| `web-tree-sitter.js`        | ~150 KB | npm `web-tree-sitter@0.26.9` (ESM glue) | JS API: `Parser`, `Language` |
+| `web-tree-sitter.wasm`      | ~196 KB | npm `web-tree-sitter@0.26.9` (core runtime) | tree-sitter engine compiled to WASM |
+| `tree-sitter-cfml.wasm`     | ~2.6 MB | https://cfmleditor.github.io/tree-sitter-cfml/ (playground build, grammar v0.26.20) | CFML grammar — `<cfset>`/`<cfparam>` expressions |
+| `tree-sitter-cfscript.wasm` | ~2.1 MB | https://cfmleditor.github.io/tree-sitter-cfml/ (playground build) | CFScript grammar — statements inside `<cfscript>` blocks |
 
 ## Why these are in git
 
@@ -28,9 +29,11 @@ npm install --save-dev web-tree-sitter@<version>
 cp node_modules/web-tree-sitter/web-tree-sitter.js   vendor/tree-sitter/
 cp node_modules/web-tree-sitter/web-tree-sitter.wasm vendor/tree-sitter/
 
-# grammar (download the prebuilt playground WASM)
+# grammars (download the prebuilt playground WASM)
 curl -L -o vendor/tree-sitter/tree-sitter-cfml.wasm \
   https://cfmleditor.github.io/tree-sitter-cfml/tree-sitter-cfml.wasm
+curl -L -o vendor/tree-sitter/tree-sitter-cfscript.wasm \
+  https://cfmleditor.github.io/tree-sitter-cfml/tree-sitter-cfscript.wasm
 ```
 
 Then re-run `node tools/spike-tree-sitter.mjs` — all four validation cases

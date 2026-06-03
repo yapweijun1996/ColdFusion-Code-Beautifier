@@ -1495,14 +1495,14 @@ function beautifyCodes() {
 			 * already loaded (the lazy-load gate below pre-fetches it before
 			 * calling runFormat). If the parser isn't ready we silently skip,
 			 * leaving the line-scanner output untouched. */
-			if (semantic_indent
-				&& typeof isTreeSitterCFMLLoaded === 'function' && isTreeSitterCFMLLoaded()
-				&& typeof applySemanticIndentPostPass === 'function'
-				&& typeof getCfmlParser === 'function') {
-				var tsParser = getCfmlParser();
-				if (tsParser) {
+			if (semantic_indent && typeof applySemanticIndentPostPass === 'function') {
+				var cfmlP = (typeof isTreeSitterCFMLLoaded === 'function' && isTreeSitterCFMLLoaded()
+					&& typeof getCfmlParser === 'function') ? getCfmlParser() : null;
+				var cfsP = (typeof isTreeSitterCFScriptLoaded === 'function' && isTreeSitterCFScriptLoaded()
+					&& typeof getCfsParser === 'function') ? getCfsParser() : null;
+				if (cfmlP || cfsP) {
 					try {
-						result = applySemanticIndentPostPass(result, tsParser);
+						result = applySemanticIndentPostPass(result, cfmlP, cfsP);
 					} catch (e) {
 						if (typeof console !== 'undefined' && console.warn) {
 							console.warn('[tree-sitter] semantic indent post-pass threw, using line-scanner output:', e && e.message);
@@ -1537,6 +1537,19 @@ function beautifyCodes() {
 		&& typeof isTreeSitterCFMLLoaded === 'function' && !isTreeSitterCFMLLoaded()) {
 		preloads.push(ensureTreeSitterCFML().catch(function(err) {
 			console.warn('[tree-sitter] load failed, skipping semantic indent:', err);
+		}));
+	}
+
+	/* Separately fetch the 2.1 MB cfscript grammar ONLY when a flat multi-line
+	 * nested call inside a <cfscript> block is present — so a file with only
+	 * <cfset> blocks never pays for the cfscript grammar, and vice-versa. */
+	if (semantic_indent
+		&& language == 'cfml'
+		&& typeof hasFlatCfscriptBlock === 'function' && hasFlatCfscriptBlock(rawCode)
+		&& typeof ensureTreeSitterCFScript === 'function'
+		&& typeof isTreeSitterCFScriptLoaded === 'function' && !isTreeSitterCFScriptLoaded()) {
+		preloads.push(ensureTreeSitterCFScript().catch(function(err) {
+			console.warn('[tree-sitter] cfscript grammar load failed, skipping cfscript semantic indent:', err);
 		}));
 	}
 
