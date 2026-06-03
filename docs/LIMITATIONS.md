@@ -64,6 +64,51 @@ Implications:
   balance check on output (verified 2026-05-14: regex literal `[\s\S]`
   leak was idempotent but mis-aligned by 3 tabs).
 
+## Semantic Indent (tree-sitter, opt-in, experimental)
+
+Semantic Indent re-indents **flat, zero-indent** multi-line nested function-call
+chains by their real call depth — the case the line-scanner cannot fix because
+there is no original indentation to preserve. It runs as a post-pass over the
+beautifier output, parsing each candidate block with a vendored tree-sitter
+grammar. Boundaries:
+
+- **Well-formed input only.** An unbalanced block (mid-edit paste — more `(`
+  than `)`) parses with `rootNode.hasError === true` and is left **byte-identical
+  to the line-scanner output**. (`isError` is true only when a node *is* an ERROR
+  node — the root `program` almost never is — so the guard uses `hasError`, which
+  is true when the subtree contains any error. `hasError` is a property/getter in
+  this web-tree-sitter build, not a method.) So Semantic Indent only changes
+  balanced, parseable blocks.
+- **Only `call_expression` nesting drives indent.** Struct/object literals
+  (`{ k: v }`), SQL-string arguments, and simple single-line arguments are *not*
+  `call_expression` nodes, so they stay flat automatically — the distinction
+  plain bracket-counting could never make. A `config = { … }` is processed but
+  its keys carry no call, so they land flat at the base.
+- **cfscript: control-structure-free blocks only.** The CFML grammar parses a
+  `<cfscript>` body as one opaque node, so a separate CFScript grammar is used.
+  But a `<cfscript>` block that contains *any* `statement_block` (the `{}` of
+  `if` / `for` / `while` / `function` / `component`) is **skipped** and left to
+  the normal line-scanner — the REPLACE model that keeps the simple path
+  idempotent would otherwise flatten the brace-depth indent. In practice this
+  means Semantic Indent re-indents cfscript only in **top-level assignment / call
+  chains**; most production cfscript lives inside `component {}` / `function {}`
+  and is therefore handled by the normal indenter (which already indents its
+  brace structure correctly — a flat nested call *inside* such a block stays
+  flat).
+- **Per-line factor, not raw CST depth.** Indent is keyed off call-only depth
+  (number of `call_expression` ancestors), normalized by the smallest positive
+  gap between consecutive per-line depths, so each nesting level is exactly one
+  tab regardless of intermediate argument calls (e.g. `Tlt(…)`). cfscript blocks
+  factor **per statement** so a deeper sibling statement cannot rescale a
+  shallower one.
+- **Close-paren lines** align to the level they return to (the opener indent of
+  the shallowest call ending on the line). A mixed `),fAy(` line is treated as a
+  close (first non-ws char wins) — a documented edge, not optimized for.
+- **Lazy-loaded, fail-safe.** Each grammar is fetched only when a matching flat
+  block is present; if the fetch or parse fails, the post-pass is skipped and the
+  line-scanner output stands. The feature is OFF by default and is a
+  whitespace-only transform (content preserved).
+
 ## CSS (Deep CSS)
 
 - **`@media` / `@keyframes` with nested rules** — opening `{` triggers a new line and increments indent, but the simple formatter does not separately format each inner rule. Complex animations may need manual tidy-up.

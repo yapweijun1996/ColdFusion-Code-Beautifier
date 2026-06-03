@@ -3,10 +3,13 @@
 ## Running the suite
 
 ```bash
-node tests/run-tests.js
+npm test          # runs BOTH suites (run-tests.js && tree-sitter.test.mjs)
+# or individually:
+node tests/run-tests.js          # VM-harness suite
+node tests/tree-sitter.test.mjs  # standalone Semantic Indent suite
 ```
 
-The harness loads every script in `js/` inside a Node `vm` context with a faked DOM, then runs `assertEqual` cases. On success it prints `All tests passed.`; on failure it prints `FAIL: <name>` with actual vs. expected and sets a non-zero exit code.
+`tests/run-tests.js` loads every script in `js/` inside a Node `vm` context with a faked DOM, then runs `assertEqual` cases. On success it prints `All tests passed.`; on failure it prints `FAIL: <name>` with actual vs. expected and sets a non-zero exit code.
 
 ## Helper functions
 
@@ -73,6 +76,39 @@ idempotency, also verify:
 - **Content preservation**: `normalize(input) === normalize(output)` where
   `normalize` collapses whitespace and lowercases — same invariant used by
   `assertContentPreserved` at the bottom of `run-tests.js`.
+
+## Semantic Indent suite (`tests/tree-sitter.test.mjs`)
+
+The tree-sitter Semantic Indent path **cannot** be tested inside `run-tests.js`:
+the VM harness has no `window` / WebAssembly, so the post-pass never fires there.
+This standalone ESM suite builds real `cfml` and `cfscript` parsers from the
+vendored WASM (`vendor/tree-sitter/`) and exercises the algorithm + post-pass
+directly. It self-contains its fixtures (no dependency on the gitignored
+`sample/`), so it runs on a fresh clone after `npm install` is **not** even
+required — the grammars are committed.
+
+Coverage (grouped):
+
+- **A** — hierarchy fires for nested call chains; struct / SQL-string / plain-arg
+  blocks stay flat.
+- **B** — per-line tab depths + multi-level single-line close aligns to the
+  outermost opener.
+- **C** — post-pass on **real beautifier output** (cfif-in-string): parses clean,
+  one-tab-per-level, content preserved.
+- **D** — `hasError` guard: idempotency across the mechanism switch (D1) and an
+  unbalanced block left untouched (D2).
+- **E** — full 10-line **branched** sample (close-then-sibling-open): opening
+  hierarchy, sibling returns to the right level, idempotent.
+- **F** — cfscript: per-statement factor (F1), content base + nested stepping
+  (F2/F3), content preserved (F4), untouched when the cfscript parser is absent
+  (F5), REPLACE-path idempotency (F6), control-structure block left identical to
+  the line-scanner + that skip path idempotent (F7/F7b), and a struct literal in
+  cfscript stays flat (F8).
+
+When you change `js/tree-sitter-cfml.js`, add the regression case here, not in
+`run-tests.js`. If you refresh a vendored grammar (see
+`vendor/tree-sitter/README.md`), re-run this suite — a grammar bump can shift
+node names or recovery behavior and these assertions are the guard.
 
 ## Regression-check philosophy
 

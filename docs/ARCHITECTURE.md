@@ -16,11 +16,18 @@ js/tag-utils.js        ← get_tag_name / start / end
 js/cfml-splitter.js    ← splitAdjacentCFMLTags pre-pass
 js/toast.js            ← notification UI
 js/clipboard.js        ← copy_output_data / clear_data
-js/beautifier.js       ← beautifyCFML + detectLanguage + beautifyCodes (router)
-js/app.js              ← footer year + Pro SQL prefs persistence (localStorage) + bundle pre-warm
 js/pro-sql.js          ← lazy-loads vendor/sql-formatter.min.js on first Pro SQL use
+js/tree-sitter-cfml.js ← Semantic Indent: algorithm + post-pass + dual grammar lazy-loader
+js/beautifier.js       ← beautifyCFML (+ normalizeLeadingSpacesToTabs) + detectLanguage + beautifyCodes (router)
+js/app.js              ← footer year + Pro SQL / Normalize / Semantic / Safe-Mode prefs persistence (localStorage) + bundle pre-warm
 js/pwa.js              ← service-worker registration + auto-update reload (deferred)
 ```
+
+`js/tree-sitter-cfml.js` loads before `js/beautifier.js` so its globals
+(`applySemanticIndentPostPass`, `ensureTreeSitterCFML`, …) are available to the
+`beautifyCodes` router. It guards every browser-only path with `typeof window`
+so the Node VM harness (which loads the other scripts but not this one) is
+unaffected; the standalone `tests/tree-sitter.test.mjs` exercises it directly.
 
 ## Pro SQL (optional, opt-in)
 
@@ -39,6 +46,60 @@ The vendor bundle is **lazy-loaded** via dynamic `<script>` injection on the
 first Pro-SQL formatting call, then cached by the service worker so offline
 use works on subsequent loads. Users who never enable Pro SQL pay zero bytes
 for the feature.
+
+## Normalize Indent (optional, opt-in)
+
+`normalizeLeadingSpacesToTabs(code, unitOverride)` in `js/beautifier.js` runs as
+the very first step of `beautifyCFML` when the **Normalize Indent** checkbox is
+on. It rewrites each line's *leading* whitespace from spaces to tabs; line
+content is never touched (only the run before the first non-whitespace char).
+
+Unit detection is two-phase: (1) the smallest pure-space leading run across the
+file; (2) if none exists — the file is already tab-indented from a prior beautify
+— recover the original unit from the space remainder of tab+space lines
+(`minSpaces + 1`, because the beautifier emits `N×unit − 1` spaces for N levels).
+A `unitOverride` of 2 / 4 / 8 from the companion selector skips detection. The
+checkbox + width persist in `localStorage` (`js/app.js`).
+
+## Semantic Indent (tree-sitter) (optional, opt-in, experimental)
+
+`js/tree-sitter-cfml.js` adds depth-aware indentation for **flat, zero-indent**
+multi-line nested call chains — the case the line-by-line indenter cannot fix.
+
+```
+vendor/tree-sitter/web-tree-sitter.js     ESM glue (Parser, Language) — npm web-tree-sitter
+vendor/tree-sitter/web-tree-sitter.wasm   tree-sitter core runtime (~196 KB)
+vendor/tree-sitter/tree-sitter-cfml.wasm  CFML grammar (~2.6 MB) — <cfset>/<cfparam> expressions
+vendor/tree-sitter/tree-sitter-cfscript.wasm  CFScript grammar (~2.1 MB) — <cfscript> bodies
+```
+
+Flow (post-pass, after `beautifyCFML` + any deep-format):
+
+```
+beautifyCodes (cfml branch)
+  └─ if semantic_indent && (cfml or cfscript parser loaded):
+       applySemanticIndentPostPass(result, cfmlParser, cfsParser)
+         ├─ <cfset>/<cfparam> multi-line block → cfmlParser → computeCallIndentByLine
+         └─ <cfscript> block (control-structure-free) → cfsParser → computeCfscriptIndent (per-statement)
+```
+
+Indent algorithm (`computeCallIndentByLine` / `computeCfscriptIndent`):
+- Depth = number of `call_expression` ancestors (**call-only** depth, not raw CST
+  depth, which would step unevenly through `arguments` / argument calls).
+- `factor` = smallest positive gap between consecutive per-line start depths →
+  exactly one tab per nesting level. cfscript factors **per statement**.
+- Opening lines indent by their shallowest starting call; close lines align to
+  the opener of the shallowest call ending on them.
+- **`hasError` guard** (whole-subtree, not `isError`): unbalanced/incomplete
+  blocks fall back to the line-scanner. cfscript additionally **skips** any block
+  containing a `statement_block` (if/for/while/function/component braces).
+
+Dual lazy-loader: one shared runtime init, then each grammar fetched
+independently and only when a matching flat block is present
+(`hasFlatInlineTagBlock` / `hasFlatCfscriptBlock`). The grammars are **not**
+precached by the service worker (they are large and opt-in); they fall to the
+stale-while-revalidate cache after first use. The whole feature is gated by a
+default-OFF checkbox and degrades to the line-scanner output on any failure.
 
 ## PWA layer
 

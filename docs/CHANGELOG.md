@@ -1,5 +1,82 @@
 # Changelog
 
+## v7 series (2026-06-03)
+
+### Feat: Semantic Indent — tree-sitter depth-aware indentation for flat nested call chains
+
+New opt-in, experimental **Semantic Indent** checkbox (default OFF). It re-indents
+**flat, zero-indent** multi-line nested function-call chains — e.g. a
+`<cfset x = fAy(fAy(fAy(…)))>` menu tree pasted with no indentation — by their
+real call depth. This is the one case the line-by-line indenter cannot fix:
+there is no original indentation to preserve, so every continuation collapses to
+one level. Bracket-counting can't fix it either without also wrongly indenting
+struct literals and SQL-string arguments — the CST distinguishes them for free
+(only `call_expression` nodes carry nesting depth).
+
+New module `js/tree-sitter-cfml.js` + vendored tree-sitter runtime and grammars
+under `vendor/tree-sitter/` (committed so a fresh clone needs no native toolchain;
+`*.wasm` marked `binary` in `.gitattributes`):
+
+- `computeCallIndentByLine` (cfset/cfparam) and `computeCfscriptIndent`
+  (cfscript, **per-statement** factoring) share a `collectCalls` +
+  `_indentFromCalls` core: call-only depth (number of `call_expression`
+  ancestors, not raw CST depth) normalized by the smallest per-line depth gap →
+  exactly one tab per nesting level. **Enh 2:** close-paren lines align to the
+  opener indent of the shallowest call ending on them (steps back through the
+  levels; a sibling branch after a close returns to the right level).
+- `applySemanticIndentPostPass(output, cfmlParser, cfsParser)` runs after
+  `beautifyCFML`; rewrites multi-line `<cfset>`/`<cfparam>` blocks and
+  control-structure-free `<cfscript>` blocks.
+- **`hasError` guard (not `isError`)**: an unbalanced mid-edit block parses with
+  `isError === false` but `hasError === true` (`hasError` is a property/getter in
+  this web-tree-sitter build, which is also why an earlier `hasError()` *call*
+  threw); guarding on `hasError` leaves malformed input byte-identical to the
+  line-scanner instead of mis-indenting it.
+- **Enh 3 scope (cfscript):** the CFML grammar parses a `<cfscript>` body as one
+  opaque node, so a separate CFScript grammar (~2.1 MB) is used. Blocks
+  containing a `statement_block` (the `{}` of if/for/while/function/component)
+  are **skipped** and left to the line-scanner — the idempotent REPLACE model
+  would otherwise flatten their brace indent. So cfscript Semantic Indent covers
+  top-level assignment/call chains only; most production cfscript (inside
+  `component {}` / `function {}`) is left to the normal indenter, which already
+  handles its brace structure. Stated in the tooltip + `docs/LIMITATIONS.md`.
+- **Dual lazy-loader**: shared runtime init, each grammar fetched independently
+  and only when a matching flat block is present (`hasFlatInlineTagBlock` /
+  `hasFlatCfscriptBlock`). A dynamic `import()` in a classic `<script>` resolves
+  relative specifiers against the SCRIPT url, so the vendor paths are anchored to
+  `document.baseURI` (correct under sub-path / GitHub-Pages deploys). Grammars
+  are NOT precached by the service worker (large + opt-in).
+
+Tests: new standalone suite `tests/tree-sitter.test.mjs` (real WASM, outside the
+VM harness which is structurally blind to this path) — 29 assertions covering
+hierarchy/flat discrimination, one-tab-per-level, close-line alignment, the
+branched sample, `hasError` fallback, idempotency across the mechanism switch,
+and the cfscript per-statement / control-structure-skip / struct-literal cases.
+Wired into `npm test`. `sw.js` `CACHE_VERSION` → `v7.3.0`.
+
+### Feat: Normalize Indent — leading spaces → tabs before formatting
+
+New opt-in **Normalize Indent** checkbox + tab-width selector (Auto / 2 / 4 / 8).
+`normalizeLeadingSpacesToTabs(code, unitOverride)` rewrites each line's *leading*
+whitespace from spaces to tabs (line content untouched) as the first step of
+`beautifyCFML`. Two-phase unit detection: pure-space leading runs first; if none
+(file already tab-indented from a prior beautify), recover the original unit from
+the space remainder of tab+space lines (`minSpaces + 1`). Fixes files that mix
+space-indent and tab-indent lines. Checkbox + width persist in `localStorage`;
+not gated by Safe Mode (whitespace-only). `styles.css` reveals the width selector
+via `:has(#normalize_indent:checked)`. `sw.js` `CACHE_VERSION` → `v7.2.0`.
+
+### Fix: mixed-whitespace alignment loss in multi-line inline CF tag continuations
+
+A multi-line `<cfset>` whose opener used spaces but whose continuation lines used
+tabs (or vice-versa) lost its alignment: the prefix comparison
+(`origPrefix.indexOf(openerPrefix) === 0`) failed across whitespace styles, so
+continuation lines collapsed to the base level. Fix expands both prefixes to
+8-column tab stops (`expandPrefixToVisualCols`) and emits the visual-column delta
+as spaces, so siblings that used different whitespace styles still land at the
+same column. Added `leadingCloseTokensOf` helper (counts leading `) ] }`) for the
+later Semantic Indent work.
+
 ## v7 series (2026-06-02)
 
 ### Fix: multi-line tag close detection now tracks strings across lines
