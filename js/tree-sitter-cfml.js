@@ -135,7 +135,16 @@
 			var trimmedBlock = blockLines.map(function (l) { return l.trim(); }).join('\n');
 
 			var tree = parser.parse(trimmedBlock);
-			if (!tree.rootNode.isError) {
+			/* Guard on hasError (whole-subtree), NOT isError (this node only).
+			 * isError is true only when the node itself is an ERROR node — the
+			 * root `program` almost never is, even when the expression is full
+			 * of errors. An UNBALANCED block (mid-edit paste: more `(` than `)`)
+			 * parses with isError===false but hasError===true; using isError
+			 * would sail past this guard and apply collapsed/garbage indent.
+			 * hasError is a GETTER in this web-tree-sitter build (not a method)
+			 * — accessed as a property, no call. Malformed/incomplete input
+			 * therefore falls back to the line-scanner output untouched. */
+			if (!tree.rootNode.hasError) {
 				var indentMap = computeCallIndentByLine(parser, trimmedBlock);
 				if (Object.keys(indentMap).length > 0) {
 					for (var k = 0; k < blockLines.length; k++) {

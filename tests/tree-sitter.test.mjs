@@ -119,8 +119,8 @@ const ppLines = afterPostPass.split('\n');
 
 function leadTabs(s) { return (s.match(/^\t*/) || [''])[0].length; }
 
-check('C1 post-pass output parses without error',
-	parser.parse(ppLines.map((l) => l.trim()).join('\n')).rootNode.isError === false);
+check('C1 post-pass output parses cleanly (hasError false on whole subtree)',
+	parser.parse(ppLines.map((l) => l.trim()).join('\n')).rootNode.hasError === false);
 check('C2 Fraud line indented deeper than cfset opener',
 	leadTabs(ppLines[1]) > leadTabs(ppLines[0]),
 	'opener=' + leadTabs(ppLines[0]) + ' fraud=' + leadTabs(ppLines[1]));
@@ -143,6 +143,23 @@ const pass2 = tsCfml.applySemanticIndentPostPass(
 	bctx.beautifyCFML(pass1, false, true, false, 0), parser);
 check('D1 post-pass is idempotent (pass1 === pass2)', pass1 === pass2,
 	'pass1 !== pass2 — mechanism-switch drift');
+
+// D2: an UNBALANCED (mid-edit) block — more openers than closers — parses with
+// rootNode.isError===false but hasError===true. The hasError guard must leave
+// it exactly as the line-scanner produced it (no mis-indent on incomplete code).
+const unbalanced = [
+	"<cfset x = fAy(Tlt('Module'),'0',fAy(",
+	"fAy(Tlt('Fraud'),'0',fAy(",
+	"fAy(Tlt('Process'),'0',fAy(",
+	"fAy(Tlt('Analysis'),'1','A','url','Id','')",
+	"),'S','y','ns.cfm','Pc','')",
+	"),'S','y','','Ai','')>"
+].join('\n');
+const unbBeautified = bctx.beautifyCFML(unbalanced, false, true, false, 0);
+const unbAfter = tsCfml.applySemanticIndentPostPass(unbBeautified, parser);
+check('D2 unbalanced block left unchanged (hasError guard fires)',
+	unbAfter === unbBeautified,
+	'post-pass mutated malformed input — guard did not fire');
 
 // ── Summary ──────────────────────────────────────────────────────────────────
 console.log('');
