@@ -6,6 +6,11 @@ sample/*
 !sample/.gitkeep
 !sample/README.md
 
+# npm — node_modules is NOT committed; the tree-sitter runtime + grammar
+# the browser actually needs are vendored under vendor/tree-sitter/ instead.
+# package-lock.json IS committed to pin devDependency versions.
+node_modules/
+
 # OS / editor noise
 .DS_Store
 Thumbs.db

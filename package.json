@@ -1,0 +1,13 @@
+{
+  "name": "coldfusion-code-beautifier",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Browser-based ColdFusion/CFML, SQL, JS and CSS code beautifier with optional tree-sitter semantic indentation.",
+  "scripts": {
+    "test": "node tests/run-tests.js",
+    "spike:tree-sitter": "node tools/spike-tree-sitter.mjs"
+  },
+  "devDependencies": {
+    "web-tree-sitter": "^0.26.9"
+  }
+}
