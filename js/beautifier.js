@@ -619,6 +619,43 @@ function tagIndentDelta(line) {
 	return { net: net, lead: lead, openRawBlock: rawOpen };
 }
 
+/* Normalize leading whitespace on every line: detect the file's indent unit
+ * (smallest non-zero all-space leading run), then re-encode every line's
+ * leading whitespace as tabs + any remainder spaces. Tabs already present
+ * are first expanded to the detected unit before re-encoding, so mixed
+ * space/tab lines are handled correctly. Content after the first non-
+ * whitespace character is never touched. Falls back to a no-op when the
+ * file has no space-indented lines (already all-tab). */
+function normalizeLeadingSpacesToTabs(code) {
+	var lines = code.split('\n');
+
+	// Detect indent unit: smallest positive space-only leading run.
+	var unit = Infinity;
+	for (var d = 0; d < lines.length; d++) {
+		var dm = lines[d].match(/^( +)\S/);
+		if (dm && dm[1].length < unit) unit = dm[1].length;
+	}
+	if (unit === Infinity) return code; // no space-indented lines found → no-op
+
+	return lines.map(function(line) {
+		var ws = 0;
+		while (ws < line.length && (line[ws] === ' ' || line[ws] === '\t')) ws++;
+		if (ws === 0) return line;
+
+		// Expand leading whitespace to space-columns using the detected unit.
+		var raw = line.substring(0, ws);
+		var expanded = 0;
+		for (var ci = 0; ci < raw.length; ci++) {
+			expanded += raw[ci] === '\t' ? (unit - (expanded % unit)) : 1;
+		}
+
+		// Re-encode: tabs fill first, remainder stays as spaces.
+		return '\t'.repeat(Math.floor(expanded / unit))
+			+ ' '.repeat(expanded % unit)
+			+ line.substring(ws);
+	}).join('\n');
+}
+
 /* Expand a leading-whitespace prefix string to a visual column count,
  * treating each tab as advancing to the next 8-column tab stop (standard
  * POSIX/terminal convention). Used to normalize mixed-whitespace prefixes
@@ -633,7 +670,11 @@ function expandPrefixToVisualCols(prefix) {
 	return col;
 }
 
-function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) {
+function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, normalize_indent) {
+
+	if (normalize_indent) {
+		rawCode = normalizeLeadingSpacesToTabs(rawCode);
+	}
 
 	if(split_html_tag == true){
 		rawCode = rawCode.replace(/></g, '>\n<');
@@ -1343,6 +1384,8 @@ function beautifyCodes() {
 	var deep_js = document.getElementById('deep_js').checked;
 	var preserveContEl = document.getElementById('preserve_continuation_alignment');
 	var preserve_continuation_alignment = preserveContEl ? preserveContEl.checked : true;
+	var normalizeIndentEl = document.getElementById('normalize_indent');
+	var normalize_indent = normalizeIndentEl ? normalizeIndentEl.checked : false;
 	var proSqlEl = document.getElementById('pro_sql');
 	var pro_sql = proSqlEl ? proSqlEl.checked : false;
 	var dialectEl = document.getElementById('pro_sql_dialect');
@@ -1400,7 +1443,7 @@ function beautifyCodes() {
 				output.value = beautifySQL(rawCode);
 			}
 		}else{
-			var result = beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment);
+			var result = beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, normalize_indent);
 			if(deep_sql || deep_css || deep_js){
 				result = deepFormatEmbedded(result, {
 					sql: deep_sql,

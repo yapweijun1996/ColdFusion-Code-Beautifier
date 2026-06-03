@@ -47,6 +47,9 @@ function makeContext(input, language, splitHtmlTag, deepFormat, autoCopy, autoCl
 		preserve_continuation_alignment: {
 			checked: true
 		},
+		normalize_indent: {
+			checked: false
+		},
 		input: {
 			value: input || ''
 		},
