@@ -76,6 +76,56 @@ if (typeof document !== 'undefined' && document.querySelector) {
 	}
 })();
 
+/* Persist Normalize Indent preferences (checkbox + tab-width selector) so
+ * the user's last choice survives page reloads. */
+(function persistNormalizePrefs() {
+	var STORAGE = {
+		indent:   'cfb.normalize_indent',
+		tabWidth: 'cfb.normalize_tab_width'
+	};
+	function safeGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+	function safeSet(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
+
+	function init() {
+		if (typeof document === 'undefined' || !document.getElementById) return;
+		var indentEl   = document.getElementById('normalize_indent');
+		var tabWidthEl = document.getElementById('normalize_tab_width');
+		if (!indentEl || !tabWidthEl) return;
+
+		var savedIndent = safeGet(STORAGE.indent);
+		if (savedIndent === '1') indentEl.checked = true;
+		else if (savedIndent === '0') indentEl.checked = false;
+
+		var savedWidth = safeGet(STORAGE.tabWidth);
+		if (savedWidth !== null && tabWidthEl.options) {
+			for (var i = 0; i < tabWidthEl.options.length; i++) {
+				if (tabWidthEl.options[i].value === savedWidth) {
+					tabWidthEl.value = savedWidth;
+					break;
+				}
+			}
+		}
+
+		if (typeof indentEl.addEventListener === 'function') {
+			indentEl.addEventListener('change', function() {
+				safeSet(STORAGE.indent, indentEl.checked ? '1' : '0');
+			});
+		}
+		if (typeof tabWidthEl.addEventListener === 'function') {
+			tabWidthEl.addEventListener('change', function() {
+				safeSet(STORAGE.tabWidth, tabWidthEl.value);
+			});
+		}
+	}
+
+	if (typeof document === 'undefined') return;
+	if (document.readyState === 'loading' && typeof document.addEventListener === 'function') {
+		document.addEventListener('DOMContentLoaded', init);
+	} else {
+		init();
+	}
+})();
+
 /* Safe Mode — one-click disable of all "content-shaped change" paths.
  *
  * When checked, force-unchecks AND disables (greys out) the four toggles

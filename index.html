@@ -62,6 +62,14 @@
 				<div class="toolbar-options">
 					<label><input type="checkbox" id="split_html_tag" value="y"> Split &lt;tag&gt;&lt;tag&gt;</label>
 					<label title="Convert leading spaces to tabs before formatting. Auto-detects indent unit (e.g. 2, 4, or 8 spaces = 1 tab). Use when your file mixes space-indent and tab-indent lines."><input type="checkbox" id="normalize_indent" value="y"> Normalize Indent</label>
+					<label class="normalize-tab-width" title="How many spaces equal one tab in the source file (Auto = detect from file)">
+						<select id="normalize_tab_width" class="lang-select">
+							<option value="0">Auto</option>
+							<option value="2">2 sp</option>
+							<option value="4">4 sp</option>
+							<option value="8">8 sp</option>
+						</select>
+					</label>
 					<label><input type="checkbox" id="auto_copy" value="y" checked> Auto copy</label>
 					<label><input type="checkbox" id="auto_clear" value="y" checked> Auto clear input</label>
 					<label><input type="checkbox" id="auto_clear_output" value="y" checked> Auto clear output</label>

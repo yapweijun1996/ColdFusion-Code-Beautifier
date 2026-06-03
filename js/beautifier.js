@@ -626,31 +626,37 @@ function tagIndentDelta(line) {
  * space/tab lines are handled correctly. Content after the first non-
  * whitespace character is never touched. Falls back to a no-op when the
  * file has no space-indented lines (already all-tab). */
-function normalizeLeadingSpacesToTabs(code) {
+function normalizeLeadingSpacesToTabs(code, unitOverride) {
 	var lines = code.split('\n');
 
-	// Phase 1: detect from pure-space-leading lines (original, un-beautified file).
-	var unit = Infinity;
-	for (var d = 0; d < lines.length; d++) {
-		var dm = lines[d].match(/^( +)\S/);
-		if (dm && dm[1].length < unit) unit = dm[1].length;
-	}
-
-	// Phase 2: if no pure-space lines found (file was already run through the
-	// beautifier and uses tab+space alignment), detect the original indent unit
-	// from the space portion of tab+space lines. The beautifier emits
-	// (N*origUnit - 1) spaces for N levels of depth, so minSpaces + 1 recovers
-	// the original unit.
-	if (unit === Infinity) {
-		var minSpc = Infinity;
-		for (var d2 = 0; d2 < lines.length; d2++) {
-			var dm2 = lines[d2].match(/^\t+( +)\S/);
-			if (dm2 && dm2[1].length < minSpc) minSpc = dm2[1].length;
+	// Manual override: user chose a specific tab width (2 / 4 / 8). Skip detection.
+	var unit;
+	if (unitOverride > 0) {
+		unit = unitOverride;
+	} else {
+		// Phase 1: detect from pure-space-leading lines (original, un-beautified file).
+		unit = Infinity;
+		for (var d = 0; d < lines.length; d++) {
+			var dm = lines[d].match(/^( +)\S/);
+			if (dm && dm[1].length < unit) unit = dm[1].length;
 		}
-		if (minSpc < Infinity) unit = minSpc + 1;
-	}
 
-	if (unit === Infinity) return code; // purely tab-only file — no-op
+		// Phase 2: if no pure-space lines found (file was already run through the
+		// beautifier and uses tab+space alignment), detect the original indent unit
+		// from the space portion of tab+space lines. The beautifier emits
+		// (N*origUnit - 1) spaces for N levels of depth, so minSpaces + 1 recovers
+		// the original unit.
+		if (unit === Infinity) {
+			var minSpc = Infinity;
+			for (var d2 = 0; d2 < lines.length; d2++) {
+				var dm2 = lines[d2].match(/^\t+( +)\S/);
+				if (dm2 && dm2[1].length < minSpc) minSpc = dm2[1].length;
+			}
+			if (minSpc < Infinity) unit = minSpc + 1;
+		}
+
+		if (unit === Infinity) return code; // purely tab-only file — no-op
+	}
 
 	return lines.map(function(line) {
 		var ws = 0;
@@ -685,10 +691,10 @@ function expandPrefixToVisualCols(prefix) {
 	return col;
 }
 
-function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, normalize_indent) {
+function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, normalize_indent, normalize_tab_width) {
 
 	if (normalize_indent) {
-		rawCode = normalizeLeadingSpacesToTabs(rawCode);
+		rawCode = normalizeLeadingSpacesToTabs(rawCode, normalize_tab_width || 0);
 	}
 
 	if(split_html_tag == true){
@@ -1401,6 +1407,8 @@ function beautifyCodes() {
 	var preserve_continuation_alignment = preserveContEl ? preserveContEl.checked : true;
 	var normalizeIndentEl = document.getElementById('normalize_indent');
 	var normalize_indent = normalizeIndentEl ? normalizeIndentEl.checked : false;
+	var normalizeTabWidthEl = document.getElementById('normalize_tab_width');
+	var normalize_tab_width = normalizeTabWidthEl ? parseInt(normalizeTabWidthEl.value, 10) || 0 : 0;
 	var proSqlEl = document.getElementById('pro_sql');
 	var pro_sql = proSqlEl ? proSqlEl.checked : false;
 	var dialectEl = document.getElementById('pro_sql_dialect');
@@ -1458,7 +1466,7 @@ function beautifyCodes() {
 				output.value = beautifySQL(rawCode);
 			}
 		}else{
-			var result = beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, normalize_indent);
+			var result = beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, normalize_indent, normalize_tab_width);
 			if(deep_sql || deep_css || deep_js){
 				result = deepFormatEmbedded(result, {
 					sql: deep_sql,

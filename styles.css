@@ -211,6 +211,16 @@ button:focus-visible { outline: 2px solid var(--brand-2); outline-offset: 2px; }
 	font-size: 13px;
 }
 
+.toolbar-options .normalize-tab-width { display: none; }
+.toolbar-options:has(#normalize_indent:checked) .normalize-tab-width { display: flex; }
+.toolbar-options:has(#normalize_indent:checked) label:has(#normalize_indent) { color: var(--brand); font-weight: 600; }
+.toolbar-options .normalize-tab-width .lang-select {
+	min-width: 0;
+	min-height: 32px;
+	padding: 4px 8px;
+	font-size: 13px;
+}
+
 footer {
 	text-align: center;
 	font-size: 12px;

@@ -50,6 +50,9 @@ function makeContext(input, language, splitHtmlTag, deepFormat, autoCopy, autoCl
 		normalize_indent: {
 			checked: false
 		},
+		normalize_tab_width: {
+			value: '0'
+		},
 		input: {
 			value: input || ''
 		},
