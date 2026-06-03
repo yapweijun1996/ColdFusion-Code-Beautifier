@@ -4,7 +4,7 @@
   "private": true,
   "description": "Browser-based ColdFusion/CFML, SQL, JS and CSS code beautifier with optional tree-sitter semantic indentation.",
   "scripts": {
-    "test": "node tests/run-tests.js",
+    "test": "node tests/run-tests.js && node tests/tree-sitter.test.mjs",
     "spike:tree-sitter": "node tools/spike-tree-sitter.mjs"
   },
   "devDependencies": {
