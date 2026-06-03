@@ -167,6 +167,17 @@ function leadingClosersOf(s) {
 	return n;
 }
 
+/* Count consecutive CFML expression closers — ) ] } — at the start of a
+ * trimmed continuation line (after any leading whitespace). Used by the
+ * inline-tag paren-depth indent path to pre-decrement the displayed depth
+ * so a line like `),` sits at the same column as its matching opener. */
+function leadingCloseTokensOf(s) {
+	var n = 0, i = 0;
+	while (i < s.length && (s[i] === ' ' || s[i] === '\t')) i++;
+	while (i < s.length && (s[i] === ')' || s[i] === ']' || s[i] === '}')) { n++; i++; }
+	return n;
+}
+
 /* Column (in character cells, tab = 1 cell) of the first non-whitespace
  * char of `s`. Returns s.length when the line is all whitespace.
  * Tab/space both count as 1 cell — parent and child are measured the
