@@ -98,7 +98,24 @@ const fixtureFlat = [
 const map = tsCfml.computeCallIndentByLine(parser, fixtureFlat);
 check('B1 line2 (Fraud) deeper than line1', (map[2] || 0) > 0, 'map=' + JSON.stringify(map));
 check('B2 line3 (Analysis) deepest', (map[3] || 0) > (map[2] || 0), 'map=' + JSON.stringify(map));
-check('B3 close-paren lines not indented (MVP)', !map[4] && !map[5], 'map=' + JSON.stringify(map));
+// Enh 2: close-paren lines align to the level they return to. L4 closes the
+// Fraud-level call (opener L2, indent 1) → L4 indent 1. L5 closes back to the
+// outermost (opener L1, indent 0) → omitted (base).
+check('B3 close line L4 aligns to Fraud level (1)', (map[4] || 0) === 1, 'map=' + JSON.stringify(map));
+check('B3b close line L5 returns to base (0)', !map[5], 'map=' + JSON.stringify(map));
+
+// Enh 2: multi-level close on ONE line must align to the OUTERMOST opener, not
+// the innermost. Here a single trailing line closes several levels that opened
+// on different lines; the shallowest-ending-call rule picks the outer level.
+const multiClose = [
+	"<cfset x = fAy(",
+	"fAy(",
+	"fAy(Tlt('deep'))))",
+	""
+].join('\n');
+const mcMap = tsCfml.computeCallIndentByLine(parser, multiClose);
+check('B4 multi-level openers step 0,1,2', (mcMap[2] || 0) === 1 && (mcMap[3] || 0) === 2,
+	'mcMap=' + JSON.stringify(mcMap));
 
 // ── Part C: post-pass on REAL beautifier output ──────────────────────────────
 // Expose the beautifier's string-aware tag-close helper so the post-pass uses
@@ -160,6 +177,43 @@ const unbAfter = tsCfml.applySemanticIndentPostPass(unbBeautified, parser);
 check('D2 unbalanced block left unchanged (hasError guard fires)',
 	unbAfter === unbBeautified,
 	'post-pass mutated malformed input — guard did not fire');
+
+// ── Part E: full 10-line BRANCHED sample (close-then-sibling-open) ───────────
+// This is the structural case the real input hits and the 5-line sample does
+// NOT: a close line (L6, end of the AiFd branch) immediately followed by a
+// sibling opener (L7, the AiCb branch). Verifies enh-2 close alignment AND that
+// a sibling branch after a close returns to the right level.
+const tenLine = [
+	"<cfset menu = fAy( Tlt('AI Module'),'0',fAy(",
+	"fAy( Tlt('Fraud'),'0',fAy(",
+	"fAy( Tlt('Process'),'0',fAy(",
+	"fAy( Tlt('Analysis'),'1','A','url','AiFdPcAd','')",
+	"),'S','y','ns.cfm','top','AiFdPc','')",
+	"),'S','y','ns.cfm','app','AiFd',''),",
+	"fAy( Tlt('AI Chatbox'),'0',fAy(",
+	"fAy( Tlt('Mobile'),'0',fAy(),'S','y','ai.cfm','bot','Mb','')",
+	"),'S','y','ns.cfm','app','AiCb','')",
+	"),'S','y','','app','Ai','')>"
+].join('\n');
+const tenBeautified = bctx.beautifyCFML(tenLine, false, true, false, 0);
+const tenPP = tsCfml.applySemanticIndentPostPass(tenBeautified, parser).split('\n');
+const tenTabs = tenPP.map(leadTabs);
+// Opening hierarchy: Module L1=0, Fraud L2=1, Process L3=2, Analysis L4=3,
+// and the sibling AI Chatbox L7 back at 1 (same as Fraud), Mobile L8=2.
+check('E1 opening hierarchy 0,1,2,3',
+	tenTabs[0] === 0 && tenTabs[1] === 1 && tenTabs[2] === 2 && tenTabs[3] === 3,
+	'tabs=' + JSON.stringify(tenTabs));
+check('E2 sibling branch after close returns to level 1 (Chatbox=1, Mobile=2)',
+	tenTabs[6] === 1 && tenTabs[7] === 2,
+	'tabs=' + JSON.stringify(tenTabs));
+check('E3 content preserved over full sample',
+	tenPP.map((l) => l.trim()).join('\n') === tenLine.split('\n').map((l) => l.trim()).join('\n'));
+// Idempotency on the branched sample (close lines now move — re-guard D1's class).
+const tenPass2 = tsCfml.applySemanticIndentPostPass(
+	bctx.beautifyCFML(tenPP.join('\n'), false, true, false, 0), parser).split('\n');
+check('E4 idempotent on branched sample (close lines stable)',
+	tenPass2.map(leadTabs).join(',') === tenTabs.join(','),
+	'p1=' + tenTabs.join(',') + ' p2=' + tenPass2.map(leadTabs).join(','));
 
 // ── Summary ──────────────────────────────────────────────────────────────────
 console.log('');

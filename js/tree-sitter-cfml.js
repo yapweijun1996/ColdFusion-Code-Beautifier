@@ -49,36 +49,40 @@
 			var isCall = node.type === 'call_expression';
 			var d = isCall ? callDepth + 1 : callDepth;
 			if (isCall) {
-				calls.push({ depth: d, line: node.startPosition.row + 1 });
+				calls.push({ depth: d, startRow: node.startPosition.row, endRow: node.endPosition.row });
 			}
 			for (var i = 0; i < node.childCount; i++) walk(node.child(i), d);
 		})(tree.rootNode, 0);
 
 		if (calls.length === 0) return {};
 
-		var byLine = {};
+		/* startByRow: shallowest call STARTING on each row → drives opening-line
+		 * indent. endByRow: shallowest call ENDING on each row → drives close-line
+		 * indent (a leading `)` aligns to the OUTERMOST call it closes, i.e. the
+		 * shallowest, whose opener line indent is the level we return to). */
+		var startByRow = {};
+		var endByRow = {};
 		for (var c = 0; c < calls.length; c++) {
 			var cur = calls[c];
-			if (byLine[cur.line] === undefined || cur.depth < byLine[cur.line]) {
-				byLine[cur.line] = cur.depth;
+			if (startByRow[cur.startRow] === undefined || cur.depth < startByRow[cur.startRow]) {
+				startByRow[cur.startRow] = cur.depth;
+			}
+			if (endByRow[cur.endRow] === undefined || cur.depth < endByRow[cur.endRow].depth) {
+				endByRow[cur.endRow] = { depth: cur.depth, startRow: cur.startRow };
 			}
 		}
 
-		var minDepth = Math.min.apply(null, Object.keys(byLine).map(function (k) { return byLine[k]; }));
+		var startDepths = Object.keys(startByRow).map(function (k) { return startByRow[k]; });
+		var minDepth = Math.min.apply(null, startDepths);
 
 		/* factor = smallest positive gap between consecutive DISTINCT per-LINE
-		 * depths, so each nesting LEVEL maps to exactly one tab.
-		 *
-		 * Critical: derive the factor from the per-line depths (the depth of the
-		 * shallowest call that STARTS each line), NOT from every call node. An
-		 * argument call like Tlt(...) sits at an intermediate CST depth
-		 * (cfset→...→fAy.arguments.Tlt), so the raw call-node depth sequence is
-		 * 3,5,7,9,… (step 2) while real nesting levels step by 4. Using all
-		 * nodes would pick factor=2 and double every indent (0,2,4,6 instead of
-		 * 0,1,2,3). Per-line depths are 3,7,11,15 → gap 4 → one tab per level. */
-		var lineDepthSet = {};
-		Object.keys(byLine).forEach(function (k) { lineDepthSet[byLine[k]] = true; });
-		var sortedDepths = Object.keys(lineDepthSet).map(Number).sort(function (a, b) { return a - b; });
+		 * START depths, so each nesting LEVEL maps to exactly one tab. Derive it
+		 * from per-line START depths (not every call node): an argument call like
+		 * Tlt(...) sits at an intermediate call depth, so using all nodes would
+		 * halve the step and double the indent. */
+		var depthSet = {};
+		startDepths.forEach(function (d) { depthSet[d] = true; });
+		var sortedDepths = Object.keys(depthSet).map(Number).sort(function (a, b) { return a - b; });
 		var factor = Infinity;
 		for (var s = 1; s < sortedDepths.length; s++) {
 			var gap = sortedDepths[s] - sortedDepths[s - 1];
@@ -86,11 +90,33 @@
 		}
 		if (!isFinite(factor) || factor < 1) factor = 1;
 
-		var out = {};
-		Object.keys(byLine).forEach(function (lineStr) {
-			var extra = Math.floor((byLine[lineStr] - minDepth) / factor);
-			if (extra > 0) out[Number(lineStr)] = extra;
+		/* Opening-line indent per 0-based row. */
+		var openingIndent = {};
+		Object.keys(startByRow).forEach(function (rowStr) {
+			openingIndent[rowStr] = Math.floor((startByRow[rowStr] - minDepth) / factor);
 		});
+
+		/* Walk the source lines: a line whose first non-ws char is a closer
+		 * (`)` `]` `}`) is a CLOSE line — align it to the opener indent of the
+		 * shallowest call ending on it. Otherwise, if a call starts on the line,
+		 * it is an OPENING line. A mixed `),fAy(` line is treated as close
+		 * (first-char wins) — a documented edge, not built for. Returns a
+		 * 1-based { line: extraTabs } map; lines that resolve to 0 are omitted. */
+		var lines = String(code).split('\n');
+		var out = {};
+		for (var idx = 0; idx < lines.length; idx++) {
+			var first = lines[idx].replace(/^[ \t]*/, '').charAt(0);
+			var extra;
+			if (first === ')' || first === ']' || first === '}') {
+				var e = endByRow[idx];
+				extra = (e && openingIndent[e.startRow] !== undefined) ? openingIndent[e.startRow] : 0;
+			} else if (openingIndent[idx] !== undefined) {
+				extra = openingIndent[idx];
+			} else {
+				extra = 0;
+			}
+			if (extra > 0) out[idx + 1] = extra;
+		}
 		return out;
 	}
 
