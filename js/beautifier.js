@@ -619,6 +619,20 @@ function tagIndentDelta(line) {
 	return { net: net, lead: lead, openRawBlock: rawOpen };
 }
 
+/* Expand a leading-whitespace prefix string to a visual column count,
+ * treating each tab as advancing to the next 8-column tab stop (standard
+ * POSIX/terminal convention). Used to normalize mixed-whitespace prefixes
+ * for comparison when the opener and continuation lines of a multi-line
+ * inline CF tag use different styles (spaces vs tabs). */
+function expandPrefixToVisualCols(prefix) {
+	var col = 0;
+	for (var pi = 0; pi < prefix.length; pi++) {
+		if (prefix[pi] === '\t') { col = col + 8 - (col % 8); }
+		else { col++; }
+	}
+	return col;
+}
+
 function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) {
 
 	if(split_html_tag == true){
@@ -736,11 +750,26 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment) 
 				&& CF_TAGS.inline.indexOf(multiLineTagName) !== -1
 				&& /^[})\]]/.test(line);
 			var inlineContExtraWs = "";
-			if (CF_TAGS.inline.indexOf(multiLineTagName) !== -1
-				&& origPrefix.indexOf(multiLineTagOrigPrefix) === 0) {
-				var inlineRelPrefix = origPrefix.substring(multiLineTagOrigPrefix.length);
-				if (inlineRelPrefix.length > 1) {
-					inlineContExtraWs = inlineRelPrefix.substring(1);
+			if (CF_TAGS.inline.indexOf(multiLineTagName) !== -1) {
+				if (origPrefix.indexOf(multiLineTagOrigPrefix) === 0) {
+					/* Same whitespace style as opener — use verbatim prefix slice. */
+					var inlineRelPrefix = origPrefix.substring(multiLineTagOrigPrefix.length);
+					if (inlineRelPrefix.length > 1) {
+						inlineContExtraWs = inlineRelPrefix.substring(1);
+					}
+				} else {
+					/* Mixed whitespace (e.g. opener uses spaces, continuation uses tabs).
+					 * Expand both to 8-column tab stops and compute the visual column
+					 * delta, then emit spaces so siblings that used different whitespace
+					 * styles still land at the same output column. The `- 1` mirrors the
+					 * `.substring(1)` in the same-style path so both produce identical
+					 * extra-space counts for the same visual offset. */
+					var openerVisualCols = expandPrefixToVisualCols(multiLineTagOrigPrefix);
+					var contVisualCols   = expandPrefixToVisualCols(origPrefix);
+					var extraVisualCols  = contVisualCols - openerVisualCols;
+					if (extraVisualCols > 1) {
+						inlineContExtraWs = ' '.repeat(extraVisualCols - 1);
+					}
 				}
 			}
 			if (inlineExpressionClose) {
