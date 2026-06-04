@@ -1711,6 +1711,20 @@ assertEqual(
 		fn(undefined), false);
 })();
 
+// Repro: sample/ai_agent_cancel.cfm — a dated CFML comment whose free text
+// carries an unbalanced `]` (`[start] ... record]`). The brace/bracket scanner
+// must skip `<!--- ... --->` spans; otherwise the stray `]` decrements
+// bracketDepth and dedents every line after the comment by one level, dropping
+// the trailing tags out of their enclosing <cftry>.
+assertEqual(
+	'unbalanced ] inside a CFML comment does not dedent following tags',
+	runRouter(
+		'<cftry>\n<cfset x = 1>\n<!--- note [start] sole record] --->\n<cfoutput>ok</cfoutput>\n<cfcatch type="any"><cfset y = 2></cfcatch>\n</cftry>',
+		'cfml'
+	),
+	'<cftry>\n\t<cfset x = 1>\n\t<!--- note [start] sole record] --->\n\t<cfoutput>ok</cfoutput>\n\t<cfcatch type="any">\n\t\t<cfset y = 2>\n\t</cfcatch>\n</cftry>'
+);
+
 assertEqual(
 	'cfquery with structural cfif chain is left to beautifyCFML (no SQL re-format)',
 	runRouter(

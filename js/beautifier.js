@@ -48,6 +48,13 @@ function countBracesOutsideStrings(s, options) {
 	var i = 0;
 	var inQ = null;        // null | "'" | '"' | '`'
 	var inBlockComment = false;
+	// CFML markup comment `<!--- ... --->` (and HTML `<!-- ... -->`). Legacy
+	// ColdFusion files carry dated change-log comments whose free text often
+	// contains unbalanced `]`/`[`/`(`/`{` (e.g. `... sole record] --->`).
+	// Without this guard those stray brackets count as code openers/closers,
+	// corrupting bracketDepth/parenDepth and dedenting every line that follows
+	// (real-world repro: sample/ai_agent_cancel.cfm `[start] ... record]`).
+	var inMarkupComment = false;
 	// `lastSig` tracks whether the previous significant token was a
 	// VALUE (identifier, number, `)`, `]`, string close) or an
 	// OPERATOR (`=`, `(`, `,`, `:`, `;`, `+`, `-`, `*`, `/`, ...).
@@ -58,6 +65,11 @@ function countBracesOutsideStrings(s, options) {
 		var c = s[i];
 		if (inBlockComment) {
 			if (c === '*' && s[i + 1] === '/') { inBlockComment = false; i += 2; continue; }
+			i++; continue;
+		}
+		if (inMarkupComment) {
+			// `--->` (CFML) ends with `-->`, so matching `-->` closes both.
+			if (c === '-' && s[i + 1] === '-' && s[i + 2] === '>') { inMarkupComment = false; i += 3; continue; }
 			i++; continue;
 		}
 		if (inQ) {
@@ -98,6 +110,10 @@ function countBracesOutsideStrings(s, options) {
 			// Not a closed regex on this line — `/` becomes division.
 		}
 		if (c === '"' || c === "'" || c === '`') { inQ = c; i++; continue; }
+		// Markup comment open — `<!---` (CFML, 5 chars) tested before `<!--`
+		// (HTML, 4). Brackets/parens in the free text are skipped wholesale.
+		if (c === '<' && s.substr(i, 5) === '<!---') { inMarkupComment = true; i += 5; continue; }
+		if (c === '<' && s.substr(i, 4) === '<!--')  { inMarkupComment = true; i += 4; continue; }
 		if (c === ' ' || c === '\t') { i++; continue; }
 		if (c === '{') { braceOpen++;   lastSig = 'operator'; setTerm('{'); i++; continue; }
 		if (c === '[') { bracketOpen++; lastSig = 'operator'; setTerm('['); i++; continue; }

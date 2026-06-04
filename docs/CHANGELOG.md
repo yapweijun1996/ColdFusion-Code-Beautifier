@@ -1,5 +1,25 @@
 # Changelog
 
+## v7 series (2026-06-04)
+
+### Fix: brace/bracket scanner now skips CFML/HTML comment spans
+
+`countBracesOutsideStrings` skipped string literals, `//`, and `/* */` but **not**
+CFML `<!--- … --->` (or HTML `<!-- … -->`) comments. Legacy ColdFusion files carry
+dated change-log comments whose free text routinely contains an unbalanced bracket
+— e.g. `<!--- 20260519 [start] … DB UPDATE above is the sole record] --->`, where
+`[start]` is balanced but the trailing `record]` leaves one stray `]`. That `]` was
+counted as an array closer, decrementing `bracketDepth`/`indentLevel` by one, so
+**every line after the comment dedented out of its enclosing block** (the trailing
+`<cfoutput>`/`<cfcatch>` fell out of their `<cftry>`). Fix: added an
+`inMarkupComment` state to the scanner — opens on `<!---` (5-char, tested before the
+4-char `<!--`), closes on `-->` (which also matches the tail of `--->`), and skips
+all brackets/parens/braces inside the span. One central fix covers every caller
+(continuation-state pass + the bare-JS `{}`/`[]` path). Repro fixture
+`sample/ai_agent_cancel.cfm`; regression test `unbalanced ] inside a CFML comment
+does not dedent following tags`. Same bug-class as the multi-line string-state leaks
+(per-line scanner not carrying string/comment state) — see `docs/LIMITATIONS.md`.
+
 ## v7 series (2026-06-03)
 
 ### Feat: Semantic Indent — tree-sitter depth-aware indentation for flat nested call chains
