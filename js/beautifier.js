@@ -817,6 +817,16 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 		var line = lines[i].trim();
 		var line_data = line.toLowerCase();
 
+		// Blank line — emit truly empty, never indentation-only. Otherwise
+		// applyIndent() (or the comment/multi-line-tag continuation handlers)
+		// pad it with the current indentLevel's tabs, producing a
+		// whitespace-only line (trailing whitespace). Blank lines carry no
+		// structure: no tag, no quote, no comment marker, so skipping the
+		// rest of the loop body cannot drop a close-marker or quote-state
+		// transition. Repro: sample/ai_agent_cancel.cfm blank lines inside
+		// <cftry> emitted as a lone "\t".
+		if (line === '') { lines[i] = ''; continue; }
+
 		// Multi-line opening tag continuation: lines after a tag like
 		// `<div class="..."` whose `>` is on a later line. Continuation
 		// lines (including the line containing the closing `>`) sit at

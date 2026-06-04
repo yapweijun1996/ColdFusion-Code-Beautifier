@@ -2,6 +2,20 @@
 
 ## v7 series (2026-06-04)
 
+### Fix: blank lines no longer emit indentation-only whitespace
+
+A blank source line inside an indented block (e.g. between siblings in a
+`<cftry>`) was run through `applyIndent()` and emitted as a lone `\t` at the
+current indent level — a whitespace-only line / trailing whitespace. Source
+blank lines that already carried a stray tab/space were preserved the same way.
+Fix: the main `beautifyCFML` loop now short-circuits a trimmed-empty line to
+`''` before any indent/comment/multi-line-tag handling — blank lines carry no
+tag, quote, or comment marker, so skipping the body cannot drop a close-marker
+or quote-state transition. Repro fixture `sample/ai_agent_cancel.cfm`;
+regression tests `blank line inside a block emits empty, not an
+indentation-only tab` and `a source blank line carrying trailing whitespace is
+normalized to empty`.
+
 ### Fix: brace/bracket scanner now skips CFML/HTML comment spans
 
 `countBracesOutsideStrings` skipped string literals, `//`, and `/* */` but **not**

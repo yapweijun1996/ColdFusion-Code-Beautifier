@@ -1725,6 +1725,28 @@ assertEqual(
 	'<cftry>\n\t<cfset x = 1>\n\t<!--- note [start] sole record] --->\n\t<cfoutput>ok</cfoutput>\n\t<cfcatch type="any">\n\t\t<cfset y = 2>\n\t</cfcatch>\n</cftry>'
 );
 
+// Repro: sample/ai_agent_cancel.cfm — blank lines inside a <cftry> were
+// emitted as a lone indentation tab (whitespace-only line / trailing
+// whitespace). A blank line must serialize as truly empty regardless of the
+// current indent level.
+assertEqual(
+	'blank line inside a block emits empty, not an indentation-only tab',
+	runRouter(
+		'<cftry>\n<cfset x = 1>\n\n<cfset y = 2>\n</cftry>',
+		'cfml'
+	),
+	'<cftry>\n\t<cfset x = 1>\n\n\t<cfset y = 2>\n</cftry>'
+);
+
+assertEqual(
+	'a source blank line carrying trailing whitespace is normalized to empty',
+	runRouter(
+		'<cftry>\n<cfset x = 1>\n\t \n<cfset y = 2>\n</cftry>',
+		'cfml'
+	),
+	'<cftry>\n\t<cfset x = 1>\n\n\t<cfset y = 2>\n</cftry>'
+);
+
 assertEqual(
 	'cfquery with structural cfif chain is left to beautifyCFML (no SQL re-format)',
 	runRouter(
