@@ -20,6 +20,7 @@
 var fs = require('fs');
 var path = require('path');
 var vm = require('vm');
+var sourceEncoding = require('./source-encoding.js');
 
 var ROOT = path.resolve(__dirname, '..');
 var VENDOR_PATH = path.join(ROOT, 'vendor', 'sql-formatter.min.js');
@@ -39,6 +40,7 @@ var opts = {
     normalizeTabWidth: 0,
     proSql: false
 };
+var inputFormat = { encoding: 'utf8', bom: false };
 
 function fail(message, code) {
     console.error('Error: ' + message);
@@ -140,12 +142,19 @@ function parseArgs(argv) {
 }
 
 function readInput(inputPath) {
-    if (inputPath === '-') return fs.readFileSync(0, 'utf8');
-    try {
-        return fs.readFileSync(inputPath, 'utf8');
-    } catch (err) {
-        fail('Cannot read input file ' + inputPath + ': ' + err.message);
+    var buffer;
+    if (inputPath === '-') {
+        buffer = fs.readFileSync(0);
+    } else {
+        try {
+            buffer = fs.readFileSync(inputPath);
+        } catch (err) {
+            fail('Cannot read input file ' + inputPath + ': ' + err.message);
+        }
     }
+    var decoded = sourceEncoding.decodeSource(buffer);
+    inputFormat = decoded;
+    return decoded.text;
 }
 
 function defaultOutputPath(inputPath) {
@@ -164,6 +173,7 @@ function element(value, checked) {
 
 function loadFormatter() {
     var scripts = [
+        'js/cfml-comment-utils.js',
         'js/cf-tags.js',
         'js/sql-keywords.js',
         'js/sql-beautifier.js',
@@ -258,7 +268,7 @@ function formatCode(input) {
 
 function writeOutput(inputPath, output) {
     if (opts.stdout || inputPath === '-') {
-        process.stdout.write(output);
+        process.stdout.write(sourceEncoding.encodeSource(output, inputFormat));
         return;
     }
     var outputPath = opts.output || defaultOutputPath(inputPath);
@@ -266,7 +276,7 @@ function writeOutput(inputPath, output) {
         fail('Output path must end with _beutifier.cfm: ' + outputPath, 2);
     }
     try {
-        fs.writeFileSync(outputPath, output, 'utf8');
+        fs.writeFileSync(outputPath, sourceEncoding.encodeSource(output, inputFormat));
     } catch (err) {
         fail('Cannot write output file ' + outputPath + ': ' + err.message);
     }

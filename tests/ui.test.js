@@ -61,6 +61,7 @@ pass('all application scripts are deferred');
 
 const scriptSources = scriptMatches.map((match) => match[2]);
 const expectedOrder = [
+  './js/cfml-comment-utils.js',
   './js/cf-tags.js',
   './js/sql-keywords.js',
   './js/sql-beautifier.js',
@@ -210,7 +211,7 @@ async function runFormatterAsyncSafetyTest() {
     getElementById: function (id) { return ids[id] || null; }
   };
   const scripts = [
-    'js/cf-tags.js', 'js/sql-keywords.js', 'js/sql-beautifier.js',
+    'js/cfml-comment-utils.js', 'js/cf-tags.js', 'js/sql-keywords.js', 'js/sql-beautifier.js',
     'js/js-lexer-utils.js', 'js/deep-format.js', 'js/tag-utils.js',
     'js/cfml-splitter.js', 'js/toast.js', 'js/clipboard.js', 'js/beautifier.js'
   ];

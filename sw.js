@@ -4,7 +4,7 @@
  *   - JS / CSS / SVG / manifest: stale-while-revalidate
  *   - Bump CACHE_VERSION on every release to evict old assets
  */
-const CACHE_VERSION = 'v7.4.0';
+const CACHE_VERSION = 'v7.4.1';
 const CACHE_NAME    = 'cfbeautifier-' + CACHE_VERSION;
 
 const PRECACHE_URLS = [
@@ -13,6 +13,7 @@ const PRECACHE_URLS = [
   './styles.css',
   './favicon.svg',
   './manifest.webmanifest',
+  './js/cfml-comment-utils.js',
   './js/cf-tags.js',
   './js/sql-keywords.js',
   './js/sql-beautifier.js',

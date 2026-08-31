@@ -9,7 +9,7 @@ This document is the honest risk evaluation for production use. Read it before y
 | **Crash** | Throws an exception, hangs, returns empty output | **0 crashes** across the v18 corpus (15 files / 33,716 lines / 2.1 MB / 126 cfqueries — 0 throws, 0 warnings) |
 | **Corruption** | Output code is not semantically equivalent to input | Not provable by tests alone. See per-language analysis below. |
 
-The 116 unit tests + 22 content-preservation invariants enforce that **CFML auto-split and indent paths are whitespace-only transformations**. Pro SQL and deep-JS/CSS paths are inherently more aggressive and are the only realistic corruption surface.
+The current suite includes 246 exact formatter `assertEqual` call sites, 22 content-preservation invariants, 27 Pro SQL token-equivalence cases, UI/CLI suites, and a real-WASM Tree-sitter suite. These enforce that **CFML auto-split and indent paths are whitespace-only transformations**. Pro SQL and deep-JS/CSS paths are inherently more aggressive and remain the primary realistic corruption surface.
 
 ## Per-language risk
 
@@ -20,7 +20,7 @@ The 116 unit tests + 22 content-preservation invariants enforce that **CFML auto
 | `splitAdjacentCFMLTags` (Rules A/B/C/D) | **Near-zero** | Only inserts `\n` + leading whitespace. Never deletes, never reorders. |
 | Indent tracker | **Near-zero** | Only rewrites line-leading whitespace. |
 | String literal scanner (`"..."` / `'...'`) | **Near-zero** | Splitter explicitly enters string-mode; tag-like content inside quoted strings is copied verbatim (case #25 pins this). |
-| CFML markup comment `<!--- --->` | **Near-zero** | Treated as an opaque region. |
+| CFML markup comment `<!--- --->` | **Near-zero** | Shared depth-aware scanning keeps nested comments and commented-out tags opaque across split/indent/deep-format paths. |
 
 **Verdict**: CFML tag structure (open/close pairing, nesting depth, content order) is preserved. The 22 round-trip equivalence tests prove this for every user-reported scenario.
 
@@ -40,8 +40,8 @@ The 116 unit tests + 22 content-preservation invariants enforce that **CFML auto
 
 | `deep_js` | Risk | Notes |
 |-----------|------|-------|
-| **OFF** (default) | **Zero** | Body copied through verbatim by the splitter (opaque region). |
-| **ON** | **Low–Medium** | Home-rolled `formatJSCode` (not vendored js-beautify). Strings, template literals, comments, and regex literals are protected via token-substitution before reformat. Risk point: the `/foo/` vs `a / b` disambiguator uses a `lastSig` heuristic — extreme edge cases (deeply chained ternaries with regex) could mis-classify. If mis-classified, downstream parsing drifts but content is preserved verbatim through the token-replace step. |
+| **OFF** | **Zero** | Body copied through verbatim by the splitter (opaque region). |
+| **ON** (UI/CLI default unless Safe Mode or saved preferences override it) | **Low–Medium** | Home-rolled brace formatter (not vendored js-beautify). Strings, template literals, comments, regex literals, parenthesis groups, and own-line CFML control tags are protected before reformatting. Multi-line template payloads bypass the second deep pass. Risk point: `/foo/` vs `a / b` still uses an operator/value heuristic; adversarial syntax can be misclassified. |
 
 **Recommendation**: For production JS, run an external Prettier/js-beautify pass instead of `deep_js`.
 
@@ -93,20 +93,22 @@ node tools/diagnose-corpus.js
 
 ## What's tested vs what's not
 
-**Tested and CI-gated** (116 unit tests + 22 content-preservation invariants + 13 Pro SQL token-equivalence invariants + 25 user-case pinned tests):
+**Tested and CI-gated** (246 exact formatter `assertEqual` call sites + 22 content-preservation invariants + 27 Pro SQL token-equivalence cases + 26 documented user-case scenarios, plus UI/CLI/Tree-sitter suites):
 - CFML tag structure preservation
 - String literal content preservation (single / double / SQL `''` doubled-quote)
 - Markup comment preservation
 - `<script>` / `<style>` / `<cfquery>` / `<cfscript>` body preservation in opaque mode
 - Pro SQL marker injection / orphan detection / fallback chain
 - **Pro SQL token-equivalence**: input and output cfquery bodies are tokenized; non-keyword identifiers, string/numeric literals, CFML tags/expressions, and punctuation must appear in the **same sequence**. SQL keywords are exempt (Phase 3 hoist legitimately merges duplicated `WHERE`/`AND` prefixes). SQL comments (`/* */`, `--`, `<!--- --->`) compared as **multisets** — Phase 4 may shift them between cfif branches, but never drop, duplicate, or invent them.
-- All 25 documented user-reported scenarios (see `docs/CI-TEST-POLICY.md`)
+- All 26 documented user-reported scenarios (see `docs/CI-TEST-POLICY.md`)
+- Nested CFML-comment opacity, deep-JS CFML branch depth, bare-JS fragments inside CFML, multi-line template payloads, whitespace-tolerant raw closes, and legacy `<!--` / `//-->` script wrappers
 
-**Not exhaustively tested** (corpus-tested only, no formal proof):
+**Not exhaustively tested** (corpus-tested or implementation-only, no formal proof):
+- CLI UTF-8 BOM and UTF-16LE encoding round trips (UTF-16BE + CRLF is CI-covered)
 - `formatJSCode` regex/division heuristic on adversarial input
 - CSS string literals containing `{`/`}` characters
 - HTML body text containing unescaped `<`/`>`
 
 The previous entry "Pro SQL Phase 4 + SQL multi-line `/* */` comment placement across cfif branches" was promoted to the CI-gated list above on 2026-05-12 via the token-equivalence test suite. Comment **content** preservation is now formally proven; comment **position** is intentionally allowed to drift (this matches the empirical Phase 4 behavior).
 
-If you hit any of these, file an issue with a minimal repro and it becomes case #26+ per the policy in `docs/CI-TEST-POLICY.md`.
+If you hit any of these, file an issue with a minimal repro and it becomes case #27+ per the policy in `docs/CI-TEST-POLICY.md`.

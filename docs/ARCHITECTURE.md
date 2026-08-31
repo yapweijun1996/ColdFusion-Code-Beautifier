@@ -2,7 +2,9 @@
 
 ## Overview
 
-Browser-side code beautifier for CFML/HTML/CSS/JS/SQL. No build step, no dependencies. Script tags load in a fixed order, globals hang off `window`, and a Node VM harness re-runs the same browser globals for regression testing.
+Browser-side code beautifier for CFML/HTML/CSS/JS/SQL. Production has no build step or required network dependency; optional third-party runtimes are vendored. Script tags load in a fixed order, globals are exposed by classic scripts, and Node VM harnesses re-run the same browser code for regression and CLI use.
+
+**Current baseline:** working tree based on HEAD `9206986`. `js/cfml-comment-utils.js` is now a shared depth-aware nested-markup-comment scanner loaded by all production/VM paths. `js/beautifier.js` remains the combined 1,849-line CFML formatter, language detector, line-ending restorer, and DOM/async router. The broader decomposition in root `DESIGN.md` / `ROADMAP.md` remains planned.
 
 ## Node CLI
 
@@ -20,7 +22,9 @@ node tools/beautify-file.js - --stdout < source.cfm
 
 File mode keeps the input unchanged and writes the fixed `_beutifier.cfm`
 suffix. Stdin/stdout mode is useful when an agent wants to format a temporary
-buffer. The CLI defaults match the browser's normal formatting options (Auto
+buffer. `tools/source-encoding.js` detects UTF-8 (with/without BOM), UTF-16LE
+BOM, and UTF-16BE BOM and re-encodes output with the same encoding/BOM; corpus
+diagnostics use the same helper. The CLI defaults match the browser's normal formatting options (Auto
 language, deep SQL/CSS/JS, and continuation alignment); flags can disable
 those stages, normalize indentation, select a dialect, or enable the committed
 Pro SQL bundle. Semantic Indent remains browser-only and opt-in.
@@ -28,6 +32,7 @@ Pro SQL bundle. Semantic Indent remains browser-only and opt-in.
 ## Load order
 
 ```
+js/cfml-comment-utils.js ← nested CFML/HTML comment scanning shared by all formatter paths
 js/cf-tags.js          ← CF_TAGS config (inline / block / middle + HTML_VOID_TAGS)
 js/sql-keywords.js     ← SQL_MAJOR_CLAUSES, SQL_UPPERCASE_KEYWORDS, SQL_FUNCTION_KEYWORDS
 js/sql-beautifier.js   ← beautifySQL + tokenizeSQL + matchSQLMajorClause
@@ -68,10 +73,7 @@ beautifier.js (sql branch)   if pro_sql && loaded → formatProSQLSync; else →
 deep-format.js (cfquery)     same routing inside <cfquery> body, after CFML token protection
 ```
 
-The vendor bundle is **lazy-loaded** via dynamic `<script>` injection on the
-first Pro-SQL formatting call, then cached by the service worker so offline
-use works on subsequent loads. Users who never enable Pro SQL pay zero bytes
-for the feature.
+The vendor bundle is **runtime-lazy**: it is injected only when Pro SQL is enabled (or a saved preference pre-warms it), and failures fall back to the built-in formatter. The current `sw.js` also lists `vendor/sql-formatter.min.js` in `PRECACHE_URLS`, so an installed/controlled PWA downloads it during service-worker installation for offline readiness even if Pro SQL remains off. Runtime execution is zero-cost while off; network precache cost is not.
 
 ## Normalize Indent (optional, opt-in)
 
@@ -139,7 +141,9 @@ to disable duplicate actions during the wait.
 The formatter captures the input at request start. If the user edits the input
 while a lazy resource is loading, the stale request is not applied and
 `auto_clear` can only erase the unchanged captured input. This prevents an
-async completion from overwriting or deleting newer user work.
+async completion from overwriting or deleting newer user work. Before copy/clear,
+`normalizeOutputLineEndings` restores CRLF when the captured source contains
+CRLF; otherwise routed browser/CLI output uses LF.
 
 ## PWA layer
 
@@ -162,21 +166,24 @@ runs `npm test` (formatter + UI contract + Tree-sitter) then deploys via
 ## Pipeline
 
 ```
-beautifyCodes()                       router (DOM I/O)
+beautifyCodes()                       DOM I/O + preload + stale-request guard
   ├─ language = auto → detectLanguage(code)
-  ├─ language == 'sql' → beautifySQL(code)
+  ├─ language == 'sql' → formatProSQLSync (if enabled/loaded) | beautifySQL
   ├─ language == 'js'  → formatJsWithLeadingComments(code)
-  │                       (preserve leading <!---/<!--/`/*`/`//` banner,
-  │                        run formatBraceCode on the JS body)
+  │                       (peel leading CFML/HTML markup comments only;
+  │                        keep JS comments in token protection; format JS body)
   └─ else (cfml)
-       ├─ splitAdjacentCFMLTags(code)          stage 0: safe tag splitting
-       ├─ beautifyCFML(code, split_html_tag)   stage 1: outer CFML indent
-       └─ if any deep_* checkbox on:
-            deepFormatEmbedded(result, {sql, css, js})   stage 2
-              ├─ if sql → <cfquery> body → protectCFMLTokens → beautifySQL → restore
-              ├─ if js  → <script>  body → formatBraceCode
-              └─ if css → <style>   body → formatCSSCode
+       ├─ Normalize Indent (optional, before splitting)
+       ├─ splitAdjacentCFMLTags(code)                  stage 0
+       ├─ beautifyCFML(code, ...)                      stage 1
+       ├─ deepFormatEmbedded(result, options, source) stage 2, optional
+       │    ├─ <cfquery> → token protection + Pro/built-in structural dispatch
+       │    ├─ <script>  → formatBraceCodeWithCFML / template-safe passthrough
+       │    └─ <style>   → formatCSSCode
+       └─ applySemanticIndentPostPass                  stage 3, optional/loaded
 ```
+
+The no-preload path performs formatting immediately and returns an already-resolved Promise. When resources are lazy-loaded, the captured input is checked again before output is committed or cleared.
 
 The outer scanner maintains a persistent named CFML/HTML tag hierarchy rather
 than relying on a global opens-minus-closes counter. A matching close returns to
@@ -200,14 +207,14 @@ later pass.
 
 `detectLanguage()` routes to `'js'` when BOTH:
 
-1. The **post-comment-banner** body begins with a JS construct —
+1. The **post-markup-banner** body begins with a JS construct —
    `function` / `var` / `let` / `const` / `class` / `import` / `export` /
    `async` / `if` / `for` / `while` / `do` / `switch` / `return` / `throw`
    / `try` / `(…)=>` / `[` / `{` / `(` / `//` / `/*`. `splitLeadingCommentBlock`
-   peels off any leading CFML markup (`<!--- --->`), HTML (`<!-- -->`),
-   JS block (`/* */`), or JS line (`//`) comments before the prefix
-   check, so a `.cfm` file that opens with a documentation banner over
-   bare JS still routes correctly.
+   peels leading CFML markup (`<!--- --->`) and HTML (`<!-- -->`) comments.
+   JS block/line comments remain in the body and match the JS prefix directly,
+   allowing `protectBraceCodeText` to restore them with host-context-aware
+   indentation.
 2. The full source has NO real `<TAG>` chars outside string literals
    AND outside comments AND outside regex literals. `hasTagsOutsideStrings`
    walks with JS lexer state across **six** opaque regions:
@@ -330,7 +337,7 @@ between tags — `beautifyCFML` uses helpers split across focused files:
 - **`countBracesOutsideStrings(s)`** in `js/beautifier.js` — counts `{` `[` (openers) and `}` `]`
   (closers) on one line, skipping these lexical contexts:
   1. Single/double-quoted strings (with `\` escapes)
-  2. Template literals `` `…` `` (with `\` escapes; `${…}` braces DO count)
+  2. Template literals `` `…` `` (with `\` escapes) are opaque to this per-line counter; outer multi-line-template state preserves payload lines, while the deep JS token protector separately tracks `${…}` nesting
   3. Line comments `// …` (rest of line)
   4. Single-line block comments `/* … */`
   5. **Regex literals `/.../flags`** — `/` in operator position opens a
@@ -363,6 +370,31 @@ function lands N tabs too deep. See `tests/run-tests.js` cases
 "regex literal `[\s\S]` does not leak indent" and "division operator vs
 regex literal disambiguation".
 
+## Shared nested markup-comment scanner
+
+`js/cfml-comment-utils.js` provides `findCFMLCommentEnd`, `findMarkupCommentEnd`, `consumeMarkupComment`, and line-oriented `advanceMarkupCommentState`. CFML comments are depth-aware: an inner `<!--- ... --->` does not prematurely terminate the outer comment. Browser, CLI VM, formatter tests, splitter, brace/tag scanner, language detector, SQL token/tree handling, and deep JS protection load the helper before use. HTML comments remain first-close regions. Corpus diagnostics load it inside their formatter VM but still have a separate host-side scanner; consolidating that host scope is tracked in `TASK.md`.
+
+This module is the only completed extraction related to the broader refactor. Its dependent script-order and SW-precache entries are already present.
+
+## Latest implementation hardening
+
+The current baseline additionally includes:
+
+- depth-aware nested CFML comments kept opaque across splitting, indentation, SQL, JavaScript, and detection;
+- routed LF/CRLF output style restoration;
+- CLI/diagnostic preservation of UTF-8 BOM state and BOM-marked UTF-16LE/UTF-16BE source encoding;
+- `normalizeStructuralCFMLTags` before structural query dispatch, including multi-line control tags;
+- whitespace-tolerant closing raw tags such as `</cfquery >`;
+- idempotent marker/Phase 3/structural fallback alignment with SQL parenthesis/subquery awareness;
+- `formatBraceCodeWithCFML`, which composes own-line CFML control depth with JS brace depth;
+- a conservative bare-JS fragment state inside CFML control flow, including Allman braces;
+- multi-line template payload preservation and deep-JS bypass when reformatting would alter payload indentation;
+- legacy executable script wrappers (`<!--` ... `//-->`) distinguished from ordinary HTML comments.
+
+## Planned decomposition
+
+Beyond the existing shared comment scanner, the current combined module will be decomposed only after characterization tests are locked. Planned modules and phase gates are defined in root [DESIGN.md](../DESIGN.md), [SPEC.md](../SPEC.md), [ROADMAP.md](../ROADMAP.md), and [TASK.md](../TASK.md). This is a behavior-preserving refactor: classic scripts, public globals, load order, synchronous no-preload behavior, VM/CLI parity, and fallback semantics remain requirements.
+
 ## Test harness
 
-`tests/run-tests.js` uses Node `vm.runInContext` to execute all browser scripts in a faked `document` / `setTimeout` context, exposes `beautifySQL` / `beautifyCFML` / `beautifyCodes` / `deepFormatEmbedded` on that context, and runs `assertEqual` cases. This avoids needing a real browser or headless driver, and it exercises the exact same code the browser loads.
+`tests/run-tests.js` uses Node `vm.runInContext` to execute production browser scripts in a faked `document` / timer context and currently contains 246 exact `assertEqual` call sites, 22 content-preservation invariants, and 27 Pro SQL token-equivalence cases. Separate suites cover UI behavior, CLI E2E, and real-WASM Semantic Indent. This avoids a required headless browser while exercising the same formatter code loaded by production.

@@ -54,6 +54,7 @@ continuation-alignment preservation. Disable stages with `--no-deep-sql`,
 - Formatting runs locally; source code is not uploaded.
 - The CLI uses the same production formatter scripts as the web UI through a
   small Node VM-backed DOM harness.
+- UTF-8 (with/without BOM) and BOM-marked UTF-16LE/UTF-16BE inputs are decoded and written back using the same encoding/BOM; LF/CRLF style is also preserved.
 - Semantic Indent is currently browser-only and remains opt-in.
 - The `_beutifier.cfm` spelling is intentional for compatibility with the
   existing project output convention.
@@ -62,4 +63,4 @@ continuation-alignment preservation. Disable stages with `--no-deep-sql`,
 
 > Clone the repository, run `node tools/beautify-file.js` on the CFML source,
 > inspect the generated `_beutifier.cfm`, and do not commit proprietary source
-> fixtures from `sample_codebase/`.
+> fixtures from `sample/` (including `sample/sample_cfm/`).

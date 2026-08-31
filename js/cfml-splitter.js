@@ -50,7 +50,16 @@ function splitAdjacentCFMLTags(code) {
 		 * islands. In that shape, quoted HTML uses JS escapes (`\'`) and the
 		 * CFML splitter must not lose string parity before later `</div>`
 		 * fragments. Keep normal CFML semantics for ordinary tag-first files. */
-		var body = src.replace(/^\s*(?:<!---[\s\S]*?--->\s*)+/i, '').replace(/^\s+/, '');
+		var bodyStart = 0;
+		while (bodyStart < src.length) {
+			while (bodyStart < src.length && /\s/.test(src[bodyStart])) bodyStart++;
+			if (src.slice(bodyStart, bodyStart + 5) !== '<!---'
+					&& src.slice(bodyStart, bodyStart + 4) !== '<!--') break;
+			var commentEnd = findMarkupCommentEnd(src, bodyStart);
+			if (commentEnd === -1) break;
+			bodyStart = commentEnd;
+		}
+		var body = src.slice(bodyStart).replace(/^\s+/, '');
 		return /^(?:\/\*|\/\/|function\b|var\b|let\b|const\b|class\b|if\b|\(\s*function\b)/.test(body)
 			&& /\\['"]/.test(src);
 	}
@@ -72,6 +81,17 @@ function splitAdjacentCFMLTags(code) {
 		}
 		out += code.slice(i, j + endNeedle.length);
 		i = j + endNeedle.length;
+	}
+
+	function emitMarkupComment() {
+		var end = findMarkupCommentEnd(code, i);
+		if (end === -1) {
+			out += code.slice(i);
+			i = code.length;
+			return;
+		}
+		out += code.slice(i, end);
+		i = end;
 	}
 
 	function lineTailHasOpenQuote(text) {
@@ -209,14 +229,12 @@ function splitAdjacentCFMLTags(code) {
 		// Order matters: longer literal first (`<!---` before `<!--`).
 		if (lower.startsWith('<!---', i)) {
 			if (maybeSplitBefore(i)) continue;
-			out += '<!---'; i += 5;
-			emitRegion('--->');
+			emitMarkupComment();
 			continue;
 		}
 		if (lower.startsWith('<!--', i)) {
 			if (maybeSplitBefore(i)) continue;
-			out += '<!--'; i += 4;
-			emitRegion('-->');
+			emitMarkupComment();
 			continue;
 		}
 		// Opaque blocks: emit open tag verbatim, then skip to closer.

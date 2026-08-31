@@ -38,7 +38,7 @@ const tsCfml = require('../js/tree-sitter-cfml.js');
 // ── Load the beautifier into a vm context (for end-to-end output) ────────────
 function loadBeautifier() {
 	const scripts = [
-		'js/cf-tags.js', 'js/sql-keywords.js', 'js/sql-beautifier.js',
+		'js/cfml-comment-utils.js', 'js/cf-tags.js', 'js/sql-keywords.js', 'js/sql-beautifier.js',
 		'js/js-lexer-utils.js', 'js/deep-format.js', 'js/tag-utils.js',
 		'js/cfml-splitter.js', 'js/toast.js', 'js/clipboard.js', 'js/beautifier.js'
 	];

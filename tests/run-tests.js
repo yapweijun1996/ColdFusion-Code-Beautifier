@@ -2,6 +2,7 @@ var fs = require('fs');
 var vm = require('vm');
 
 var scripts = [
+	'js/cfml-comment-utils.js',
 	'js/cf-tags.js',
 	'js/sql-keywords.js',
 	'js/sql-beautifier.js',
@@ -193,6 +194,25 @@ function runRouter(input, language, deepFormat) {
 		'<cfif flag >'
 	);
 	assertEqual(
+		'nested CFML comment end consumes the outer close',
+		structuralHarness.context.findCFMLCommentEnd('<!--- outer <!--- inner ---> tail --->', 0),
+		'<!--- outer <!--- inner ---> tail --->'.length
+	);
+	assertEqual(
+		'nested CFML comment stays opaque to tag splitting',
+		structuralHarness.context.splitAdjacentCFMLTags('<cfif active><!--- <tr><!--- inner ---><cfif dead></cfif></tr> ---><span>live</span></cfif>'),
+		'<cfif active>\n<!--- <tr><!--- inner ---><cfif dead></cfif></tr> --->\n<span>live</span>\n</cfif>'
+	);
+	assertEqual(
+		'nested CFML comment stays opaque to indentation',
+		runRouter(
+			'<cfif active>\n    <!--- <tr>\n        <td>\n            <!--- inner --->\n            <cfif dead>\n                dead\n            </cfif>\n        </td>\n    </tr> --->\n    <span>live</span>\n</cfif>',
+			'cfml',
+			false
+		),
+		'<cfif active>\n\t<!--- <tr>\n\t    <td>\n\t        <!--- inner --->\n\t        <cfif dead>\n\t            dead\n\t        </cfif>\n\t    </td>\n\t</tr> --->\n\t<span>live</span>\n</cfif>'
+	);
+	assertEqual(
 		'embedded query cfif is tracked before an own-line cfelse',
 		runRouter(
 			'<section>\n<cfquery name="q">\nSELECT x\nAND <cfif flag>\nx = 1\n<cfelse>\nx = 2\n</cfif>\nORDER BY x\n</cfquery>\nafter\n</section>',
@@ -235,7 +255,7 @@ function findJsStringLiteralLineBreaks(code) {
 	var escaped = false;
 	var inLineComment = false;
 	var inBlockComment = false;
-	var inCfmlComment = false;
+	var markupCommentState = { cfmlDepth: 0, htmlDepth: 0 };
 	var inCfscriptBlock = false;
 	// For HTML documents, only scan for JS string issues inside <script> blocks.
 	// Apostrophes in HTML text content (e.g. "Lucee's") must not be treated as
@@ -263,13 +283,21 @@ function findJsStringLiteralLineBreaks(code) {
 			continue;
 		}
 
-		if (inCfmlComment) {
-			if (s.substr(i, 4) === '--->') {
-				inCfmlComment = false;
+		if (markupCommentState.cfmlDepth > 0) {
+			if (s.substr(i, 5) === '<!---') {
+				markupCommentState.cfmlDepth++;
+				i += 4;
+				col += 4;
+			} else if (s.substr(i, 4) === '--->') {
+				markupCommentState.cfmlDepth--;
 				i += 3;
 				col += 3;
-			} else if (s.substr(i, 3) === '-->') {
-				inCfmlComment = false;
+			}
+			continue;
+		}
+		if (markupCommentState.htmlDepth > 0) {
+			if (s.substr(i, 3) === '-->') {
+				markupCommentState.htmlDepth = 0;
 				i += 2;
 				col += 2;
 			}
@@ -330,8 +358,12 @@ function findJsStringLiteralLineBreaks(code) {
 			}
 		}
 
+		if (s.substr(i, 5) === '<!---') {
+			markupCommentState.cfmlDepth = 1;
+			continue;
+		}
 		if (s.substr(i, 4) === '<!--') {
-			inCfmlComment = true;
+			markupCommentState.htmlDepth = 1;
 			continue;
 		}
 
@@ -2208,6 +2240,12 @@ assertEqual(
 		'<cfquery name="q">\n\tSELECT\n\t\ta\n\tFROM\n\t\tt\n\tWHERE\n\t\tx = 1\n\t\t<cfif y>\n\t\t\t<!--- a note --->\n\t\t\tAND z = 2\n\t\t</cfif>\n</cfquery>'
 	);
 
+	assertEqual(
+		'Phase4 T6b: nested CFML comment remains one opaque tree line',
+		runProSQL('<cfquery name="q">\nSELECT a FROM t WHERE x = 1\n<cfif y>\n<!--- outer <!--- inner ---> continues --->\nand z = 2\n</cfif>\n</cfquery>'),
+		'<cfquery name="q">\n\tSELECT\n\t\ta\n\tFROM\n\t\tt\n\tWHERE\n\t\tx = 1\n\t\t<cfif y>\n\t\t\t<!--- outer <!--- inner ---> continues --->\n\t\t\tAND z = 2\n\t\t</cfif>\n</cfquery>'
+	);
+
 	// T7 — post-tree segment with GROUP BY + ORDER BY. Both must be re-formatted.
 	assertEqual(
 		'Phase4 T7: post-tree GROUP BY + ORDER BY both formatted',
@@ -2336,6 +2374,24 @@ assertEqual(
 		'cast','over','partition','within','filter'
 	].forEach(function(k) { SQL_KEYWORDS[k] = 1; });
 
+	function findNestedCFMLCommentEnd(text, startIndex) {
+		var depth = 1;
+		var i = startIndex + 5;
+		while (i < text.length) {
+			if (text.slice(i, i + 5) === '<!---') {
+				depth++;
+				i += 5;
+			} else if (text.slice(i, i + 4) === '--->') {
+				depth--;
+				i += 4;
+				if (depth === 0) return i;
+			} else {
+				i++;
+			}
+		}
+		return -1;
+	}
+
 	function tokenize(text) {
 		var toks = [];
 		var i = 0;
@@ -2344,12 +2400,12 @@ assertEqual(
 			var c = text[i];
 			// Whitespace — dropped from output
 			if (c === ' ' || c === '\t' || c === '\n' || c === '\r') { i++; continue; }
-			// CFML markup comment <!--- ... --->
+			// CFML markup comment — consume its complete nested region.
 			if (text.substr(i, 5) === '<!---') {
-				var ce = text.indexOf('--->', i + 5);
-				if (ce === -1) { toks.push({kind:'COMMENT_CFM', text: text.slice(i).replace(/\s+/g,' ').trim()}); i = n; break; }
-				toks.push({kind:'COMMENT_CFM', text: text.slice(i, ce + 4).replace(/\s+/g,' ').trim()});
-				i = ce + 4; continue;
+				var commentEnd = findNestedCFMLCommentEnd(text, i);
+				if (commentEnd === -1) { toks.push({kind:'COMMENT_CFM', text: text.slice(i).replace(/\s+/g,' ').trim()}); i = n; break; }
+				toks.push({kind:'COMMENT_CFM', text: text.slice(i, commentEnd).replace(/\s+/g,' ').trim()});
+				i = commentEnd; continue;
 			}
 			// SQL line comment -- ...
 			if (c === '-' && text[i+1] === '-') {

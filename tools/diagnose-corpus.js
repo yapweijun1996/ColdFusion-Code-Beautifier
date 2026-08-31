@@ -35,6 +35,7 @@
 var fs   = require('fs');
 var vm   = require('vm');
 var path = require('path');
+var sourceEncoding = require('./source-encoding.js');
 
 var ROOT = path.resolve(__dirname, '..');
 process.chdir(ROOT);
@@ -91,6 +92,10 @@ function printHelp() {
 }
 
 // ---------- corpus discovery ----------
+function readSourceFile(filePath) {
+    return sourceEncoding.decodeSource(fs.readFileSync(filePath));
+}
+
 function listCorpus(dir, fileFilter) {
     if (!fs.existsSync(dir)) {
         console.error('Corpus dir not found: ' + dir);
@@ -113,7 +118,7 @@ function listCorpus(dir, fileFilter) {
 
 // ---------- browser bootstrap ----------
 var scripts = [
-    'js/cf-tags.js', 'js/sql-keywords.js', 'js/sql-beautifier.js',
+    'js/cfml-comment-utils.js', 'js/cf-tags.js', 'js/sql-keywords.js', 'js/sql-beautifier.js',
     'js/js-lexer-utils.js', 'js/deep-format.js', 'js/tag-utils.js',
     'js/cfml-splitter.js', 'js/toast.js', 'js/clipboard.js',
     'js/beautifier.js'
@@ -180,11 +185,63 @@ function runBeautifier(input, dialect) {
 }
 
 // ---------- cfquery range + classifier ----------
+function advanceCorpusMarkupCommentState(text, state) {
+    var hadComment = state.cfmlDepth > 0 || state.htmlDepth > 0;
+    var startsInComment = hadComment;
+    var codeOutsideComment = false;
+    var i = 0;
+    while (i < text.length) {
+        if (state.cfmlDepth > 0) {
+            hadComment = true;
+            if (text.slice(i, i + 5) === '<!---') {
+                state.cfmlDepth++;
+                i += 5;
+            } else if (text.slice(i, i + 4) === '--->') {
+                state.cfmlDepth--;
+                i += 4;
+            } else {
+                i++;
+            }
+            continue;
+        }
+        if (state.htmlDepth > 0) {
+            hadComment = true;
+            if (text.slice(i, i + 3) === '-->') {
+                state.htmlDepth = 0;
+                i += 3;
+            } else {
+                i++;
+            }
+            continue;
+        }
+        if (text.slice(i, i + 5) === '<!---') {
+            state.cfmlDepth = 1;
+            hadComment = true;
+            i += 5;
+        } else if (text.slice(i, i + 4) === '<!--') {
+            state.htmlDepth = 1;
+            hadComment = true;
+            i += 4;
+        } else {
+            if (!/[ \t\r\n]/.test(text[i])) codeOutsideComment = true;
+            i++;
+        }
+    }
+    return {
+        startsInComment: startsInComment,
+        hadComment: hadComment,
+        codeOutsideComment: codeOutsideComment
+    };
+}
+
 function findCfqueryRanges(src) {
     var lines = src.split('\n');
     var r = [];
     var open = -1;
+    var commentState = { cfmlDepth: 0, htmlDepth: 0 };
     for (var i = 0; i < lines.length; i++) {
+        var scan = advanceCorpusMarkupCommentState(lines[i], commentState);
+        if (scan.startsInComment || (scan.hadComment && !scan.codeOutsideComment)) continue;
         var ll = lines[i].toLowerCase();
         if (open === -1 && /<cfquery[\s>]/.test(ll)) open = i;
         if (open !== -1 && /<\/cfquery\s*>/.test(ll)) {
@@ -253,7 +310,8 @@ function modeAudit() {
 
     corpus.forEach(function(name) {
         var p = path.join(opts.corpus, name);
-        var src = fs.readFileSync(p, 'utf8');
+        var sourceData = readSourceFile(p);
+        var src = sourceData.text;
         var inLines = src.split('\n').length;
         var bytes = src.length;
         var result = runBeautifier(src, opts.dialect);
@@ -266,7 +324,10 @@ function modeAudit() {
         }
 
         if (opts.write) {
-            fs.writeFileSync(p.replace(/\.cfm$/i, '_beutifier.cfm'), result.output, 'utf8');
+            fs.writeFileSync(
+                p.replace(/\.cfm$/i, '_beutifier.cfm'),
+                sourceEncoding.encodeSource(result.output, sourceData)
+            );
         }
 
         var inQ  = findCfqueryRanges(src);
@@ -324,7 +385,7 @@ function modeTargets() {
     var targets = [];
     corpus.forEach(function(name) {
         var p = path.join(opts.corpus, name);
-        var src = fs.readFileSync(p, 'utf8');
+        var src = readSourceFile(p).text;
         var result = runBeautifier(src, opts.dialect);
         if (result.threw) return;
         var inQ  = findCfqueryRanges(src);
@@ -529,7 +590,7 @@ function modeSanitize() {
 
     corpus.forEach(function(name) {
         var p = path.join(opts.corpus, name);
-        var src = fs.readFileSync(p, 'utf8');
+        var src = readSourceFile(p).text;
         var ranges = findCfqueryRanges(src);
         var srcLines = src.split('\n');
         ranges.forEach(function(r) {
@@ -718,12 +779,12 @@ function sanitizeTokenize(text) {
     while (i < n) {
         var c = text[i];
         var startPos = i;
-        // CFML markup comment
+        // CFML markup comment — consume its complete nested region.
         if (text.substr(i, 5) === '<!---') {
-            var ce = text.indexOf('--->', i + 5);
-            if (ce === -1) { toks.push({kind:'COMMENT_CFM', text:text.slice(i), start:i, end:n}); i = n; break; }
-            toks.push({kind:'COMMENT_CFM', text:text.slice(i, ce + 4), start:i, end:ce + 4});
-            i = ce + 4; continue;
+            var commentEnd = findCFMLCommentEnd(text, i);
+            if (commentEnd === -1) { toks.push({kind:'COMMENT_CFM', text:text.slice(i), start:i, end:n}); i = n; break; }
+            toks.push({kind:'COMMENT_CFM', text:text.slice(i, commentEnd), start:i, end:commentEnd});
+            i = commentEnd; continue;
         }
         // SQL line comment
         if (c === '-' && text[i+1] === '-') {

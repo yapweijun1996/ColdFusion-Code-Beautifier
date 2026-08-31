@@ -22,7 +22,7 @@
 
 ### S1 — blocker / accessibility
 
-1. **No `aria-label` on input / output textareas.** Screen readers announce only "edit, blank" / "edit, readonly". `aria-label="CFML / SQL / HTML source code"` and `aria-label="Beautified output"` are 2-line fixes in [index.html](index.html).
+1. **No `aria-label` on input / output textareas.** Screen readers announce only "edit, blank" / "edit, readonly". `aria-label="CFML / SQL / HTML source code"` and `aria-label="Beautified output"` are 2-line fixes in [index.html](../index.html).
 2. **No `<main>` / `<nav>` landmarks.** `document.querySelectorAll('main,nav,header,[role]')` returns `[]` — only `<footer>` exists. AT users have no quick-nav anchor. Wrap `.container` in `<main>` and `.toolbar` in `<nav aria-label="Actions">`.
 3. **`role="status" aria-live="polite"` missing on `.simpleToastContainer`** — toast notifications are silent to screen readers.
 4. **Checkbox row tap target = 32 px label height, checkbox itself 18 × 18 px.** Below Apple HIG (44 px) and Material (48 px). On 375 px mobile this is genuinely hard to hit. Increase `.toolbar-options label { min-height: 44px; }`.
@@ -31,7 +31,7 @@
 ### S2 — UX friction
 
 6. **iPad portrait (768 px) lands on mobile layout.** Media query `@media (max-width: 768px)` is inclusive of 768. iPad-portrait users get the stacked / large-button mobile UI while having plenty of horizontal room. Change to `(max-width: 720px)` or use `(max-width: 640px)` (recommended).
-7. **Console spam in production** — [js/app.js:2](js/app.js#L2) logs `window - onload` unconditionally on every load. Verified: 12 identical messages captured during a single boot (script tags fire reload chain). Remove or guard with `localStorage.debug`.
+7. **Console spam in production** — [js/app.js:2](../js/app.js#L2) logs `window - onload` unconditionally on every load. Verified: 12 identical messages captured during a single boot (script tags fire reload chain). Remove or guard with `localStorage.debug`.
 8. **No "Beautify" loading indicator.** When Pro SQL is enabled for the first time, the ~312 KB vendor bundle fetches asynchronously before the formatter runs. The button stays in idle state, so a user on slow 4G can perceive a freeze of 1-3 s.
 9. **No keyboard shortcut.** Cmd/Ctrl-Enter for Beautify is industry-standard (CodePen, JSFiddle, all REPLs). ~10 LOC.
 10. **Tab inside textarea jumps focus** instead of inserting `\t`. Disrupts editing the pasted code.
@@ -63,10 +63,10 @@ No screenshots saved to disk by default (Preview returns inline images). Re-run 
 
 ## 4. Cross-references
 
-- [docs/RESEARCH-REVIEW-2026-05-11.md](docs/RESEARCH-REVIEW-2026-05-11.md) — library-side recommendations (JSON / XML / Diff / YAML). This audit complements it on the UI side.
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — pipeline + load order; relevant for S4 script-loading findings.
-- [docs/LIMITATIONS.md](docs/LIMITATIONS.md) — known-edge cases on the formatter side.
-- [task.md](task.md) / [task.jsonl](task.jsonl) — actionable backlog generated from S1–S4 above.
+- [RESEARCH-REVIEW-2026-05-11.md](RESEARCH-REVIEW-2026-05-11.md) — library-side recommendations (JSON / XML / Diff / YAML). This audit complements it on the UI side.
+- [ARCHITECTURE.md](ARCHITECTURE.md) — pipeline + load order; relevant for S4 script-loading findings.
+- [LIMITATIONS.md](LIMITATIONS.md) — known-edge cases on the formatter side.
+- [TASK.md](../TASK.md) / [task.jsonl](../task.jsonl) — current task register and machine-readable mirror; T01–T19 preserve this audit's completed backlog.
 
 ## 5. Implementation follow-up — v7.4.0
 

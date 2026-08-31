@@ -5,7 +5,9 @@ Real cases where the formatter does not produce ideal output. None of these corr
 ## CFML
 
 - **`##` hash escape inside SQL string literals** — a bare `##` is protected as a literal, but a surrounding single-quoted SQL string plus a nearby `#var#` in the same expression can produce slightly off spacing. Tracked as `FEAT-CFML-HASH-ESCAPE` (low priority).
-- **Non-standard comment markers** with stray whitespace like `< ! --- … --->` are not recognized; use the standard `<!--- … --->` form.
+- **Non-standard comment markers** with stray whitespace like `< ! --- … --->` are not recognized; use the standard `<!--- … --->` form. Standard nested CFML comments are depth-aware and supported; HTML comments still close at the first `-->` because HTML comments do not nest.
+- **Direct helper line endings** — routed browser/CLI output restores CRLF when the captured source uses CRLF. Direct calls to lower-level helpers such as `beautifyCFML()` return their canonical LF-joined output and do not perform the router's final line-ending restoration.
+- **CLI source encoding detection** — UTF-8 (with/without BOM) and BOM-marked UTF-16LE/UTF-16BE are preserved. BOM-less UTF-16 and legacy single-byte encodings are interpreted as UTF-8; convert them or add an explicit BOM before formatting.
 - **`<cfoutput>` wrapping the whole file** — everything inside gets one extra indent level. This is the correct behavior; callers sometimes expect pages to stay flush-left.
 - **HTML tags that open and close across a `<cfoutput>` boundary** — a common dashboard pattern opens structural markup in one `<cfoutput>` (`<cfoutput><div class="app">…<main></cfoutput>`) and closes it in a later one (`<cfoutput></main></div></cfoutput>`). The opener's `<cfoutput>` adds +1 indent that `</cfoutput>` removes before the matching `</main></div>` appear, so those closing tags land one tab shallower than their openers (e.g. `<main>` at T5 but `</main>` at T4). The body in between is internally consistent (no sibling drift) and idempotent; only the cross-boundary close tags are off by the cfoutput depth. Resolving it would require a combined CFML+HTML parser that understands tags spanning `<cfoutput>` blocks, which would also flatten the (correct) deep nesting inside the opener. Tracked as a known edge case; the line-by-line indenter cannot disambiguate it.
 - **Dynamic SQL built with `<cfif>` inside `<cfquery>` — four-tier dispatch:**
@@ -24,10 +26,10 @@ Real cases where the formatter does not produce ideal output. None of these corr
 
 ## Pro SQL (vendored sql-formatter)
 
-- **First use is async** — the ~312KB UMD bundle is fetched once, so the first Beautify click after toggling Pro SQL has a small delay. Subsequent calls are instant; offline use works after the service worker has precached the bundle (i.e., after one online visit).
+- **First runtime use can be async** — the ~312KB UMD bundle is injected when Pro SQL is first enabled (or pre-warmed from a saved preference). In the installed PWA, the current service worker precaches the bundle during installation, so script injection is normally served from cache after the initial online install. Loading/parsing failure falls back to the built-in formatter.
 - **`<cfqueryparam>` and other CFML tags inside `<cfquery>`** — protected as opaque tokens before being handed to sql-formatter, then restored. Output spacing around the tokens is normalized but may differ from the built-in formatter's style.
 - **Dialect-specific quirks** — sql-formatter parses each dialect strictly. Mixing dialect-specific syntax with the wrong dialect setting (e.g., T-SQL `[brackets]` while dialect is set to `mysql`) may throw a parse error; the wrapper catches it and falls back to the built-in formatter rather than producing a broken result.
-- **Bundle size impact on PWA precache** — enabling Pro SQL adds ~312KB to the service worker's precached payload (only after first online use). Disabling it does not evict the cached bundle until the next `CACHE_VERSION` bump.
+- **Bundle size impact on PWA precache** — `vendor/sql-formatter.min.js` is currently always listed in `PRECACHE_URLS`; installed PWA users pay the ~312KB download during service-worker installation whether or not Pro SQL is enabled. The option remains runtime-lazy. The asset is evicted/replaced only through cache-version lifecycle.
 
 ## JavaScript (Deep JS)
 
@@ -35,34 +37,19 @@ Real cases where the formatter does not produce ideal output. None of these corr
 - **Unterminated string literals** stop at the next line break for safety. The broken input is preserved as-is rather than consuming the rest of the file, but the output still reflects the original bug.
 - **Object literal formatting** — every `{` triggers a newline. Small inline `{a:1}` becomes multi-line. This is verbose but not incorrect.
 
-## Bare JS outside `<script>` (CFML files containing pure JS fragments)
+## Bare JavaScript outside `<script>`
 
-CFML files that contain bare JS (no `<script>` wrapper) — e.g. files included
-into another `.cfm` page that already provides the `<script>` boundary —
-take the `beautifyCFML` per-line indentation path, NOT `formatBraceCode`.
+There are now two routes:
+
+1. A tag-free file whose post-markup-banner body looks like JavaScript is auto-routed to standalone `js` mode and processed by `formatBraceCode`.
+2. JavaScript emitted inside a real CFML document (for example inside `<cfif>`) remains in CFML mode. A conservative short-lived JS-fragment state recognizes statement/control headers and applies per-line brace indentation, including Allman-style braces.
+
 Implications:
 
-- **Per-line brace counter** (`countBracesOutsideStrings` in
-  `js/beautifier.js`) string-protects single/double/template quotes, line
-  comments, single-line block comments, **and regex literals**. Multi-line
-  strings via `\`-continuation are NOT tracked across lines — if a string
-  begins on one line and ends on another, `{`/`}`/`[`/`]` on the
-  continuation line may be miscounted. Rare in real code; not seen in any
-  committed fixture.
-- **Object literal layout preserved as compact** when the source already
-  has it compact (e.g., `{ skillName: 'x', toolName: 'y', args: {} },` on
-  one line). Routing such a file through `'js'` mode would explode each
-  `{` onto its own line via `formatBraceCode` — visually verbose. Auto-
-  detect leaves CFML files in `'cfml'` mode for this reason; users wanting
-  full `formatBraceCode` treatment must select `JavaScript` in the
-  dropdown explicitly.
-- **Idempotency does not prove correct alignment** — a wrong indent can be
-  a fixed point if both passes drift equally. The `sample/` idempotency
-  suite catches drift between passes, but a fixture that drifts on pass 1
-  and stably reproduces the drift on pass 2 will still PASS. Pair the
-  suite with manual visual inspection on first add, or with a brace-
-  balance check on output (verified 2026-05-14: regex literal `[\s\S]`
-  leak was idempotent but mis-aligned by 3 tabs).
+- **Conservative fragment detection** intentionally excludes SQL keywords and ordinary markup/text. Unusual JavaScript that does not begin with a recognized statement, call, assignment, or control header may stay structurally inert; force `JavaScript` mode when appropriate.
+- **Per-line brace counter** (`countBracesOutsideStrings` in `js/beautifier.js`) protects single/double/backtick strings on the scanned line, comments, CFML/HTML comment spans, and regex literals. Multi-line backtick payloads have dedicated state and are copied relative to their opener. Backslash-continued single/double strings are still not tracked across physical lines.
+- **Object literal layout differs by route.** The CFML fragment path can retain compact object literals, while standalone JS mode may expand braces through `formatBraceCode`.
+- **Idempotency does not prove correct alignment.** A wrong indent may itself be a fixed point. Pair idempotency with exact synthetic outputs, content checks, and relevant top-level/brace anchors.
 
 ## Semantic Indent (tree-sitter, opt-in, experimental)
 

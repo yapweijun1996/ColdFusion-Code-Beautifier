@@ -3,16 +3,14 @@ function normalizeStructuralCFMLTags(body) {
 	var lines = body.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
 	var result = [];
 	var structuralStart = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b/i;
-	var inComment = false;
+	var commentState = { cfmlDepth: 0, htmlDepth: 0 };
 
 	for (var i = 0; i < lines.length; i++) {
 		var line = lines[i];
 		var trimmed = line.trim();
-		var startsComment = /^<!---?/.test(trimmed);
-		if (inComment || startsComment) {
+		var commentScan = advanceMarkupCommentState(trimmed, commentState);
+		if (commentScan.startsInComment || (commentScan.hadComment && !commentScan.codeOutsideComment)) {
 			result.push(line);
-			if (trimmed.indexOf('--->') !== -1 || trimmed.indexOf('-->') !== -1) inComment = false;
-			else if (startsComment) inComment = true;
 			continue;
 		}
 		if (!structuralStart.test(trimmed) || findCFMLTagClose(trimmed) !== -1) {
@@ -362,14 +360,15 @@ function normalizeCFMLTagsInSafeText(text) {
 			output += text.slice(start, i);
 			continue;
 		}
-		// CFML markup comment — preserve verbatim
-		if (char === '<' && text.slice(i, i + 5) === '<!---') {
-			var start = i;
-			var end = text.indexOf('--->', i + 5);
-			if (end === -1) end = text.length;
-			else end += 4;
-			output += text.slice(start, end);
-			i = end;
+		// CFML markup comment — preserve the complete nested region verbatim.
+		if (char === '<' && (text.slice(i, i + 5) === '<!---' || text.slice(i, i + 4) === '<!--')) {
+			var commentEnd = findMarkupCommentEnd(text, i);
+			if (commentEnd === -1) {
+				output += text.slice(i);
+				break;
+			}
+			output += text.slice(i, commentEnd);
+			i = commentEnd;
 			continue;
 		}
 		// CFML tag
@@ -413,12 +412,14 @@ function normalizeCFMLTagsInSafeText(text) {
 function splitCfqueryBodyAtCfifTree(body) {
 	if (typeof body !== 'string') return null;
 	var lines = body.split('\n');
+	var commentMask = buildMarkupCommentMask(lines);
 	var openIdx = -1;
 	var closeIdx = -1;
 	var depth = 0;
 	var openP = /^<(?:cfif|cfloop|cfswitch)\b[^>]*>$/i;
 	var closeP = /^<\/(?:cfif|cfloop|cfswitch)>$/i;
 	for (var i = 0; i < lines.length; i++) {
+		if (commentMask[i]) continue;
 		var t = lines[i].trim();
 		if (closeP.test(t)) {
 			if (depth > 0) {
@@ -470,10 +471,12 @@ function splitCfqueryBodyAtCfifTreeMulti(body) {
 	var lines = body.split('\n');
 	var openP = /^<(?:cfif|cfloop|cfswitch)\b[^>]*>$/i;
 	var closeP = /^<\/(?:cfif|cfloop|cfswitch)>$/i;
+	var commentMask = buildMarkupCommentMask(lines);
 	var openIdx = -1;
 	var lastCloseIdx = -1;
 	var depth = 0;
 	for (var i = 0; i < lines.length; i++) {
+		if (commentMask[i]) continue;
 		var t = lines[i].trim();
 		if (openP.test(t)) {
 			if (openIdx === -1) openIdx = i;
@@ -497,11 +500,12 @@ function splitCfqueryBodyAtCfifTreeMulti(body) {
 
 function detectAllLeavesStartWithAndOr(treeLines) {
 	var structural = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b[^>]*>$/i;
-	var commentLine = /^<!---[\s\S]*--->$/;
+	var commentMask = buildMarkupCommentMask(treeLines);
 	var seenLeaf = false;
 	for (var i = 0; i < treeLines.length; i++) {
+		if (commentMask[i]) continue;
 		var t = treeLines[i].trim();
-		if (t === '' || structural.test(t) || commentLine.test(t)) continue;
+		if (t === '' || structural.test(t)) continue;
 		if (!/^(and|or)\b/i.test(t)) return false;
 		seenLeaf = true;
 	}
@@ -544,8 +548,10 @@ function formatPhase4PostFragment(post, sqlDialect) {
 
 function detectAllLeavesStartWithWhere(treeLines) {
 	var structural = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b[^>]*>$/i;
+	var commentMask = buildMarkupCommentMask(treeLines);
 	var seenLeaf = false;
 	for (var i = 0; i < treeLines.length; i++) {
+		if (commentMask[i]) continue;
 		var t = treeLines[i].trim();
 		if (t === '' || structural.test(t)) continue;
 		if (!/^where\b/i.test(t)) return false;
@@ -556,9 +562,11 @@ function detectAllLeavesStartWithWhere(treeLines) {
 
 function hasStructuralTreeBody(treeLines) {
 	var structural = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b[^>]*>$/i;
+	var commentMask = buildMarkupCommentMask(treeLines);
 	for (var i = 0; i < treeLines.length; i++) {
+		if (commentMask[i]) continue;
 		var t = treeLines[i].trim();
-		if (t !== '' && !structural.test(t) && !/^<!---[\s\S]*--->$/.test(t)) return true;
+		if (t !== '' && !structural.test(t)) return true;
 	}
 	return false;
 }
@@ -571,9 +579,10 @@ function hasStandaloneWhereAtEnd(text) {
 
 function stripWhereFromLeaves(treeLines) {
 	var structural = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b[^>]*>$/i;
-	return treeLines.map(function(line) {
+	var commentMask = buildMarkupCommentMask(treeLines);
+	return treeLines.map(function(line, index) {
 		var t = line.trim();
-		if (t === '' || structural.test(t)) return line;
+		if (commentMask[index] || t === '' || structural.test(t)) return line;
 		return line.replace(/^(\s*)where\s+/i, '$1');
 	});
 }
@@ -620,8 +629,26 @@ function formatStrippedTree(treeLines) {
 	var closeP = /^<\/(?:cfif|cfloop|cfswitch)>$/i;
 	var result = [];
 	var depth = 1;
+	var commentState = { cfmlDepth: 0, htmlDepth: 0 };
+	var commentOrigPrefix = '';
+	var commentNewPrefix = '';
 	for (var i = 0; i < treeLines.length; i++) {
-		var trimmed = treeLines[i].trim();
+		var sourceLine = treeLines[i];
+		var trimmed = sourceLine.trim();
+		var commentScan = advanceMarkupCommentState(trimmed, commentState);
+		if (commentScan.startsInComment || (commentScan.hadComment && !commentScan.codeOutsideComment)) {
+			if (commentScan.startsInComment) {
+				var sourcePrefix = (sourceLine.match(/^[ \t]*/) || [''])[0];
+				var relative = sourcePrefix.indexOf(commentOrigPrefix) === 0
+					? sourcePrefix.slice(commentOrigPrefix.length) : '';
+				result.push(commentNewPrefix + relative + trimmed);
+			} else {
+				commentOrigPrefix = (sourceLine.match(/^[ \t]*/) || [''])[0];
+				commentNewPrefix = repeatTab(depth);
+				result.push(commentNewPrefix + trimmed);
+			}
+			continue;
+		}
 		if (trimmed === '') { result.push(''); continue; }
 		if (closeP.test(trimmed)) {
 			depth--;
@@ -1197,7 +1224,6 @@ function isInsideCommentOrString(code, pos) {
 	var quote = "";
 	var inLine = false;
 	var inBlock = false;
-	var inMarkup = false;
 	for (var i = 0; i < pos; i++) {
 		var c = code[i];
 		var n = code[i + 1];
@@ -1207,10 +1233,6 @@ function isInsideCommentOrString(code, pos) {
 		}
 		if (inBlock) {
 			if (c == '*' && n == '/') { inBlock = false; i++; }
-			continue;
-		}
-		if (inMarkup) {
-			if (c == '-' && n == '-' && code[i + 2] == '-' && code[i + 3] == '>') { inMarkup = false; i += 3; }
 			continue;
 		}
 		if (quote != "") {
@@ -1233,10 +1255,15 @@ function isInsideCommentOrString(code, pos) {
 		}
 		if (c == '/' && n == '/') { inLine = true; i++; continue; }
 		if (c == '/' && n == '*') { inBlock = true; i++; continue; }
-		if (c == '<' && n == '!' && code[i + 2] == '-' && code[i + 3] == '-' && code[i + 4] == '-') { inMarkup = true; i += 4; continue; }
+		if (c == '<' && n == '!' && code[i + 2] == '-' && code[i + 3] == '-') {
+			var markupEnd = findMarkupCommentEnd(code, i);
+			if (markupEnd === -1 || markupEnd > pos) return true;
+			i = markupEnd - 1;
+			continue;
+		}
 		if (c == '"' || c == "'" || c == '`') { quote = c; continue; }
 	}
-	return inLine || inBlock || inMarkup || quote != "";
+	return inLine || inBlock || quote != "";
 }
 
 function findClosingTagOutsideText(code, tagName, startIndex) {
@@ -1262,6 +1289,19 @@ function findClosingTagOutsideText(code, tagName, startIndex) {
 				inBlockComment = false;
 				i++;
 			}
+			continue;
+		}
+
+		if (char == '<' && code.substr(i, 5) == '<!---') {
+			var cfmlCommentEnd = findCFMLCommentEnd(code, i);
+			if (cfmlCommentEnd === -1) return null;
+			i = cfmlCommentEnd - 1;
+			continue;
+		}
+		if (char == '<' && code.substr(i, 4) == '<!--') {
+			var htmlCommentEnd = findMarkupCommentEnd(code, i);
+			if (htmlCommentEnd === -1) return null;
+			i = htmlCommentEnd - 1;
 			continue;
 		}
 
@@ -1346,7 +1386,14 @@ function protectCFMLTokens(sqlBody) {
 		}
 
 		var rest = sqlBody.slice(i);
-		var tokenMatch = rest.match(/^(<!---[\s\S]*?--->|<cfqueryparam\b[^>]*\/?>|<\/?cf\w+\b[^>]*>|##|#(?:##|[^#])+#)/i);
+		if (rest.slice(0, 5) === '<!---') {
+			var commentEnd = findCFMLCommentEnd(sqlBody, i);
+			var commentValue = commentEnd === -1 ? sqlBody.slice(i) : sqlBody.slice(i, commentEnd);
+			code += addToken(commentValue);
+			i += commentValue.length;
+			continue;
+		}
+		var tokenMatch = rest.match(/^(<cfqueryparam\b[^>]*\/?>|<\/?cf\w+\b[^>]*>|##|#(?:##|[^#])+#)/i);
 		if (tokenMatch) {
 			code += addToken(tokenMatch[0]);
 			i += tokenMatch[0].length;
@@ -1401,13 +1448,19 @@ function splitMergedSQLComments(code) {
 	var lines = code.split('\n');
 	var out = [];
 	for (var i = 0; i < lines.length; i++) {
-		var m = lines[i].match(/^(\s*)(<!---.*?--->)\s+(\S.*)$/);
+		var line = lines[i];
+		var m = line.match(/^(\s*)<!---/);
 		if (m) {
-			out.push(m[1] + m[2]);   // comment alone, original indent
-			out.push(m[1] + m[3]);   // following code, same indent
-		} else {
-			out.push(lines[i]);
+			var commentStart = m[1].length;
+			var commentEnd = findCFMLCommentEnd(line, commentStart);
+			var following = commentEnd === -1 ? '' : line.slice(commentEnd).trim();
+			if (commentEnd !== -1 && following !== '') {
+				out.push(line.slice(0, commentEnd));
+				out.push(m[1] + following);
+				continue;
+			}
 		}
+		out.push(line);
 	}
 	return out.join('\n');
 }
@@ -1501,19 +1554,18 @@ function scanSQLParentheses(line) {
 
 function buildMarkupCommentMask(lines) {
 	var mask = [];
-	var inComment = false;
+	var state = { cfmlDepth: 0, htmlDepth: 0 };
 	for (var i = 0; i < lines.length; i++) {
 		var trimmed = lines[i].trim();
-		var starts = /^<!---?/.test(trimmed);
-		mask[i] = inComment || starts;
-		if (trimmed.indexOf('--->') !== -1 || trimmed.indexOf('-->') !== -1) {
-			inComment = false;
-		} else if (starts) {
-			inComment = true;
-		}
+		var scan = advanceMarkupCommentState(trimmed, state);
+		/* A mixed line may contain live code after a closed comment. It is
+		 * still masked for structural-query detection because the line cannot
+		 * safely be classified as a standalone SQL/CFML leaf. */
+		mask[i] = scan.startsInComment || scan.hadComment;
 	}
 	return mask;
 }
+
 
 /* Structural query fallback may preserve SQL continuation whitespace from the
  * original body, but CFML control tags and ordinary SQL lines must use the
@@ -1532,19 +1584,13 @@ function alignStructuralControlFlowIndent(canonicalBody, preservedBody) {
 	var preservedLines = preservedBody.split('\n');
 	var canonicalCommentMask = buildMarkupCommentMask(canonicalLines);
 	var canonicalIndex = 0;
-	var inMarkupCommentForTags = false;
+	var preservedCommentState = { cfmlDepth: 0, htmlDepth: 0 };
 
 	for (var i = 0; i < preservedLines.length; i++) {
 		var preservedTrimmed = preservedLines[i].trim();
-		var startsMarkupComment = /^<!---?/.test(preservedTrimmed);
-		if (inMarkupCommentForTags || startsMarkupComment) {
-			if (preservedTrimmed.indexOf('--->') !== -1 || preservedTrimmed.indexOf('-->') !== -1) {
-				inMarkupCommentForTags = false;
-			} else {
-				inMarkupCommentForTags = true;
-			}
-			continue;
-		}
+		var preservedCommentScan = advanceMarkupCommentState(preservedTrimmed, preservedCommentState);
+		if (preservedCommentScan.startsInComment
+				|| (preservedCommentScan.hadComment && !preservedCommentScan.codeOutsideComment)) continue;
 		if (!structural.test(preservedTrimmed)) continue;
 
 		var preservedName = preservedTrimmed.match(/^<\/?([a-zA-Z][\w-]*)/)[1].toLowerCase();
@@ -1578,20 +1624,14 @@ function alignStructuralControlFlowIndent(canonicalBody, preservedBody) {
 	var preservedStructuralDepth = 0;
 	var preservedSQLParenDepth = 0;
 	var preservedSQLSubqueryDepth = 0;
-	var inMarkupComment = false;
+	var preservedCommentState = { cfmlDepth: 0, htmlDepth: 0 };
 	for (var k = 0; k < preservedLines.length && k < canonicalLines.length; k++) {
 		var preservedPrefix = (preservedLines[k].match(/^[ \t]*/) || [''])[0];
 		var canonicalPrefix = (canonicalLines[k].match(/^[ \t]*/) || [''])[0];
 		var preservedTrimmedAtK = preservedLines[k].trim();
-		var startsMarkupCommentAtK = /^<!---?/.test(preservedTrimmedAtK);
-		if (inMarkupComment || startsMarkupCommentAtK) {
-			if (preservedTrimmedAtK.indexOf('--->') !== -1 || preservedTrimmedAtK.indexOf('-->') !== -1) {
-				inMarkupComment = false;
-			} else {
-				inMarkupComment = true;
-			}
-			continue;
-		}
+		var preservedCommentScanAtK = advanceMarkupCommentState(preservedTrimmedAtK, preservedCommentState);
+		if (preservedCommentScanAtK.startsInComment
+				|| (preservedCommentScanAtK.hadComment && !preservedCommentScanAtK.codeOutsideComment)) continue;
 		var structuralKindAtK = structural.test(preservedTrimmedAtK)
 				? classifyStructuralCFMLTag(preservedTrimmedAtK) : 'UNKNOWN';
 		var sqlStructureAtK = scanSQLParentheses(preservedLines[k]);
@@ -1899,31 +1939,18 @@ function protectBraceCodeText(code) {
 				continue;
 			}
 		}
-		if (char == '<' && code.substr(i, 5) == '<!---') {
-			var cfStart = i;
-			var cfEnd = code.indexOf('--->', i + 5);
-			if (cfEnd === -1) {
-				/* Unterminated CFML comment — bail out and treat as literal.
-				 * Mask remainder of input as a single token so brace count
-				 * is not contaminated. */
-				output += addBraceCodeToken(tokens, code.slice(cfStart));
+		if (char == '<' && (code.substr(i, 5) == '<!---' || code.substr(i, 4) == '<!--')) {
+			var markupStart = i;
+			var markupEnd = findMarkupCommentEnd(code, i);
+			if (markupEnd === -1) {
+				/* Unterminated markup comment — mask the remainder so its
+				 * braces/brackets cannot contaminate executable-code depth. */
+				output += addBraceCodeToken(tokens, code.slice(markupStart));
 				i = code.length;
 				continue;
 			}
-			i = cfEnd + 4;
-			output += addBraceCodeToken(tokens, code.slice(cfStart, i));
-			continue;
-		}
-		if (char == '<' && code.substr(i, 4) == '<!--') {
-			var htStart = i;
-			var htEnd = code.indexOf('-->', i + 4);
-			if (htEnd === -1) {
-				output += addBraceCodeToken(tokens, code.slice(htStart));
-				i = code.length;
-				continue;
-			}
-			i = htEnd + 3;
-			output += addBraceCodeToken(tokens, code.slice(htStart, i));
+			i = markupEnd;
+			output += addBraceCodeToken(tokens, code.slice(markupStart, i));
 			continue;
 		}
 

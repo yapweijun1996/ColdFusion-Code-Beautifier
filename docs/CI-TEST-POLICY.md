@@ -4,7 +4,7 @@
 
 The `sample/` directory is **gitignored** and holds private `.cfm` files supplied by users for local diagnosis. **Sample files are never committed, never cloned by CI, never shared.**
 
-- `.github/workflows/test.yml` runs `npm test` against tracked-only sources. This invokes the formatter, UI-contract, and vendored-WASM Tree-sitter suites. `actions/checkout` cannot pull `sample/` because it isn't in the repo.
+- `.github/workflows/test.yml` runs `npm test` against tracked-only sources. This invokes formatter, UI-contract, CLI E2E, and vendored-WASM Tree-sitter suites. `actions/checkout` cannot pull private `sample/*.cfm` because those files are ignored.
 - `.github/workflows/test.yml` has an explicit guard step: if any `*.cfm` ever appears under `sample/` in the checked-out tree (e.g. someone forgot to gitignore), the CI fails loudly before tests run.
 - `tools/diagnose-corpus.js` reads from `sample/sample_cfm/` **locally only**. CI never invokes it.
 
@@ -18,7 +18,7 @@ The pinned test must:
 3. **Live in `tests/run-tests.js`** — no external file deps, no `require('./sample/...')`.
 
 When CI runs (`npm test`):
-- All pinned formatter tests, UI contract tests, and Tree-sitter tests run with hard assertions.
+- All pinned formatter tests, UI contract tests, CLI E2E tests, and Tree-sitter tests run with hard assertions.
 - Any failure exits non-zero, blocking the merge / deploy.
 - Total runtime is expected to remain < 5 seconds with no network or install.
 
@@ -54,6 +54,20 @@ Every entry below is a real user-reported scenario from the issue/feedback histo
 | 24 | CFML routed without SQL formatting when deep format off | CFML auto-split fires but SQL body stays verbatim | `cfml routed without sql formatting when deep format off` |
 | 25 | **memo_transdesc Remarks** — `<font>` wraps multi-line content, `<br>#trim(Replace(..., "<br>", "ALL"))#</font>` jams stray `</font>` after text containing **`<br>` inside a string literal** | `</font>` must peel; the `<br>` inside `Replace(...)` string args must NOT confuse Rule D's tag matching (string literals are opaque to the splitter) | `auto-split: real-world memo_transdesc Remarks pattern — <font> wraps multi-line content, stray </font> after text+string-with-<br>-inside peels` |
 | 26 | Bare JS `.cfm` partial with `<cfoutput>` island and HTML strings using JS escaped quotes | Formatter must not insert a raw newline inside `'...'` / `"..."`; browser symptom was `Uncaught SyntaxError: '' string literal contains an unescaped line break` | `js mode — beautifier output has no raw line break inside quoted strings`; `cfml mode — bare JS with cfoutput keeps escaped-quote HTML strings intact`; sample suite `FAIL JS string syntax guard` |
+
+## Additional implementation-hardening coverage
+
+These are CI-pinned implementation cases but are not assigned new user-case numbers without a corresponding issue record:
+
+| Area | Pinned coverage |
+|---|---|
+| Nested CFML comments | outer close matching; commented tags remain opaque to splitter/indent; Phase 4 treats nested comment as one leaf |
+| Source format | CLI UTF-16BE BOM and CRLF round trip |
+| Structural SQL stability | multi-line control-tag normalization, whitespace close tags, fallback and CLI Pro SQL idempotency |
+| Deep JavaScript + CFML | own-line/nested CFML branch depth combined with JS brace depth |
+| Bare JS inside CFML | conservative fragment activation and Allman brace indentation |
+| Template literals | multi-line payload indentation/content preserved; no second-pass rewrite |
+| Legacy script wrappers | executable `<!--` ... `//-->` wrapper remains format-visible |
 
 ## How to add a new user case
 

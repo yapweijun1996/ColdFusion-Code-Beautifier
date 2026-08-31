@@ -11,7 +11,7 @@ node tests/cli.test.js            # Node CLI end-to-end suite
 node tests/tree-sitter.test.mjs  # standalone Semantic Indent suite
 ```
 
-`tests/run-tests.js` loads the formatter scripts inside a Node `vm` context with a faked DOM, then runs `assertEqual` cases. `tests/ui.test.js` uses a separate minimal DOM double because the editor event layer is browser-facing. On success the suites print `All ... tests passed.`; on failure they print a named failure and set a non-zero exit code.
+`tests/run-tests.js` loads production formatter scripts inside a Node `vm` context with a faked DOM. In the current working tree it contains 246 exact `assertEqual` call sites, 22 content-preservation invariants, and 27 Pro SQL token-equivalence cases. `tests/ui.test.js` uses a separate minimal DOM double because the editor event layer is browser-facing. On success the suites print `All ... tests passed.`; on failure they print a named failure and set a non-zero exit code.
 
 ## Helper functions
 
@@ -122,8 +122,34 @@ When you change `js/tree-sitter-cfml.js`, add the regression case here, not in
 `vendor/tree-sitter/README.md`), re-run this suite — a grammar bump can shift
 node names or recovery behavior and these assertions are the guard.
 
+## Current hardening coverage
+
+Recent baseline regressions explicitly cover:
+
+- nested CFML comments consume the outer close and keep commented tags opaque to splitting/indentation;
+- CLI UTF-16BE BOM preservation together with CRLF formatted output;
+- multi-line structural CFML tags normalized before query fallback;
+- `<cfquery>` closing tags containing whitespace before `>`;
+- Pro SQL structural-query idempotency through the CLI;
+- own-line and nested CFML control tags inside deep-formatted JavaScript;
+- JavaScript emitted directly inside a CFML conditional;
+- multi-line template payload indentation/content preservation;
+- executable legacy script wrappers using `<!--` and `//-->`.
+
+## Refactor characterization policy
+
+The planned decomposition in root `ROADMAP.md` starts by adding tracked synthetic golden fixtures. Refactor commits must preserve those outputs byte-for-byte and must not edit expected output unless the change is split into a separately reviewed bug fix.
+
+For each refactor-critical fixture, test exact output plus applicable idempotency, content/token preservation, and JS string-break invariants. Keep private `sample/*.cfm` local; tracked fixtures must be synthetic.
+
+A Node-only shared production-script manifest is planned but not implemented. Until then, adding a production script requires updating every explicit browser/VM/CLI load list described in `docs/ARCHITECTURE.md`. The new comment utility has been added to those lists.
+
+Known immediate gaps: CLI E2E covers UTF-16BE plus CRLF, but UTF-8 BOM and UTF-16LE still lack direct round-trip cases; unused `isMarkupCommentOnly` has no direct test. The host-side corpus sanitizer also references `findCFMLCommentEnd` without importing it from the VM/helper scope. R01–R03 in root `TASK.md` own these gates.
+
 ## Regression-check philosophy
 
 - Every fix commit ships at least one new test covering the pattern the fix targets.
 - Existing tests never change expected output without a written justification in the commit message.
 - Tests lock behavior, not implementation; rewriting a formatter internal should leave the suite green.
+- Module movement and behavior changes belong in separate commits.
+- Any unexplained golden-output drift blocks the refactor phase; do not normalize it by updating fixtures.

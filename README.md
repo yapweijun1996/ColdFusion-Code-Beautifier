@@ -1,12 +1,12 @@
 # ColdFusion Code Beautifier
 
-A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. No build step, no dependencies — pure vanilla HTML/CSS/JS. Open `index.html` and start pasting.
+A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. The production UI has no build step or required network dependency: it is vanilla HTML/CSS/JS with optional libraries vendored in the repository. Open `index.html` and start pasting.
 
 **Live demo:** https://yapweijun1996.github.io/ColdFusion-Code-Beautifier/
 
 ## Features
 
-- **CFML + HTML** outer tag indentation with inline / block / middle / void tag classification.
+- **CFML + HTML** outer tag indentation with inline / block / middle / void tag classification. Nested CFML comments are depth-aware, so commented-out tags remain opaque to splitting and indentation.
 - **SQL** formatter (MySQL + PostgreSQL dialects) with:
   - CTE, JOIN, CASE, BETWEEN, window function (`OVER (PARTITION BY …)`), UNION, multi-column SELECT / GROUP BY / ORDER BY list-break.
   - Context-aware keyword uppercasing and unary `-` / `+` detection.
@@ -19,7 +19,7 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. N
 - **Auto-copy / auto-clear input / auto-clear output** independent toggles. Auto-copy defaults on; both auto-clear options default off so source and result remain visible until explicitly cleared.
 - **Force-split `<tag><tag>`** option for dense HTML.
 - **Fullscreen layout** with side-by-side input / output on desktop, stacked on mobile.
-- **Pro SQL** (opt-in) — vendored [sql-formatter](https://github.com/sql-formatter-org/sql-formatter) (MIT) for 16 dialects: MySQL, MariaDB, PostgreSQL, SQLite, T-SQL, PL/SQL, DB2, Redshift, Snowflake, BigQuery, Hive, Spark, Trino, N1QL, SingleStoreDB, Standard. Lazy-loaded on first use (zero cost when off), falls back to the built-in formatter if the bundle fails.
+- **Pro SQL** (opt-in) — vendored [sql-formatter](https://github.com/sql-formatter-org/sql-formatter) (MIT) for 16 dialects: MySQL, MariaDB, PostgreSQL, SQLite, T-SQL, PL/SQL, DB2, Redshift, Snowflake, BigQuery, Hive, Spark, Trino, N1QL, SingleStoreDB, Standard. It is runtime-lazy and falls back to the built-in formatter if loading/parsing fails. The current service worker precaches the UMD bundle for offline readiness, so installed PWA users download that asset even when the option remains off.
 - **Normalize Indent** (opt-in) — converts each line's *leading* whitespace from spaces to tabs before formatting (line content is never touched). Auto-detects the file's indent unit (2 / 4 / 8 spaces = 1 tab), or pick the width explicitly from the companion selector. Handles files that mix space-indent and tab-indent lines, including files already run through the beautifier (it recovers the original unit from the tab+space alignment). Checkbox + width persist in `localStorage`.
 - **Semantic Indent** (opt-in, experimental) — uses tree-sitter CFML/CFScript parsers to indent **flat, zero-indent** multi-line nested function-call chains by their real call depth — the case the line-scanner cannot fix because there is no original indentation to preserve. Covers nested calls inside `<cfset>`/`<cfparam>` tags and inside control-structure-free `<cfscript>` blocks. Struct literals and SQL strings stay flat; unbalanced / mid-edit blocks fall back to the line-scanner untouched. Each grammar (~2.6 MB CFML, ~2.1 MB CFScript) lazy-loads only when a matching flat block is present. See [docs/LIMITATIONS.md](docs/LIMITATIONS.md#semantic-indent-tree-sitter-opt-in-experimental).
 - **PWA** — installable, offline-capable via service worker. HTML uses network-first so users always pick up the latest source code on next page load; assets use stale-while-revalidate.
@@ -27,7 +27,7 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. N
 ## Usage
 
 1. Paste code into the left textarea.
-2. Pick `Auto`, `CFML / HTML`, or `SQL` from the Language dropdown.
+2. Pick `Auto`, `CFML / HTML`, `SQL`, or `JavaScript` from the Language dropdown.
 3. Toggle the deep-format checkboxes (SQL / CSS / JS) to pick what gets formatted inside embedded blocks.
 4. Click **Beautify**. The right textarea shows the output and is copied to the clipboard if `Auto copy` is on. `Ctrl+Enter` / `Cmd+Enter` also runs Beautify; `Tab` and `Shift+Tab` indent the selected input lines, and `Escape` then `Tab` moves focus out of the editor.
 
@@ -48,23 +48,26 @@ node tools/beautify-file.js - --stdout < path/to/source.cfm
 node tools/beautify-file.js path/to/source.cfm --language cfml --pro-sql --dialect postgresql
 ```
 
-The CLI never uploads source code. It requires only Node.js for the default
-formatter; `--pro-sql` uses the committed MIT-licensed vendor bundle.
+The CLI never uploads source code. It requires only Node.js for the default formatter; `--pro-sql` uses the committed MIT-licensed vendor bundle. File/stdin decoding recognizes UTF-8 (with or without BOM), UTF-16LE BOM, and UTF-16BE BOM, and output preserves the detected encoding/BOM plus routed LF/CRLF style.
 
 ## Architecture overview
 
 ```
-beautifyCodes()  → router reads DOM + dispatches (returns a Promise for UI busy-state tracking)
-  ├─ beautifySQL(code)        standalone SQL mode
-  └─ beautifyCFML(code)       CFML / HTML outer pass
-       │    (Normalize Indent, if on, runs first: leading spaces → tabs)
+beautifyCodes()  → DOM router + optional-resource preload + stale-request guard
+  ├─ SQL → formatProSQLSync (if enabled/loaded) | beautifySQL
+  ├─ JS  → formatJsWithLeadingComments → formatBraceCode
+  └─ CFML / HTML
+       ├─ Normalize Indent (optional)
+       ├─ splitAdjacentCFMLTags
+       ├─ beautifyCFML (named tag hierarchy + raw JS/CSS/CFScript state)
        ├─ deepFormatEmbedded(result, {sql, css, js})
-       │    ├─ <cfquery>  → protectCFMLTokens → formatProSQLSync (Pro SQL, if on) | beautifySQL (built-in) → restore
-       │    ├─ <script>   → formatBraceCode  (strings / regex / templates / parens protected)
-       │    └─ <style>    → formatCSSCode
-       └─ applySemanticIndentPostPass(result, cfmlParser, cfsParser)   (Semantic Indent, if on + grammar loaded)
-            └─ re-indent flat multi-line nested call chains in <cfset>/<cfparam>/<cfscript>
+       │    ├─ <cfquery> → CFML protection + structural Phase 3/4/fallback routing
+       │    ├─ <script>  → protected strings/comments/regex/templates/parens + CFML control tags
+       │    └─ <style>   → formatCSSCode
+       └─ applySemanticIndentPostPass (optional loaded Tree-sitter grammars)
 ```
+
+The current implementation also preserves deep-JS CFML branch depth, multi-line template payloads, legacy `<!--` / `//-->` script wrappers, bare JavaScript fragments emitted inside CFML control flow, and routed LF/CRLF output style.
 
 Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -79,14 +82,17 @@ node tests/cli.test.js            # Node CLI end-to-end suite
 node tests/tree-sitter.test.mjs  # standalone tree-sitter Semantic Indent suite
 ```
 
-`tests/run-tests.js` replays the formatter scripts in a Node VM context with a faked DOM, then runs `assertEqual` cases (33+ covering SQL clauses, deep-format routing, token protection, JS hardening) plus 22 content-preservation invariants and the `sample/` idempotency suite. `tests/ui.test.js` verifies the static HTML contract and browser-facing editor interactions with a minimal DOM double. `tests/tree-sitter.test.mjs` runs **outside** the VM harness (it needs real WebAssembly) against the vendored grammars — the VM suite is structurally blind to the tree-sitter path. See [docs/TESTING.md](docs/TESTING.md).
+`tests/run-tests.js` replays the formatter scripts in a Node VM context with a faked DOM and currently contains 246 exact `assertEqual` call sites, 22 content-preservation invariants, 27 Pro SQL token-equivalence cases, and the optional local `sample/` idempotency suite. `tests/ui.test.js` verifies static/UI lifecycle contracts, `tests/cli.test.js` exercises the production CLI, and `tests/tree-sitter.test.mjs` runs **outside** the VM harness with real vendored WASM. See [docs/TESTING.md](docs/TESTING.md).
 
 ## Documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — load order, pipeline, token-protection layers, SQL/CFML state machines, test harness design.
-- [docs/CHANGELOG.md](docs/CHANGELOG.md) — commit-by-commit release notes.
+- [DESIGN.md](DESIGN.md) / [SPEC.md](SPEC.md) — current refactor design and required compatibility behavior.
+- [EPIC.md](EPIC.md) / [ROADMAP.md](ROADMAP.md) / [TASK.md](TASK.md) — scope, phase status, dependencies, blockers, and next work.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — current load order, pipeline, token-protection layers, and state machines.
+- [docs/CHANGELOG.md](docs/CHANGELOG.md) — implementation history and unreleased changes.
 - [docs/LIMITATIONS.md](docs/LIMITATIONS.md) — known edge cases across CFML / SQL / JS / CSS.
-- [docs/TESTING.md](docs/TESTING.md) — running the suite, helpers, adding new tests.
+- [docs/TESTING.md](docs/TESTING.md) — running the suite, helpers, and regression policy.
+- [docs/SAFETY.md](docs/SAFETY.md) — per-language production risk and Safe Mode guidance.
 - [docs/AI-AGENT-USAGE.md](docs/AI-AGENT-USAGE.md) — GitHub-only CLI usage for coding agents.
 
 ## File map
@@ -94,6 +100,7 @@ node tests/tree-sitter.test.mjs  # standalone tree-sitter Semantic Indent suite
 ```
 index.html                       UI shell (language select, deep-format + Normalize/Semantic Indent + Pro SQL checkboxes, auto copy/clear)
 styles.css                       fullscreen grid layout + mobile media query + :has() reveal for dependent selectors
+js/cfml-comment-utils.js          shared depth-aware nested CFML/HTML markup-comment scanner
 js/cf-tags.js                    CF_TAGS.inline / block / middle + HTML_VOID_TAGS
 js/sql-keywords.js               SQL_MAJOR_CLAUSES + SQL_UPPERCASE_KEYWORDS + SQL_FUNCTION_KEYWORDS
 js/sql-beautifier.js             tokenizer + formatter (caseLevel, funcDepth, listItemIndent, inBetween, clauseStack)
@@ -102,7 +109,7 @@ js/js-lexer-utils.js             shared JS lexer helpers (REGEX_CONTEXT_KEYWORDS
 js/deep-format.js                deepFormatEmbedded, protectCFMLTokens, protectBraceCodeText, protectBraceCodeParens, formatBraceCode, formatCSSCode
 js/cfml-splitter.js              splitAdjacentCFMLTags — break glued <tag><tag> lines (comment/string-safe)
 js/tag-utils.js                  get_tag_name / start / end
-js/beautifier.js                 beautifyCFML (incl. normalizeLeadingSpacesToTabs) + detectLanguage + beautifyCodes (router)
+js/beautifier.js                 current combined CFML state machine + language detection + DOM/async router (planned decomposition documented in DESIGN.md)
 js/editor-ui.js                  button delegation + shortcuts + Tab indentation + async Beautify state
 js/tree-sitter-cfml.js           Semantic Indent — computeCallIndentByLine / computeCfscriptIndent / applySemanticIndentPostPass + dual lazy-loader
 js/clipboard.js                  copy_output_data / clear_data
@@ -111,10 +118,11 @@ js/pwa.js                        service worker registration + force-reload-to-l
 js/app.js                        footer year + Pro SQL / Normalize / Semantic / Safe-Mode preference persistence (localStorage)
 vendor/sql-formatter.min.js      Pro SQL vendored bundle (MIT)
 vendor/tree-sitter/              vendored tree-sitter runtime + CFML & CFScript grammar WASM (see vendor/tree-sitter/README.md)
-tests/run-tests.js               Node VM harness + assertEqual cases + content-preservation + sample idempotency
+tests/run-tests.js               Node VM harness + exact assertions + Pro SQL token equivalence + content/sample invariants
 tests/tree-sitter.test.mjs       standalone Semantic Indent suite (real WASM, outside the VM harness)
 tests/cli.test.js                end-to-end Node CLI tests
 tools/beautify-file.js           Node CLI for file/stdin formatting
+tools/source-encoding.js         CLI/diagnostic UTF-8 and BOM-marked UTF-16 decode/encode preservation
 tools/spike-tree-sitter.mjs      self-contained tree-sitter CST spike / reference implementation
 ```
 

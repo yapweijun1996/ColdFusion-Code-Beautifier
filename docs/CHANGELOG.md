@@ -1,13 +1,30 @@
 # Changelog
 
-## Unreleased — GitHub CLI access
+## Unreleased
 
-- Added `tools/beautify-file.js`, a local Node CLI that reuses the production
-  formatter pipeline for coding agents and automation.
-- File input writes a separate `_beutifier.cfm` output; stdin/stdout mode is
-  available for temporary buffers. Source code is never uploaded.
-- Added CLI end-to-end coverage to `npm test` and documented GitHub-only usage
-  in `docs/AI-AGENT-USAGE.md`.
+### Documentation and refactor planning
+
+- Added root `DESIGN.md`, `SPEC.md`, `EPIC.md`, `ROADMAP.md`, and `TASK.md` as the behavior-preserving decomposition baseline for `js/beautifier.js`.
+- The refactor is planned but not implemented. Current code/tests remain the source of truth; characterization fixtures are the next gate.
+- Aligned architecture, requirements, defaults, runtime dependencies, PWA precache behavior, safety/test counts, completed work, pending phases, dependencies, and blockers across related documentation.
+
+### Latest formatter hardening
+
+- Added `js/cfml-comment-utils.js`, a shared depth-aware scanner for nested CFML comments. Splitter, indentation, language detection, SQL token/tree handling, deep JS protection, diagnostics, browser, CLI, SW, and tests now consume the same outer comment boundary.
+- Routed browser/CLI output restores CRLF when the captured source uses CRLF and otherwise emits LF; direct lower-level helpers remain canonical-LF.
+- Added `tools/source-encoding.js`; CLI and corpus diagnostics preserve UTF-8 BOM state and BOM-marked UTF-16LE/UTF-16BE output encoding instead of decoding legacy UTF-16 files as UTF-8.
+- Added the new comment utility to every browser/VM/CLI load graph and service-worker precache; cache version is now `v7.4.1`.
+- Structural `<cfquery>` control tags are normalized when they span lines; closing raw tags tolerate whitespace before `>`.
+- Pro SQL marker/WHERE-hoist and structural fallback paths were made fixed points, including mixed whitespace and real SQL subquery continuation depth. CLI now pins Pro SQL structural-query idempotency.
+- Deep JavaScript preserves own-line/nested CFML control depth alongside JS brace depth, and conservative bare-JS fragments inside CFML gain brace indentation without interpreting SQL/text as JavaScript.
+- Multi-line template payloads preserve their relative content indentation and bypass an unsafe second deep-JS rewrite.
+- Legacy script wrappers (`<!--` ... `//-->`) remain visible as executable wrappers while ordinary HTML/CFML comments stay opaque.
+
+### GitHub CLI access
+
+- Added `tools/beautify-file.js`, a local Node CLI that reuses the production formatter pipeline for coding agents and automation.
+- File input writes a separate `_beutifier.cfm` output; stdin/stdout mode is available for temporary buffers. Source code is never uploaded.
+- Added CLI end-to-end coverage to `npm test` and documented GitHub-only usage in `docs/AI-AGENT-USAGE.md`.
 
 ## v7.4.0 — SCMC UI, accessibility, and CI hardening
 

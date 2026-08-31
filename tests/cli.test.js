@@ -7,6 +7,7 @@ var childProcess = require('child_process');
 var fs = require('fs');
 var os = require('os');
 var path = require('path');
+var sourceEncoding = require('../tools/source-encoding.js');
 
 var root = path.join(__dirname, '..');
 var cli = path.join(root, 'tools', 'beautify-file.js');
@@ -52,6 +53,26 @@ var defaultOutput = path.join(tempDir, 'input_beutifier.cfm');
 check('CLI file mode writes the fixed _beutifier.cfm suffix', fs.existsSync(defaultOutput));
 check('CLI file mode uses the formatter pipeline', fs.readFileSync(defaultOutput, 'utf8') === expected);
 check('CLI file mode reports the generated path', fileRun.stderr.indexOf('input_beutifier.cfm') !== -1);
+
+var utf16InputPath = path.join(tempDir, 'utf16_input.cfm');
+var utf16Source = source.replace(/\n/g, '\r\n');
+fs.writeFileSync(utf16InputPath, sourceEncoding.encodeSource(utf16Source, {
+    encoding: 'utf16be', bom: true
+}));
+var utf16Run = run([utf16InputPath]);
+check('CLI UTF-16BE input exits successfully', utf16Run.status === 0, utf16Run.stderr);
+var utf16OutputPath = path.join(tempDir, 'utf16_input_beutifier.cfm');
+var utf16Output = sourceEncoding.decodeSource(fs.readFileSync(utf16OutputPath));
+check('CLI preserves UTF-16BE output encoding',
+    utf16Output.encoding === 'utf16be' && utf16Output.bom === true);
+check('CLI preserves UTF-16BE formatted content and CRLF', utf16Output.text === [
+    '<cfoutput>',
+    '\t<cfif ok>',
+    '\t\tvalue',
+    '\t</cfif>',
+    '</cfoutput>',
+    ''
+].join('\r\n'));
 
 var stdoutRun = run(['-', '--stdout', '--language', 'cfml'], source);
 check('CLI stdin/stdout mode exits successfully', stdoutRun.status === 0, stdoutRun.stderr);

@@ -1,9 +1,10 @@
 # Phase 4 — AND-Leaves Hoisting (Phase 3's Dual)
 
-**Status:** DESIGN v2 — algorithm REWRITTEN after corpus reality check
-**Branch:** `phase4-split-format-recombine`
+**Status:** IMPLEMENTED — historical design record; current source is `js/deep-format.js`
+**Original branch:** `phase4-split-format-recombine` (merged)
 **Author:** Claude + yapweijun1996@gmail.com
 **Date:** 2026-05-11
+**Current verification:** Phase 4 T1–T10 plus 27 Pro SQL token-equivalence cases in `tests/run-tests.js`
 **Prior version:** Per-leaf split-format-recombine (over-engineered, replaced)
 
 ## Reality check — what the corpus actually contains
@@ -216,17 +217,14 @@ with Pro SQL on (load vendor sql-formatter into vm context).
 | T9 | B/D | OR-in-paren must FALL BACK to Tier 2 (verify no false dispatch) |
 | T10 | safety | sql-formatter throw → output bit-identical to Tier 2 |
 
-## Acceptance criteria
+## Acceptance status
 
-1. All existing 90 tests still pass.
-2. T1–T10 all pass.
-3. The 6 Pattern-A targets in the corpus produce output where the cfif
-   tree sits formatted under the WHERE block, with `and` uppercased.
-4. The 1 Pattern-B and 1 Pattern-D targets produce output bit-identical
-   to current Tier 2 verbatim (zero regression).
-5. Performance: full corpus (103 cfqueries, 27,612 lines) formats in
-   <1000ms (current 415ms; budget +140%).
-6. Pure additive: any failure path returns to Tier 2 verbatim output.
+1. **Done:** Phase 4 T1–T10 pass in the current formatter suite.
+2. **Done:** AND/OR-leaf trees format under the WHERE backbone with protected CFML structure.
+3. **Done:** unsupported UNION/shape cases fall through to Tier 2 rather than partial output.
+4. **Done:** errors and unsafe dispatch return to Tier 2 fallback.
+5. **Done:** 27 Pro SQL token-equivalence cases gate identifier/literal/tag/punctuation order and comment preservation as a multiset.
+6. **Ongoing operational check:** private-corpus performance is measured locally with `tools/diagnose-corpus.js`; private fixtures are intentionally absent from CI.
 
 ## Out of scope
 

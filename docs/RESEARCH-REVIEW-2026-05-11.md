@@ -252,7 +252,7 @@ When delegating to a research subagent, hard-code these fetches into the prompt 
 - `docs/ARCHITECTURE.md` — current Pro SQL precedent for vendored library integration.
 - `docs/LIMITATIONS.md` — known limitations including the cfif structural-control-flow case.
 - `docs/UI-UX-AUDIT-2026-05-11.md` — UI/UX-side findings (a11y, breakpoint, dark-mode contrast). Complements this library-side research.
-- `task.md` / `task.jsonl` — actionable backlog generated from the UI/UX audit.
+- `TASK.md` / `task.jsonl` — current task register and machine-readable mirror; the original UI/UX audit backlog is retained as completed history.
 - Live demo: https://yapweijun1996.github.io/ColdFusion-Code-Beautifier/
 
 ---

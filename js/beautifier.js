@@ -48,13 +48,9 @@ function countBracesOutsideStrings(s, options) {
 	var i = 0;
 	var inQ = null;        // null | "'" | '"' | '`'
 	var inBlockComment = false;
-	// CFML markup comment `<!--- ... --->` (and HTML `<!-- ... -->`). Legacy
-	// ColdFusion files carry dated change-log comments whose free text often
-	// contains unbalanced `]`/`[`/`(`/`{` (e.g. `... sole record] --->`).
-	// Without this guard those stray brackets count as code openers/closers,
-	// corrupting bracketDepth/parenDepth and dedenting every line that follows
-	// (real-world repro: sample/ai_agent_cancel.cfm `[start] ... record]`).
-	var inMarkupComment = false;
+	// CFML markup comments are consumed to their depth-aware close marker.
+	// This prevents nested commented-out tags and their braces/brackets from
+	// affecting the JS continuation state.
 	// `lastSig` tracks whether the previous significant token was a
 	// VALUE (identifier, number, `)`, `]`, string close) or an
 	// OPERATOR (`=`, `(`, `,`, `:`, `;`, `+`, `-`, `*`, `/`, ...).
@@ -67,11 +63,7 @@ function countBracesOutsideStrings(s, options) {
 			if (c === '*' && s[i + 1] === '/') { inBlockComment = false; i += 2; continue; }
 			i++; continue;
 		}
-		if (inMarkupComment) {
-			// `--->` (CFML) ends with `-->`, so matching `-->` closes both.
-			if (c === '-' && s[i + 1] === '-' && s[i + 2] === '>') { inMarkupComment = false; i += 3; continue; }
-			i++; continue;
-		}
+
 		if (inQ) {
 			if (useJsStringEscapes && c === '\\') { i += 2; continue; }
 			if (c === inQ) { inQ = null; lastSig = 'value'; setTerm('STR'); i++; continue; }
@@ -110,10 +102,14 @@ function countBracesOutsideStrings(s, options) {
 			// Not a closed regex on this line — `/` becomes division.
 		}
 		if (c === '"' || c === "'" || c === '`') { inQ = c; i++; continue; }
-		// Markup comment open — `<!---` (CFML, 5 chars) tested before `<!--`
-		// (HTML, 4). Brackets/parens in the free text are skipped wholesale.
-		if (c === '<' && s.substr(i, 5) === '<!---') { inMarkupComment = true; i += 5; continue; }
-		if (c === '<' && s.substr(i, 4) === '<!--')  { inMarkupComment = true; i += 4; continue; }
+		// Markup comments are opaque. The CFML closer is depth-aware so an
+		// inner `<!--- ... --->` cannot expose the remainder of the outer
+		// comment to the brace counter.
+		if (c === '<' && (s.substr(i, 5) === '<!---' || s.substr(i, 4) === '<!--')) {
+			var markupEnd = findMarkupCommentEnd(s, i);
+			i = markupEnd === -1 ? s.length : markupEnd;
+			continue;
+		}
 		if (c === ' ' || c === '\t') { i++; continue; }
 		if (c === '{') { braceOpen++;   lastSig = 'operator'; setTerm('{'); i++; continue; }
 		if (c === '[') { bracketOpen++; lastSig = 'operator'; setTerm('['); i++; continue; }
@@ -220,24 +216,12 @@ function hasTagCloseOutsideStrings(s) {
 			}
 			continue;
 		}
-		/* Skip markup-comment spans so a `>` inside `<!--- ... --->`
-		 * (or HTML `<!-- ... -->`) is NOT mistaken for a tag-closing `>`.
-		 * Without this, a continuation line of a multi-line tag such as
-		 *   <cfset _msg = {
-		 *       "k": v, <!--- note --->
-		 * is misread as closing the <cfset> tag (the `>` in `--->`), which
-		 * pops indentLevel early and collapses the rest of the struct.
-		 * `<!---` (CFML, 5 chars) must be tested before `<!--` (HTML, 4). */
-		if (c === '<' && s.substr(i, 5) === '<!---') {
-			var endC = s.indexOf('--->', i + 5);
-			if (endC === -1) return false; // unterminated → no tag close after
-			i = endC + 3;                  // loop's i++ lands past `--->`
-			continue;
-		}
-		if (c === '<' && s.substr(i, 4) === '<!--') {
-			var endH = s.indexOf('-->', i + 4);
-			if (endH === -1) return false;
-			i = endH + 2;
+		/* Skip complete markup-comment spans so a `>` inside a nested
+		 * CFML comment cannot be mistaken for a tag-closing `>`. */
+		if (c === '<' && (s.substr(i, 5) === '<!---' || s.substr(i, 4) === '<!--')) {
+			var commentEnd = findMarkupCommentEnd(s, i);
+			if (commentEnd === -1) return false;
+			i = commentEnd - 1;
 			continue;
 		}
 		if (c === '"' || c === "'") {
@@ -283,16 +267,10 @@ function scanMultiLineTagClose(s, startQuote) {
 			}
 			continue;
 		}
-		if (c === '<' && s.substr(i, 5) === '<!---') {
-			var endC = s.indexOf('--->', i + 5);
-			if (endC === -1) return { closes: false, endQuote: null };
-			i = endC + 3;
-			continue;
-		}
-		if (c === '<' && s.substr(i, 4) === '<!--') {
-			var endH = s.indexOf('-->', i + 4);
-			if (endH === -1) return { closes: false, endQuote: null };
-			i = endH + 2;
+		if (c === '<' && (s.substr(i, 5) === '<!---' || s.substr(i, 4) === '<!--')) {
+			var commentEnd = findMarkupCommentEnd(s, i);
+			if (commentEnd === -1) return { closes: false, endQuote: null };
+			i = commentEnd - 1;
 			continue;
 		}
 		if (c === '"' || c === "'") { quote = c; continue; }
@@ -341,39 +319,19 @@ function computeJsLineClassification(lines) {
 	var prevLastTerm = '';
 	var parentIdx = -1;
 	var inBlockComment = false;
-	var inCfmlComment = false;
+	var markupCommentState = { cfmlDepth: 0, htmlDepth: 0 };
 	for (var i = 0; i < lines.length; i++) {
 		var line = lines[i];
 		var trimmed = line.trim();
 		if (trimmed === '') { out[i] = { isBlank: true }; continue; }
 
-		/* CFML markup comment tracker — `<!--- ... --->` (and HTML
-		 * `<!-- ... -->`). Mid-file CFML comments are common in legacy
-		 * ColdFusion files (dated change tags) and would otherwise be
-		 * tokenized as code by countBracesOutsideStrings, polluting
-		 * paren/bracket depth and lastTerm tracking. */
-		if (inCfmlComment) {
-			if (trimmed.indexOf('--->') >= 0 || trimmed.indexOf('-->') >= 0) {
-				inCfmlComment = false;
-			}
-			out[i] = { isBlank: true };
-			continue;
-		}
-		var cfOpenIdx  = trimmed.indexOf('<!---');
-		var cfCloseIdx = trimmed.indexOf('--->');
-		if (cfOpenIdx === -1) {
-			cfOpenIdx  = trimmed.indexOf('<!--');
-			cfCloseIdx = trimmed.indexOf('-->');
-		}
-		if (cfOpenIdx >= 0 && cfCloseIdx < cfOpenIdx) {
-			inCfmlComment = true;
-			out[i] = { isBlank: true };
-			continue;
-		}
-		if (cfOpenIdx >= 0 && cfCloseIdx >= 0 && cfCloseIdx > cfOpenIdx
-		    && cfOpenIdx === 0
-		    && trimmed.length === cfCloseIdx + (trimmed.substr(cfCloseIdx, 4) === '--->' ? 4 : 3)) {
-			/* Whole line is a single-line CFML comment. */
+		/* Markup comments are opaque to continuation tracking. Unlike the
+		 * old boolean tracker, the shared scanner keeps nested CFML depth and
+		 * does not mistake an inner `--->` for the outer close. A line that
+		 * starts inside a comment stays conservative even if code follows the
+		 * final close marker on that same physical line. */
+		var markupScan = advanceMarkupCommentState(trimmed, markupCommentState);
+		if (markupScan.startsInComment || (markupScan.hadComment && !markupScan.codeOutsideComment)) {
 			out[i] = { isBlank: true };
 			continue;
 		}
@@ -589,15 +547,11 @@ function tagIndentDelta(line, protectTextStrings) {
 			leadActive = false;
 			i++; continue;
 		}
-		if (c === '<' && line.substr(i, 5) === '<!---') {        // CFML comment
-			var ce = line.indexOf('--->', i + 5);
-			if (ce === -1) break;
-			i = ce + 4; continue;
-		}
-		if (c === '<' && line.substr(i, 4) === '<!--') {         // HTML comment
-			var he = line.indexOf('-->', i + 4);
-			if (he === -1) break;
-			i = he + 3; continue;
+		if (c === '<' && (line.substr(i, 5) === '<!---' || line.substr(i, 4) === '<!--')) {
+			var markupEnd = findMarkupCommentEnd(line, i);
+			if (markupEnd === -1) break;
+			i = markupEnd;
+			continue;
 		}
 		// Quoted attribute value — only meaningful inside an open tag.
 		if (openStack.length > 0 && (c === '"' || c === "'")) {
@@ -923,7 +877,7 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 	var indentLevel = 0;
 	var indentSize = 1; // You can choose the size of indentation you want
 	var indentSpace = 0;
-	var inMarkupComment = false;
+	var markupCommentState = { cfmlDepth: 0, htmlDepth: 0 };
 	var inBlockComment = false;
 	var commentOrigPrefix = "";
 	var commentNewPrefix = "";
@@ -1124,31 +1078,35 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 			continue;
 		}
 
-		var opensMarkupComment = line_data.includes('<!---') || line_data.includes('<!--');
-		var closesMarkupComment = line_data.includes('--->') || line_data.includes('-->');
-		var opensBlockComment = line_data.startsWith('/*') && !line_data.endsWith('*/');
-		var closesBlockComment = line_data.endsWith('*/');
-
-		if (inMarkupComment || inBlockComment) {
-			// Shift continuation line's leading whitespace so alignment
-			// relative to the opening line is preserved.
-			if (lines[i].indexOf(commentOrigPrefix) === 0) {
-				lines[i] = commentNewPrefix + lines[i].substring(commentOrigPrefix.length);
-			}
-			if (inMarkupComment && closesMarkupComment) {
-				inMarkupComment = false;
-			}
-			if (inBlockComment && closesBlockComment) {
-				inBlockComment = false;
+		var legacyScriptWrapper = isLegacyJavaScriptHTMLWrapper(rawCode, line);
+		var markupScan = legacyScriptWrapper
+			? { startsInComment: false, hadComment: false, codeOutsideComment: true }
+			: advanceMarkupCommentState(line, markupCommentState);
+		var commentOnlyLine = markupScan.hadComment && !markupScan.codeOutsideComment;
+		if (commentOnlyLine) {
+			/* Preserve a complete nested CFML comment as opaque text. The
+			 * shared state has already consumed every inner opener/closer, so
+			 * this branch cannot leak commented-out tags into the hierarchy. */
+			if (markupScan.startsInComment) {
+				if (lines[i].indexOf(commentOrigPrefix) === 0) {
+					lines[i] = commentNewPrefix + lines[i].substring(commentOrigPrefix.length);
+				}
+			} else {
+				commentOrigPrefix = (lines[i].match(/^[ \t]*/) || [""])[0];
+				applyIndent();
+				commentNewPrefix = ''.padStart(indentSpace, '\t');
 			}
 			continue;
 		}
 
-		if (opensMarkupComment && !closesMarkupComment) {
-			commentOrigPrefix = (lines[i].match(/^[ \t]*/) || [""])[0];
-			applyIndent();
-			commentNewPrefix = ''.padStart(indentSpace, '\t');
-			inMarkupComment = true;
+		var opensBlockComment = line_data.startsWith('/*') && !line_data.endsWith('*/');
+		var closesBlockComment = line_data.endsWith('*/');
+		if (inBlockComment) {
+			// Shift block-comment continuation whitespace relative to its opener.
+			if (lines[i].indexOf(commentOrigPrefix) === 0) {
+				lines[i] = commentNewPrefix + lines[i].substring(commentOrigPrefix.length);
+			}
+			if (closesBlockComment) inBlockComment = false;
 			continue;
 		}
 
@@ -1562,17 +1520,12 @@ function hasTagsOutsideStrings(code) {
 		}
 		if (c === '/' && c2 === '/') { inLC = true; i += 2; continue; }
 		if (c === '/' && c2 === '*') { inBC = true; i += 2; continue; }
-		// CFML markup comment <!--- ... ---> — consume entire region.
-		if (c === '<' && c2 === '!' && code[i + 2] === '-' && code[i + 3] === '-' && code[i + 4] === '-') {
-			var endCfm = code.indexOf('--->', i + 5);
-			if (endCfm === -1) return false;  // unterminated → trust JS path
-			i = endCfm + 4; continue;
-		}
-		// HTML comment <!-- ... --> — consume entire region.
+		// Markup comments are opaque; CFML matching is nested and depth-aware.
 		if (c === '<' && c2 === '!' && code[i + 2] === '-' && code[i + 3] === '-') {
-			var endHtm = code.indexOf('-->', i + 4);
-			if (endHtm === -1) return false;
-			i = endHtm + 3; continue;
+			var markupEnd = findMarkupCommentEnd(code, i);
+			if (markupEnd === -1) return false;
+			i = markupEnd;
+			continue;
 		}
 		// Regex literal — `/` in operator position. Scan to matching `/`
 		// respecting `\` escapes and `[...]` character classes (where
@@ -1674,18 +1627,12 @@ function splitLeadingCommentBlock(code) {
 		// Skip whitespace
 		while (i < n && (code[i] === ' ' || code[i] === '\t' || code[i] === '\n' || code[i] === '\r')) i++;
 		if (i >= n) break;
-		// CFML markup comment <!--- ... --->
-		if (code.substr(i, 5) === '<!---') {
-			var endC = code.indexOf('--->', i + 5);
-			if (endC === -1) break;
-			i = endC + 4;
-			continue;
-		}
-		// HTML comment <!-- ... -->
-		if (code.substr(i, 4) === '<!--') {
-			var endH = code.indexOf('-->', i + 4);
-			if (endH === -1) break;
-			i = endH + 3;
+		// Markup comments are stripped only as complete opaque regions. CFML
+		// uses depth-aware matching so nested commented-out tags stay hidden.
+		if (code.substr(i, 5) === '<!---' || code.substr(i, 4) === '<!--') {
+			var leadingCommentEnd = findMarkupCommentEnd(code, i);
+			if (leadingCommentEnd === -1) break;
+			i = leadingCommentEnd;
 			continue;
 		}
 		break;
@@ -1730,6 +1677,21 @@ function formatJsWithLeadingComments(code) {
 	return leading + '\n' + body;
 }
 
+function normalizeOutputLineEndings(code, source) {
+	if (typeof code !== 'string') return code;
+	var newline = /\r\n/.test(String(source || '')) ? '\r\n' : '\n';
+	return code.replace(/\r\n?/g, '\n').replace(/\n/g, newline);
+}
+
+/* Legacy browsers accepted `<!--` and `//-->` as JavaScript guards. They
+ * are executable-script wrapper markers, not an HTML comment containing the
+ * script body. Detect only an own-line opener with a matching close before
+ * the next script close; real HTML comments remain opaque. */
+function isLegacyJavaScriptHTMLWrapper(code, line) {
+	if (typeof code !== 'string' || !/^<!--[ \t]*$/.test(line)) return false;
+	return /(?:^|\r?\n)[ \t]*<!--[ \t]*(?:\r?\n)[\s\S]*?(?:\r?\n)[ \t]*\/\/-->[ \t]*(?:\r?\n|$)/.test(code);
+}
+
 function beautifyCodes() {
 	var split_html_tag = document.getElementById('split_html_tag').checked;
 	var auto_copy = document.getElementById('auto_copy').checked;
@@ -1760,6 +1722,7 @@ function beautifyCodes() {
 	}
 
 	function finishOutput() {
+		output.value = normalizeOutputLineEndings(output.value, rawCode);
 		var copied = false;
 		if(auto_copy == true){
 			copied = copy_output_data();
