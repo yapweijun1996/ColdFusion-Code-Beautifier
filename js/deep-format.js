@@ -785,6 +785,16 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 					? originalBodies[currentIndex]
 					: body;
 
+				/* If the outer beautifier already produced exactly the same
+				 * structural body as the current source, keep that canonical
+				 * layout. This is important for a previously formatted flat
+				 * query: the first pass uses Tier 3 and the next pass must not
+				 * reinterpret the generated indentation as fresh user indent and
+				 * add another tab to every CFML branch. */
+				if (!sqlPro && body === verbatimSource) {
+					return maybeNormalizeCFMLTags(parentIndent + openTag + body + closeTag);
+				}
+
 				// Tier 1 — Marker-injection: when Pro SQL is enabled, replace
 				// own-line CFML control-flow tags with column-friendly markers,
 				// run sql-formatter, then restore. Produces full SQL re-format
@@ -950,10 +960,13 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 				if (bodyHasUserIndent(verbatimSource)) {
 					var verbatimCleaned = cleanEmbeddedBody(verbatimSource);
 					if (verbatimCleaned !== '') {
-						var verbatimFinal = verbatimCleaned;
+						var verbatimFinal = alignStructuralControlFlowIndent(
+							cleanEmbeddedBody(body),
+							verbatimCleaned
+						);
 						if (sqlPro) {
 							try {
-								var protectedV = protectCFMLTokens(verbatimCleaned);
+								var protectedV = protectCFMLTokens(verbatimFinal);
 								var upperedV = uppercaseSQLKeywordsInProtected(protectedV.code);
 								verbatimFinal = restoreCFMLTokens(upperedV, protectedV.tokens);
 							} catch (upperErr) {
@@ -1314,25 +1327,31 @@ function cleanEmbeddedBody(body) {
 		lines.pop();
 	}
 
-	var minIndent = null;
+	/* The first non-empty line defines the embedded block's common base.
+	 * Using the minimum indentation is incorrect for legacy mixed whitespace:
+	 * one outlier top-level `<cfelseif>` with a single tab caused the common
+	 * 16-space prefix on every other line to survive. Do not call `.trim()` on
+	 * the final string either—doing so removes the first line's indentation a
+	 * second, different way from all following lines. */
+	var baseIndent = null;
 	for (var i = 0; i < lines.length; i++) {
-		if (lines[i].trim() == "") {
-			continue;
-		}
+		if (lines[i].trim() === "") continue;
 		var indentMatch = lines[i].match(/^[ \t]*/);
-		var indentLength = indentMatch ? indentMatch[0].length : 0;
-		if (minIndent == null || indentLength < minIndent) {
-			minIndent = indentLength;
-		}
+		baseIndent = indentMatch ? indentMatch[0].length : 0;
+		break;
 	}
 
-	if (minIndent && minIndent > 0) {
+	if (baseIndent && baseIndent > 0) {
 		for (var j = 0; j < lines.length; j++) {
-			lines[j] = lines[j].slice(minIndent);
+			var lineIndent = (lines[j].match(/^[ \t]*/) || [''])[0].length;
+			/* A malformed/outlier line may be less indented than the common
+			 * base. Strip its available prefix, never content; structural tag
+			 * alignment will place such a line from the canonical hierarchy. */
+			lines[j] = lines[j].slice(Math.min(baseIndent, lineIndent));
 		}
 	}
 
-	return lines.join('\n').trim();
+	return lines.join('\n');
 }
 
 function indentEmbeddedBody(body, parentIndent) {
@@ -1342,6 +1361,73 @@ function indentEmbeddedBody(body, parentIndent) {
 		}
 		return parentIndent + '\t' + line;
 	}).join('\n');
+}
+
+/* Structural query fallback may preserve SQL continuation whitespace from the
+ * original body, but CFML control tags and ordinary SQL lines must use the
+ * indentation computed by the outer named-tag hierarchy. A minimum-indent trim
+ * is unsafe for legacy mixed whitespace: one outlier `<cfelseif>` beginning
+ * with a tab makes the common 16-space prefix survive on every other line.
+ * Merge canonical structural/baseline lines while preserving substantially
+ * deeper pure-tab SQL continuations. */
+function alignStructuralControlFlowIndent(canonicalBody, preservedBody) {
+	if (typeof canonicalBody !== 'string' || typeof preservedBody !== 'string') {
+		return preservedBody;
+	}
+
+	var structural = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b[^>]*>$/i;
+	var canonicalLines = canonicalBody.split('\n');
+	var preservedLines = preservedBody.split('\n');
+	var canonicalIndex = 0;
+
+	for (var i = 0; i < preservedLines.length; i++) {
+		var preservedTrimmed = preservedLines[i].trim();
+		if (!structural.test(preservedTrimmed)) continue;
+
+		var preservedName = preservedTrimmed.match(/^<\/?([a-zA-Z][\w-]*)/)[1].toLowerCase();
+		var matchIndex = -1;
+		for (var j = canonicalIndex; j < canonicalLines.length; j++) {
+			var canonicalTrimmed = canonicalLines[j].trim();
+			var canonicalMatch = canonicalTrimmed.match(/^<\/?([a-zA-Z][\w-]*)/);
+			if (canonicalMatch
+					&& structural.test(canonicalTrimmed)
+					&& canonicalMatch[1].toLowerCase() === preservedName) {
+				matchIndex = j;
+				break;
+			}
+		}
+		if (matchIndex === -1) continue;
+
+		/* Use the canonical line, not merely its prefix: this also keeps the
+		 * outer scanner's case/attribute normalization and avoids retaining
+		 * residual spaces from the mixed original prefix. */
+		preservedLines[i] = canonicalLines[matchIndex];
+		canonicalIndex = matchIndex + 1;
+	}
+
+	/* Reconcile the remaining SQL lines with the canonical structural body.
+	 * Space-only and mixed prefixes are legacy baseline/column whitespace, so
+	 * the canonical line wins. Preserve only a pure-tab prefix that is at least
+	 * three levels deeper than the canonical line; that is the distinctive
+	 * shape of a real SQL continuation, such as `from u` inside a hand-indented
+	 * subquery, rather than a one-level CFML branch variation. */
+	for (var k = 0; k < preservedLines.length && k < canonicalLines.length; k++) {
+		var preservedPrefix = (preservedLines[k].match(/^[ \t]*/) || [''])[0];
+		var canonicalPrefix = (canonicalLines[k].match(/^[ \t]*/) || [''])[0];
+		var preservedTrimmedAtK = preservedLines[k].trim();
+		if (preservedTrimmedAtK !== canonicalLines[k].trim()
+				|| /^<!---?/.test(preservedTrimmedAtK)
+				|| /^\/\*/.test(preservedTrimmedAtK)) continue;
+		var pureTabPrefix = preservedPrefix.length > 0
+				&& preservedPrefix.replace(/\t/g, '') === '';
+		if (structural.test(preservedTrimmedAtK)
+				|| !pureTabPrefix
+				|| preservedPrefix.length - canonicalPrefix.length <= 2) {
+			preservedLines[k] = canonicalLines[k];
+		}
+	}
+
+	return preservedLines.join('\n');
 }
 
 function formatBraceCode(code, splitAdjacentBlocks) {

@@ -118,6 +118,86 @@ function runRouter(input, language, deepFormat) {
 	return harness.elements.output.value;
 }
 
+(function runStructuralTagHierarchyTests() {
+	var structuralHarness = makeContext('', 'cfml');
+	assertEqual(
+		'closing tag names are recognized by boundary state logic',
+		structuralHarness.context.get_tag_name('</CFQUERY>'),
+		'CFQUERY'
+	);
+	assertEqual(
+		'named container close drops every malformed descendant without hardcoded form/root anchors',
+		runRouter(
+			'<section>\n<div>\n<table>\n<tr>\n<td>\nvalue\n</section>\n<footer>\nafter\n</footer>',
+			'cfml',
+			false
+		),
+		'<section>\n\t<div>\n\t\t<table>\n\t\t\t<tr>\n\t\t\t\t<td>\n\t\t\t\t\tvalue\n</section>\n<footer>\n\tafter\n</footer>'
+	);
+	assertEqual(
+		'form closure restores outer body indent level for subsequent scripts',
+		runRouter(
+			'<html>\n<body>\n<form name="f">\n<div>\n<table>\n<tr>\n<td>\n<input type="text">\n</form>\n<script>\nfunction done() {\nreturn true;\n}\n</script>\n</body>\n</html>',
+			'cfml',
+			false
+		),
+		'<html>\n\t<body>\n\t\t<form name="f">\n\t\t\t<div>\n\t\t\t\t<table>\n\t\t\t\t\t<tr>\n\t\t\t\t\t\t<td>\n\t\t\t\t\t\t\t<input type="text">\n\t\t</form>\n\t\t<script>\n\t\t\tfunction done() {\n\t\t\t\treturn true;\n\t\t\t}\n\t\t</script>\n\t</body>\n</html>'
+	);
+	var packedCloseStack = [
+		{ name: 'cfoutput', level: 0 },
+		{ name: 'html', level: 1 },
+		{ name: 'body', level: 2 }
+	];
+	var packedClose = structuralHarness.context.applyStructuralTagEvents(
+		packedCloseStack,
+		structuralHarness.context.tagIndentDelta('</html></cfoutput><!--- LLCFEnd --->').events,
+		3
+	);
+	assertEqual(
+		'packed document closers align to the first closer, not the final closer',
+		packedClose.displayLevel,
+		1
+	);
+	assertEqual('packed document closers restore final stack depth', packedClose.nextLevel, 0);
+	assertEqual(
+		'unmatched close is indentation-neutral',
+		runRouter('<main>\ntext\n</ghost>\nafter\n</main>', 'cfml', false),
+		'<main>\n\ttext\n\t</ghost>\n\tafter\n</main>'
+	);
+	assertEqual(
+		'optional table cells and rows implicitly close previous siblings',
+		runRouter('<table>\n<tr>\n<td>one\n<td>two\n<tr>\n<td>three\n</table>', 'cfml', false),
+		'<table>\n\t<tr>\n\t\t<td>one\n\t\t<td>two\n\t<tr>\n\t\t<td>three\n</table>'
+	);
+	assertEqual(
+		'braces in SQL text do not alter structural tag depth',
+		runRouter(
+			'<section>\n<cfquery name="q">\nSELECT \'{\' AS literal_value\nFROM t\n</cfquery>\nafter\n</section>',
+			'cfml',
+			false
+		),
+		'<section>\n\t<cfquery name="q">\n\t\tSELECT \'{\' AS literal_value\n\t\tFROM t\n\t</cfquery>\n\tafter\n</section>'
+	);
+	assertEqual(
+		'mixed spaces and tabs in a structural query do not misalign CFML branches',
+		runRouter(
+			'<cfquery name="q">\n                INSERT INTO t (\n                a,\n                <cfif a>\n                \t<cfif b>\n                \t\t\t\t1\n                \t\t\t<cfelse>\n                \t\t2\n                \t</cfif>\n\t<cfelseif c>\n                3\n                </cfif>\n                )\n</cfquery>',
+			'cfml',
+			true
+		),
+		'<cfquery name="q">\n\tINSERT INTO t (\n\ta,\n\t<cfif a>\n\t\t<cfif b>\n\t\t\t1\n\t\t<cfelse>\n\t\t\t2\n\t\t</cfif>\n\t<cfelseif c>\n\t\t3\n\t</cfif>\n\t)\n</cfquery>'
+	);
+	assertEqual(
+		'embedded query cfif is tracked before an own-line cfelse',
+		runRouter(
+			'<section>\n<cfquery name="q">\nSELECT x\nAND <cfif flag>\nx = 1\n<cfelse>\nx = 2\n</cfif>\nORDER BY x\n</cfquery>\nafter\n</section>',
+			'cfml',
+			false
+		),
+		'<section>\n\t<cfquery name="q">\n\t\tSELECT x\n\t\tAND <cfif flag>\n\t\t\tx = 1\n\t\t<cfelse>\n\t\t\tx = 2\n\t\t</cfif>\n\t\tORDER BY x\n\t</cfquery>\n\tafter\n</section>'
+	);
+})();
+
 function runRouterWithAutoCopy(input, language, deepFormat) {
 	var harness = makeContext(input, language || 'auto', false, deepFormat == true, true);
 	harness.context.beautifyCodes();
@@ -1766,6 +1846,34 @@ assertEqual(
 	),
 	'<cfquery name="q">\n\tselect *\n\tfrom t\n\t<cfif a>\n\t\t<cfif b>\n\t\t\twhere x = 1\n\t\t</cfif>\n\t</cfif>\n</cfquery>'
 );
+
+/* Regression for real corpus files: a structural CFML branch inside a
+ * cfquery must not make its following sibling drift on either the first or
+ * second pass. The deep-format fallback must also keep its own canonical
+ * layout when it sees already-beautified flat input. */
+(function runStructuralCfqueryFixedPointTests() {
+	var flatInput = '<cfif outer>\n<cfquery name="q">\nSELECT a\nAND <cfif flag>\nx=1\n<cfelse>\nx=2\n</cfif>\n<cfif optional>\nAND y=3\n</cfif>\nORDER BY a\n</cfquery>\n<cfset sibling = 1>\n</cfif>';
+	var flatPass1 = runRouter(flatInput, 'cfml', true);
+	var flatPass2 = runRouter(flatPass1, 'cfml', true);
+	assertEqual(
+		'cfquery structural branches keep flat fallback idempotent',
+		flatPass2,
+		flatPass1
+	);
+
+	var userIndentedInput = '<cfif outer>\n\t<cfquery name="q">\n\t\tselect a\n\t\t<cfif flag>\n\t\t\twhere a = 1\n\t\t<cfelse>\n\t\t\twhere a = 2\n\t\t</cfif>\n\t</cfquery>\n\t<cfset sibling = 1>\n</cfif>';
+	var userIndentedPass1 = runRouter(userIndentedInput, 'cfml', true);
+	assertEqual(
+		'cfquery structural close returns to outer sibling level',
+		userIndentedPass1,
+		userIndentedInput
+	);
+	assertEqual(
+		'cfquery structural user layout remains idempotent',
+		runRouter(userIndentedPass1, 'cfml', true),
+		userIndentedPass1
+	);
+})();
 
 assertEqual(
 	'cfquery with hand-crafted subquery indent preserves the user verbatim layout',

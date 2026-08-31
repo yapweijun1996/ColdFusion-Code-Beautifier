@@ -19,15 +19,20 @@ js/clipboard.js        ← copy_output_data / clear_data
 js/pro-sql.js          ← lazy-loads vendor/sql-formatter.min.js on first Pro SQL use
 js/tree-sitter-cfml.js ← Semantic Indent: algorithm + post-pass + dual grammar lazy-loader
 js/beautifier.js       ← beautifyCFML (+ normalizeLeadingSpacesToTabs) + detectLanguage + beautifyCodes (router)
+js/editor-ui.js        ← button events, keyboard shortcuts, Tab indentation, and async Beautify state
 js/app.js              ← footer year + Pro SQL / Normalize / Semantic / Safe-Mode prefs persistence (localStorage) + bundle pre-warm
 js/pwa.js              ← service-worker registration + auto-update reload (deferred)
 ```
 
 `js/tree-sitter-cfml.js` loads before `js/beautifier.js` so its globals
 (`applySemanticIndentPostPass`, `ensureTreeSitterCFML`, …) are available to the
-`beautifyCodes` router. It guards every browser-only path with `typeof window`
-so the Node VM harness (which loads the other scripts but not this one) is
-unaffected; the standalone `tests/tree-sitter.test.mjs` exercises it directly.
+`beautifyCodes` router. `js/editor-ui.js` then loads after the formatter so it
+can bind the public formatter/clipboard functions without inline HTML handlers.
+All application scripts are classic `defer` scripts in this same order; this
+preserves the global API while allowing the document to parse before execution.
+The UI module guards browser-only initialization and the Node VM harness loads
+it separately in `tests/ui.test.js`; the standalone `tests/tree-sitter.test.mjs`
+exercises the semantic path directly.
 
 ## Pro SQL (optional, opt-in)
 
@@ -101,6 +106,20 @@ precached by the service worker (they are large and opt-in); they fall to the
 stale-while-revalidate cache after first use. The whole feature is gated by a
 default-OFF checkbox and degrades to the line-scanner output on any failure.
 
+## Editor UI layer
+
+`js/editor-ui.js` is deliberately small and browser-facing. It owns button
+listeners, `Control/Command+Enter`, Tab/Shift-Tab line indentation, and the
+Beautify busy indicator. It calls `beautifyCodes()` but does not implement any
+formatting rules. The formatter returns a resolved Promise for the synchronous
+path and a real Promise when Pro SQL or Tree-sitter must load, allowing the UI
+to disable duplicate actions during the wait.
+
+The formatter captures the input at request start. If the user edits the input
+while a lazy resource is loading, the stale request is not applied and
+`auto_clear` can only erase the unchanged captured input. This prevents an
+async completion from overwriting or deleting newer user work.
+
 ## PWA layer
 
 ```
@@ -116,7 +135,8 @@ js/pwa.js              ← registers ./sw.js
 ```
 
 Release flow: edit code → bump `CACHE_VERSION` in `sw.js` → push `main` → GitHub Actions
-runs `node tests/run-tests.js` then deploys via `actions/deploy-pages@v4`.
+runs `npm test` (formatter + UI contract + Tree-sitter) then deploys via
+`actions/deploy-pages@v4`.
 
 ## Pipeline
 
@@ -136,6 +156,26 @@ beautifyCodes()                       router (DOM I/O)
               ├─ if js  → <script>  body → formatBraceCode
               └─ if css → <style>   body → formatCSSCode
 ```
+
+The outer scanner maintains a persistent named CFML/HTML tag hierarchy rather
+than relying on a global opens-minus-closes counter. A matching close returns to
+its opener and discards malformed descendants; an unmatched close is neutral.
+`cfelse`/`cfelseif` reset the current conditional branch, and optional HTML end
+tags (`tr`, `td`, `li`, `option`, `p`, etc.) are closed implicitly. This same
+mechanism handles document roots, forms, queries, scripts, styles, and arbitrary
+containers—there are no tag-specific root/form alignment patches.
+
+CF tags embedded after SQL/text on a line (for example `AND <cfif ...>`) enter
+the same hierarchy with quoted strings protected. Brace depth is active only
+inside JavaScript/CFScript/CSS (or tag-free input explicitly routed through the
+CFML scanner), so braces in SQL or ordinary HTML text cannot corrupt structural
+indentation. Structural `<cfquery>` fallback formatting merges the canonical outer
+hierarchy with the preserved SQL body: CFML branch tags and baseline SQL use
+canonical depth, while substantially deeper pure-tab SQL continuation lines
+remain intact. Common-indent cleanup uses the first real body line and never
+lets a shorter mixed-whitespace outlier delete content. Already-canonical
+bodies therefore remain fixed points instead of adding another level on a
+later pass.
 
 `detectLanguage()` routes to `'js'` when BOTH:
 

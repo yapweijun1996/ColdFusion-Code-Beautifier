@@ -3,8 +3,10 @@
  * tools/diagnose-corpus.js — corpus audit for the ColdFusion-Code-Beautifier.
  *
  * Runs the browser beautifier under Node (via vm.runInContext) against every
- * .cfm file under sample/sample_cfm/, classifies each <cfquery> body by
- * dispatch outcome, and prints a Markdown-table summary + grand totals.
+ * source .cfm file under sample/sample_cfm/, classifies each <cfquery> body by
+ * dispatch outcome, and prints a Markdown-table summary + grand totals. Generated
+ * *_beutifier.cfm files are excluded from discovery so a corpus audit never
+ * accidentally treats formatter output as a new source file.
  *
  * Consolidates three earlier diagnostic scripts that lived under sample/:
  *   - _corpus_audit.js   → baseline run + per-file table
@@ -24,7 +26,7 @@
  *   node tools/diagnose-corpus.js --sanitize       # SQL syntax coverage gap report (corpus vs token-equivalence tests)
  *   node tools/diagnose-corpus.js --file foo.cfm   # restrict to one file (basename or full path)
  *   node tools/diagnose-corpus.js --dialect mysql  # default postgresql
- *   node tools/diagnose-corpus.js --no-write       # skip writing *.beautified.cfm
+ *   node tools/diagnose-corpus.js --no-write       # skip writing *_beutifier.cfm
  *   node tools/diagnose-corpus.js --help
  */
 
@@ -66,7 +68,7 @@ function printHelp() {
         'Usage: node tools/diagnose-corpus.js [--audit|--targets] [options]',
         '',
         'Modes:',
-        '  --audit       Run beautifier on all corpus files, write .beautified.cfm,',
+        '  --audit       Run beautifier on all source corpus files, write *_beutifier.cfm,',
         '                classify each cfquery, print summary table + grand totals (default).',
         '  --targets     Print full body of every Tier 2 verbatim cfquery (Phase 4 candidates).',
         '  --sanitize    SQL syntax coverage gap report. Detects features used in corpus',
@@ -82,7 +84,7 @@ function printHelp() {
         'Options:',
         '  --file NAME       Restrict to one file (basename or full path).',
         '  --dialect NAME    Pro SQL dialect (default: postgresql).',
-        '  --no-write        Skip writing *.beautified.cfm output files.',
+        '  --no-write        Skip writing *_beutifier.cfm output files.',
         '  --corpus DIR      Corpus directory (default: sample/sample_cfm).',
         '  -h, --help        This help.'
     ].join('\n'));
@@ -95,7 +97,8 @@ function listCorpus(dir, fileFilter) {
         process.exit(1);
     }
     var all = fs.readdirSync(dir).filter(function(n) {
-        return /\.cfm$/i.test(n) && !/\.beautified\.cfm$/i.test(n);
+        return /\.cfm$/i.test(n)
+            && !/_(?:beutifier|beautified)\.cfm$/i.test(n);
     });
     if (fileFilter) {
         var basename = path.basename(fileFilter);
@@ -263,7 +266,7 @@ function modeAudit() {
         }
 
         if (opts.write) {
-            fs.writeFileSync(p.replace(/\.cfm$/i, '.beautified.cfm'), result.output, 'utf8');
+            fs.writeFileSync(p.replace(/\.cfm$/i, '_beutifier.cfm'), result.output, 'utf8');
         }
 
         var inQ  = findCfqueryRanges(src);

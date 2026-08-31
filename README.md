@@ -16,7 +16,7 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. N
   - `<script>` body → JS formatter with protected strings, comments, regex literals, template literals (`${…}` nesting), and `(…)` groups.
   - `<style>` body → CSS formatter.
 - **Language selector** with `Auto` / `CFML / HTML` / `SQL` / `JavaScript` modes; auto-detect routes SQL-looking input to the SQL formatter and tag-free JS-looking input through `formatBraceCode` (template literals, regex, and parens token-protected).
-- **Auto-copy / auto-clear input / auto-clear output** independent toggles (copy-success guards the output clear).
+- **Auto-copy / auto-clear input / auto-clear output** independent toggles. Auto-copy defaults on; both auto-clear options default off so source and result remain visible until explicitly cleared.
 - **Force-split `<tag><tag>`** option for dense HTML.
 - **Fullscreen layout** with side-by-side input / output on desktop, stacked on mobile.
 - **Pro SQL** (opt-in) — vendored [sql-formatter](https://github.com/sql-formatter-org/sql-formatter) (MIT) for 16 dialects: MySQL, MariaDB, PostgreSQL, SQLite, T-SQL, PL/SQL, DB2, Redshift, Snowflake, BigQuery, Hive, Spark, Trino, N1QL, SingleStoreDB, Standard. Lazy-loaded on first use (zero cost when off), falls back to the built-in formatter if the bundle fails.
@@ -29,12 +29,12 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. N
 1. Paste code into the left textarea.
 2. Pick `Auto`, `CFML / HTML`, or `SQL` from the Language dropdown.
 3. Toggle the deep-format checkboxes (SQL / CSS / JS) to pick what gets formatted inside embedded blocks.
-4. Click **Beautify**. The right textarea shows the output and is copied to the clipboard if `Auto copy` is on.
+4. Click **Beautify**. The right textarea shows the output and is copied to the clipboard if `Auto copy` is on. `Ctrl+Enter` / `Cmd+Enter` also runs Beautify; `Tab` and `Shift+Tab` indent the selected input lines, and `Escape` then `Tab` moves focus out of the editor.
 
 ## Architecture overview
 
 ```
-beautifyCodes()  → router reads DOM + dispatches
+beautifyCodes()  → router reads DOM + dispatches (returns a Promise for UI busy-state tracking)
   ├─ beautifySQL(code)        standalone SQL mode
   └─ beautifyCFML(code)       CFML / HTML outer pass
        │    (Normalize Indent, if on, runs first: leading spaces → tabs)
@@ -51,13 +51,14 @@ Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## Testing
 
 ```bash
-npm test          # runs both suites below
+npm test          # runs formatter, UI-contract, and Tree-sitter suites
 # or individually:
-node tests/run-tests.js          # VM-harness suite (SQL / CFML / deep-format / JS)
+node tests/run-tests.js          # VM-harness formatter suite
+node tests/ui.test.js            # static HTML + editor interaction suite
 node tests/tree-sitter.test.mjs  # standalone tree-sitter Semantic Indent suite
 ```
 
-`tests/run-tests.js` replays every browser script in a Node VM context with a faked DOM, then runs `assertEqual` cases (33+ covering SQL clauses, deep-format routing, token protection, JS hardening) plus 22 content-preservation invariants and the `sample/` idempotency suite. `tests/tree-sitter.test.mjs` runs **outside** the VM harness (it needs real WebAssembly) against the vendored grammars — the VM suite is structurally blind to the tree-sitter path. See [docs/TESTING.md](docs/TESTING.md).
+`tests/run-tests.js` replays the formatter scripts in a Node VM context with a faked DOM, then runs `assertEqual` cases (33+ covering SQL clauses, deep-format routing, token protection, JS hardening) plus 22 content-preservation invariants and the `sample/` idempotency suite. `tests/ui.test.js` verifies the static HTML contract and browser-facing editor interactions with a minimal DOM double. `tests/tree-sitter.test.mjs` runs **outside** the VM harness (it needs real WebAssembly) against the vendored grammars — the VM suite is structurally blind to the tree-sitter path. See [docs/TESTING.md](docs/TESTING.md).
 
 ## Documentation
 
@@ -80,6 +81,7 @@ js/deep-format.js                deepFormatEmbedded, protectCFMLTokens, protectB
 js/cfml-splitter.js              splitAdjacentCFMLTags — break glued <tag><tag> lines (comment/string-safe)
 js/tag-utils.js                  get_tag_name / start / end
 js/beautifier.js                 beautifyCFML (incl. normalizeLeadingSpacesToTabs) + detectLanguage + beautifyCodes (router)
+js/editor-ui.js                  button delegation + shortcuts + Tab indentation + async Beautify state
 js/tree-sitter-cfml.js           Semantic Indent — computeCallIndentByLine / computeCfscriptIndent / applySemanticIndentPostPass + dual lazy-loader
 js/clipboard.js                  copy_output_data / clear_data
 js/toast.js                      notification UI

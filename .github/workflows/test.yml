@@ -31,4 +31,4 @@ jobs:
           fi
 
       - name: Run all regression tests (no install, no network)
-        run: node tests/run-tests.js
+        run: npm test

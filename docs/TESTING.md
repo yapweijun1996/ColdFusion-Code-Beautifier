@@ -3,13 +3,14 @@
 ## Running the suite
 
 ```bash
-npm test          # runs BOTH suites (run-tests.js && tree-sitter.test.mjs)
+npm test          # runs formatter, UI-contract, and Tree-sitter suites
 # or individually:
-node tests/run-tests.js          # VM-harness suite
+node tests/run-tests.js          # VM-harness formatter suite
+node tests/ui.test.js            # static HTML + editor interaction suite
 node tests/tree-sitter.test.mjs  # standalone Semantic Indent suite
 ```
 
-`tests/run-tests.js` loads every script in `js/` inside a Node `vm` context with a faked DOM, then runs `assertEqual` cases. On success it prints `All tests passed.`; on failure it prints `FAIL: <name>` with actual vs. expected and sets a non-zero exit code.
+`tests/run-tests.js` loads the formatter scripts inside a Node `vm` context with a faked DOM, then runs `assertEqual` cases. `tests/ui.test.js` uses a separate minimal DOM double because the editor event layer is browser-facing. On success the suites print `All ... tests passed.`; on failure they print a named failure and set a non-zero exit code.
 
 ## Helper functions
 
@@ -20,6 +21,14 @@ node tests/tree-sitter.test.mjs  # standalone Semantic Indent suite
 | `runRouterWithAutoCopy(input, language, deepFormat)` | Same as above but with `auto_copy` checked. |
 | `runRouterWithAutoClears(input, language, deepFormat, copyResult)` | Exercises `auto_clear` and `auto_clear_output` behavior; `copyResult = false` simulates a failed `execCommand('copy')`. |
 
+## UI contract suite
+
+`tests/ui.test.js` verifies the static HTML contract (landmarks, labels, no inline
+handlers, deferred dependency order, default options, and service-worker
+precache) plus the browser-facing editor behavior (button delegation,
+Control/Command+Enter, Tab/Shift-Tab, Escape-to-exit, and async busy state).
+It intentionally has no jsdom or network dependency.
+
 ## Browser smoke test
 
 For UI-level checks that the harness cannot reach (clipboard, language-selector DOM, toast animations):
@@ -27,7 +36,9 @@ For UI-level checks that the harness cannot reach (clipboard, language-selector 
 1. Open `index.html` in a browser.
 2. Paste a known-good CFML file.
 3. Toggle `Deep SQL`, `Deep CSS`, `Deep JS` individually and verify only the matching embedded language changes.
-4. Confirm `Auto copy`, `Auto clear input`, `Auto clear output` behave as named.
+4. Confirm `Auto copy` is on by default while `Auto clear input` and `Auto clear output` are off by default; enable the latter two and verify their explicit behavior.
+5. While Pro SQL or Semantic Indent is loading, verify Beautify is disabled and returns to normal after success or fallback.
+6. Verify Tab/Shift-Tab indentation, Escape then Tab focus exit, and Control/Command+Enter.
 
 ## Adding a test
 

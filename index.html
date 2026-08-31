@@ -27,16 +27,32 @@
 		<link rel="manifest" href="./manifest.webmanifest">
 
 		<link rel="stylesheet" href="./styles.css">
+		<script src="./js/cf-tags.js" defer></script>
+		<script src="./js/sql-keywords.js" defer></script>
+		<script src="./js/sql-beautifier.js" defer></script>
+		<script src="./js/js-lexer-utils.js" defer></script>
+		<script src="./js/deep-format.js" defer></script>
+		<script src="./js/tag-utils.js" defer></script>
+		<script src="./js/cfml-splitter.js" defer></script>
+		<script src="./js/toast.js" defer></script>
+		<script src="./js/clipboard.js" defer></script>
+		<script src="./js/pro-sql.js" defer></script>
+		<script src="./js/tree-sitter-cfml.js" defer></script>
+		<script src="./js/beautifier.js" defer></script>
+		<script src="./js/editor-ui.js" defer></script>
+		<script src="./js/app.js" defer></script>
+		<script src="./js/pwa.js" defer></script>
 	</head>
 	<body>
-		<div class="simpleToastContainer"></div>
-		<div class="container">
+		<div class="simpleToastContainer" role="status" aria-live="polite" aria-relevant="additions text"></div>
+		<main class="container">
 			<h1>ColdFusion Code Beautifier</h1>
 
 			<div class="editor-grid">
 				<section class="pane">
 					<label class="pane-label" for="input">Input</label>
-					<textarea id="input" placeholder="Paste your code here..." spellcheck="false" autocapitalize="off" autocorrect="off"></textarea>
+					<span id="input-keyboard-help" class="visually-hidden">Press Control or Command plus Enter to beautify. Press Tab to insert indentation. Press Escape, then Tab, to move focus out of the editor.</span>
+					<textarea id="input" aria-describedby="input-keyboard-help" aria-keyshortcuts="Tab Shift+Tab" placeholder="Paste your code here..." spellcheck="false" autocapitalize="off" autocorrect="off"></textarea>
 				</section>
 
 				<section class="pane">
@@ -45,7 +61,7 @@
 				</section>
 			</div>
 
-			<div class="toolbar">
+			<nav class="toolbar" aria-label="Formatting actions and options">
 				<label class="language-control" title="SQL formatter works best with standalone queries. Complex procedures may require manual adjustment.">
 					<span>Language</span>
 					<select id="language" class="lang-select">
@@ -55,14 +71,15 @@
 						<option value="js">JavaScript</option>
 					</select>
 				</label>
-				<button id="beautify" class="btn-primary" onclick="beautifyCodes()">Beautify</button>
-				<button id="copy" class="btn-secondary" onclick="copy_output_data();">Copy</button>
-				<button id="clear" class="btn-ghost" onclick="clear_data();">Clear</button>
+				<button type="button" id="beautify" class="btn-primary" aria-keyshortcuts="Control+Enter Meta+Enter">Beautify</button>
+				<button type="button" id="copy" class="btn-secondary">Copy</button>
+				<button type="button" id="clear" class="btn-ghost">Clear</button>
 
 				<div class="toolbar-options">
 					<label><input type="checkbox" id="split_html_tag" value="y"> Split &lt;tag&gt;&lt;tag&gt;</label>
 					<label title="Convert leading spaces to tabs before formatting. Auto-detects indent unit (e.g. 2, 4, or 8 spaces = 1 tab). Use when your file mixes space-indent and tab-indent lines."><input type="checkbox" id="normalize_indent" value="y"> Normalize Indent</label>
 					<label class="normalize-tab-width" title="How many spaces equal one tab in the source file (Auto = detect from file)">
+						<span class="visually-hidden">Indent tab width</span>
 						<select id="normalize_tab_width" class="lang-select">
 							<option value="0">Auto</option>
 							<option value="2">2 sp</option>
@@ -71,8 +88,8 @@
 						</select>
 					</label>
 					<label><input type="checkbox" id="auto_copy" value="y" checked> Auto copy</label>
-					<label><input type="checkbox" id="auto_clear" value="y" checked> Auto clear input</label>
-					<label><input type="checkbox" id="auto_clear_output" value="y" checked> Auto clear output</label>
+					<label><input type="checkbox" id="auto_clear" value="y"> Auto clear input</label>
+					<label><input type="checkbox" id="auto_clear_output" value="y"> Auto clear output</label>
 					<label title="Safe Mode — disables Deep SQL / Deep CSS / Deep JS / Pro SQL in one click. Only the proven whitespace-only CFML auto-split + indent pipeline runs. Use for sensitive code where you cannot tolerate any content-shaped change. See docs/SAFETY.md."><input type="checkbox" id="safe_mode" value="y"> Safe Mode</label>
 					<label title="Formats SQL inside <cfquery>"><input type="checkbox" id="deep_sql" value="y" checked> Deep SQL</label>
 					<label title="Formats CSS inside <style>"><input type="checkbox" id="deep_css" value="y" checked> Deep CSS</label>
@@ -81,6 +98,7 @@
 					<label title="Experimental — uses tree-sitter CFML/CFScript parsers (lazy-loads the ~2.6 MB CFML grammar and/or ~2.1 MB CFScript grammar on first use) to indent flat, zero-indent multi-line nested function-call chains by their real call depth. Covers: &lt;cfset&gt;/&lt;cfparam&gt; tags, and CONTROL-STRUCTURE-FREE &lt;cfscript&gt; blocks (top-level assignment/call chains only — blocks containing if/for/while/function/component are left to the normal indenter). Struct literals and SQL strings stay flat. Each grammar is fetched only when a matching flat block is present."><input type="checkbox" id="semantic_indent" value="y"> Semantic Indent</label>
 					<label class="pro-sql" title="Use the dialect-aware sql-formatter library (~312KB, lazy-loaded on first use). Falls back to built-in formatter if the bundle fails to load."><input type="checkbox" id="pro_sql" value="y"> Pro SQL</label>
 					<label class="pro-sql-dialect" title="SQL dialect for Pro SQL">
+						<span>Dialect</span>
 						<select id="pro_sql_dialect" class="lang-select">
 							<option value="sql">Standard SQL</option>
 							<option value="mysql">MySQL</option>
@@ -101,24 +119,10 @@
 						</select>
 					</label>
 				</div>
-			</div>
-		</div>
+			</nav>
+		</main>
 		<footer>
 			<p>By <a href="https://github.com/yapweijun1996" target="_blank" rel="noopener">yapweijun1996</a> @ <span class="at_year"></span></p>
 		</footer>
-		<script src="./js/cf-tags.js"></script>
-		<script src="./js/sql-keywords.js"></script>
-		<script src="./js/sql-beautifier.js"></script>
-		<script src="./js/js-lexer-utils.js"></script>
-		<script src="./js/deep-format.js"></script>
-		<script src="./js/tag-utils.js"></script>
-		<script src="./js/cfml-splitter.js"></script>
-		<script src="./js/toast.js"></script>
-		<script src="./js/clipboard.js"></script>
-		<script src="./js/pro-sql.js"></script>
-		<script src="./js/tree-sitter-cfml.js"></script>
-		<script src="./js/beautifier.js"></script>
-		<script src="./js/app.js"></script>
-		<script src="./js/pwa.js" defer></script>
 	</body>
 </html>

@@ -1,7 +1,3 @@
-window.onload = function() {
-	console.log('window - onload');
-};
-
 if (typeof document !== 'undefined' && document.querySelector) {
 	var yearEl = document.querySelector('.at_year');
 	if (yearEl) yearEl.textContent = new Date().getFullYear();

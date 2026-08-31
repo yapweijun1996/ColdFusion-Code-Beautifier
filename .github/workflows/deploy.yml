@@ -29,7 +29,7 @@ jobs:
           fi
 
       - name: Run regression tests (Node, no install, no network)
-        run: node tests/run-tests.js
+        run: npm test
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

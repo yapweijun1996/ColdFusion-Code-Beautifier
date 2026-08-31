@@ -68,7 +68,19 @@ No screenshots saved to disk by default (Preview returns inline images). Re-run 
 - [docs/LIMITATIONS.md](docs/LIMITATIONS.md) — known-edge cases on the formatter side.
 - [task.md](task.md) / [task.jsonl](task.jsonl) — actionable backlog generated from S1–S4 above.
 
-## 5. Re-verify
+## 5. Implementation follow-up — v7.4.0
+
+The SCMC follow-up implementation addressed the findings as follows:
+
+- T01 was double-checked: the existing visible `label[for]` associations provide
+  the textarea accessible names, so duplicate `aria-label` attributes were not added.
+- T02–T05, T07–T17 were implemented; T18–T19 add the complete CI gate and UI tests.
+- Auto-clear input/output now default to off; asynchronous formatter completion also
+  refuses to apply or erase data when the user changed the input while loading.
+- A real-device/browser smoke pass is still required for visual measurements,
+  Accessibility Tree output, PWA update behavior, and screen-reader announcements.
+
+## 6. Re-verify
 
 Re-run this audit when:
 - The mobile breakpoint moves.

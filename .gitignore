@@ -6,6 +6,10 @@ sample/*
 !sample/.gitkeep
 !sample/README.md
 
+# local-only codebase samples: keep the directory, never commit its contents.
+sample_codebase/*
+!sample_codebase/.gitkeep
+
 # npm — node_modules is NOT committed; the tree-sitter runtime + grammar
 # the browser actually needs are vendored under vendor/tree-sitter/ instead.
 # package-lock.json IS committed to pin devDependency versions.

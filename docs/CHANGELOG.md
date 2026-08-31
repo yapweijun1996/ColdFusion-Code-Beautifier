@@ -1,5 +1,32 @@
 # Changelog
 
+## v7.4.0 — SCMC UI, accessibility, and CI hardening
+
+- Added semantic `main` / named `nav` landmarks, a polite toast status region,
+  accessible Dialect and keyboard-help labels, and 44px option touch targets.
+- Moved all application scripts to the document head with ordered `defer`, removed
+  inline button handlers, and added the modular `js/editor-ui.js` integration layer.
+- Added Control/Command+Enter, Tab/Shift-Tab indentation, Escape-then-Tab focus exit,
+  and a disabled/spinner state while optional formatters load.
+- Optional lazy-load completion now returns a Promise; stale async requests cannot
+  overwrite newer input or clear it. Auto-clear input/output now default to off.
+- Improved tablet breakpoint, dark surface contrast, heading alignment, select sizes,
+  and footer link contrast. Bumped the service-worker cache to `v7.4.0`.
+- Added offline UI contract tests and changed PR/deploy workflows to use the single
+  `npm test` gate, which includes formatter, UI, and Tree-sitter suites.
+- Replaced numeric tag-depth accumulation and root/form safety-net patches with
+  one persistent named CFML/HTML hierarchy. Matching closes recover to their
+  opener, unmatched closes are neutral, malformed descendants are discarded,
+  and optional HTML end tags auto-close according to sibling semantics.
+- Closing tag names now participate in raw-language boundary state; embedded
+  SQL/text CF tags such as `AND <cfif ...>` are tracked with string protection.
+  SQL/prose braces no longer affect markup depth. Structural `<cfquery>` fallback
+  remains idempotent, including nested conditional branches.
+- Fixed mixed-space/tab structural query bodies: common-indent cleanup now uses
+  the first real body line without deleting shorter outlier lines, and baseline
+  SQL plus CFML branch tags follow the canonical outer hierarchy while deep
+  pure-tab SQL continuation indentation is preserved.
+
 ## v7 series (2026-06-04)
 
 ### Fix: blank lines no longer emit indentation-only whitespace

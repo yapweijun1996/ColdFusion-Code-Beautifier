@@ -551,15 +551,17 @@ function isIndentingTag(name) {
  *     multi-line tag the caller handles separately), matching the old
  *     single-tag behaviour.
  *
- * Returns {net, lead, openRawBlock}:
- *   net          — opens minus closes over indenting tags
- *   lead         — count of consecutive leading close tags (display
- *                  pre-dedent, mirrors leadingClosersOf for braces)
+ * Returns {net, lead, openRawBlock, events}:
+ *   net/lead     — compatibility diagnostics for the lexical scan
+ *   events       — ordered named open/close/middle events consumed by the
+ *                  persistent structural hierarchy
  *   openRawBlock — 'style'|'script'|'cfquery' when such a raw-body block
  *                  is opened and left unclosed on this line, so the
  *                  caller can watch for its (possibly glued) close. */
-function tagIndentDelta(line) {
+function tagIndentDelta(line, protectTextStrings) {
 	var net = 0, lead = 0, leadActive = true, rawOpen = '';
+	var events = [];
+	var textQuote = null;
 	/* `openStack` holds the opening tags whose `>` we have not yet seen,
 	 * so a `>` is matched to the correct tag. This is what makes the CFML
 	 * conditional-attribute pattern
@@ -572,6 +574,21 @@ function tagIndentDelta(line) {
 	var i = 0, n = line.length;
 	while (i < n) {
 		var c = line.charAt(i);
+		/* On mixed SQL/JS/text lines, quoted strings are opaque. Attribute
+		 * strings are handled separately below while openStack is non-empty. */
+		if (protectTextStrings && openStack.length === 0 && textQuote) {
+			if (c === '\\') { i += 2; continue; }
+			if (c === textQuote) {
+				if (line.charAt(i + 1) === textQuote) { i += 2; continue; }
+				textQuote = null;
+			}
+			i++; continue;
+		}
+		if (protectTextStrings && openStack.length === 0 && (c === '"' || c === "'" || c === '`')) {
+			textQuote = c;
+			leadActive = false;
+			i++; continue;
+		}
 		if (c === '<' && line.substr(i, 5) === '<!---') {        // CFML comment
 			var ce = line.indexOf('--->', i + 5);
 			if (ce === -1) break;
@@ -591,7 +608,11 @@ function tagIndentDelta(line) {
 		if (c === '>') {                                         // closes an opener
 			if (openStack.length > 0) {
 				var popped = openStack.pop();
-				if (line.charAt(i - 1) === '/' && popped.counted) net -= 1;  // self-close
+				if (line.charAt(i - 1) === '/' && popped.counted) {
+					net -= 1;
+					events.push({ type: 'close', name: popped.name, leading: false });
+					if (rawOpen === popped.name) rawOpen = '';
+				}
 			}
 			i++; continue;
 		}
@@ -600,9 +621,11 @@ function tagIndentDelta(line) {
 			if (c2 === '/') {                                    // close tag </name>
 				var cm = line.substr(i + 2).match(/^([a-zA-Z][\w:.-]*)/);
 				if (cm && isIndentingTag(cm[1].toLowerCase())) {
+					var closeName = cm[1].toLowerCase();
 					net -= 1;
 					if (leadActive) lead += 1;
-					if (rawOpen === cm[1].toLowerCase()) rawOpen = '';
+					events.push({ type: 'close', name: closeName, leading: leadActive });
+					if (rawOpen === closeName) rawOpen = '';
 				} else {
 					leadActive = false;
 				}
@@ -630,7 +653,12 @@ function tagIndentDelta(line) {
 				var om = line.substr(i + 1).match(/^([a-zA-Z][\w:.-]*)/);
 				var oname = om[1].toLowerCase();
 				var counts = isIndentingTag(oname);
-				if (counts) net += 1;
+				if (counts) {
+					net += 1;
+					events.push({ type: 'open', name: oname, leading: leadActive });
+				} else if (CF_TAGS.middle.indexOf(oname) !== -1) {
+					events.push({ type: 'middle', name: oname, leading: leadActive });
+				}
 				leadActive = false;
 				openStack.push({ name: oname, counted: counts });
 				if (oname === 'style' || oname === 'script' || oname === 'cfquery') rawOpen = oname;
@@ -643,7 +671,110 @@ function tagIndentDelta(line) {
 		if (leadActive && c !== ' ' && c !== '\t') leadActive = false;
 		i++;
 	}
-	return { net: net, lead: lead, openRawBlock: rawOpen };
+	return { net: net, lead: lead, openRawBlock: rawOpen, events: events };
+}
+
+/* Structural indentation state. A numeric opens-minus-closes counter cannot
+ * recover from legacy/conditional markup: an unmatched close steals a level,
+ * while a missing close leaks a level until EOF. Keep the actual open-tag
+ * hierarchy instead. A named close returns to its matching opener and drops
+ * malformed descendants; a close with no opener is indentation-neutral. */
+function findStructuralTag(stack, name) {
+	for (var i = stack.length - 1; i >= 0; i--) {
+		if (stack[i].name === name) return i;
+	}
+	return -1;
+}
+
+function closeStructuralTag(stack, name, fallbackLevel) {
+	var index = findStructuralTag(stack, name);
+	if (index === -1) return fallbackLevel;
+	var level = stack[index].level;
+	stack.length = index;
+	return level;
+}
+
+/* HTML permits omitted end tags for these sibling elements. Auto-close the
+ * previous sibling before opening the next one, otherwise valid legacy table
+ * and list markup appears to drift even though a browser parses it flat. */
+function implicitCloseNamesFor(name) {
+	if (name === 'li') return ['li'];
+	if (name === 'dt' || name === 'dd') return ['dt', 'dd'];
+	if (name === 'tr') return ['tr'];
+	if (name === 'td' || name === 'th') return ['td', 'th'];
+	if (name === 'thead' || name === 'tbody' || name === 'tfoot') return ['thead', 'tbody', 'tfoot'];
+	if (name === 'option') return ['option'];
+	if (name === 'optgroup') return ['option', 'optgroup'];
+	if (name === 'rt' || name === 'rp') return ['rt', 'rp'];
+	if (name === 'colgroup') return ['colgroup'];
+	if (name === 'body') return ['head'];
+	if (/^(address|article|aside|blockquote|div|dl|fieldset|footer|form|h[1-6]|header|hgroup|hr|main|nav|ol|p|pre|section|table|ul)$/.test(name)) {
+		return ['p'];
+	}
+	return [];
+}
+
+function prepareStructuralOpen(stack, name, level) {
+	var candidates = implicitCloseNamesFor(name);
+	if (candidates.length === 0) return level;
+	for (var i = stack.length - 1; i >= 0; i--) {
+		if (candidates.indexOf(stack[i].name) !== -1) {
+			level = stack[i].level;
+			stack.length = i;
+			break;
+		}
+		/* Do not auto-close across the containing table/list/select. */
+		if (stack[i].name === 'table' || stack[i].name === 'ul' ||
+			stack[i].name === 'ol' || stack[i].name === 'dl' ||
+			stack[i].name === 'select') break;
+	}
+	return level;
+}
+
+function applyStructuralTagEvents(stack, events, initialLevel) {
+	var level = initialLevel;
+	var displayLevel = initialLevel;
+	var displayChosen = false;
+
+	for (var i = 0; i < events.length; i++) {
+		var event = events[i];
+		if (event.type === 'close') {
+			level = closeStructuralTag(stack, event.name, level);
+			/* For packed leading closes, the first closer determines the
+			 * visual line depth. Later closers are siblings on the same line;
+			 * allowing them to overwrite displayLevel would move a valid
+			 * `</html></cfoutput>` line to the outermost final closer. */
+			if (event.leading && !displayChosen) {
+				displayLevel = level;
+				displayChosen = true;
+			}
+			continue;
+		}
+
+		if (event.type === 'middle') {
+			var parentIndex = findStructuralTag(stack, 'cfif');
+			if (parentIndex !== -1) {
+				level = stack[parentIndex].level;
+				stack.length = parentIndex + 1;
+				if (event.leading) {
+					displayLevel = level;
+					displayChosen = true;
+				}
+				level += 1;
+			}
+			continue;
+		}
+
+		level = prepareStructuralOpen(stack, event.name, level);
+		if (event.leading && !displayChosen) {
+			displayLevel = level;
+			displayChosen = true;
+		}
+		stack.push({ name: event.name, level: level });
+		level += 1;
+	}
+
+	return { displayLevel: displayChosen ? displayLevel : initialLevel, nextLevel: level };
 }
 
 /* Normalize leading whitespace on every line: detect the file's indent unit
@@ -741,6 +872,7 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 	var inMultiLineTag = false;
 	var multiLineTagName = "";
 	var multiLineTagOrigPrefix = "";
+	var multiLineTagStructural = false;
 	/* Open-quote char ('"' or "'") carried across the continuation lines of a
 	 * multi-line tag so a string literal that spans those lines is tracked;
 	 * null when not inside such a string. Drives scanMultiLineTagClose so the
@@ -769,13 +901,13 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 	 *                             (so continuation can inherit it). */
 	var preserveContAlign = (preserve_continuation_alignment === undefined)
 		? true : !!preserve_continuation_alignment;
-	/* `inJsBlock` defaults TRUE so bare-JS-in-.cfm files (no enclosing
-	 * <script> wrapper — common in legacy ColdFusion projects where JS
-	 * fragments live directly inside .cfm files with CFML comment
-	 * headers) get continuation alignment too. Toggled OFF only inside
-	 * <cfquery> (SQL) and <style> (CSS) regions, where the JS-shaped
-	 * continuation classifier would misfire. */
-	var inJsBlock = true;
+	/* Brace and continuation state is active only inside script/cfscript,
+	 * or for tag-free input explicitly routed through CFML mode. Keeping
+	 * ordinary HTML text and <cfquery> SQL out of the brace counter prevents
+	 * literal `{`, `}`, `[`, `]` from changing structural indentation. CSS
+	 * gets brace depth separately. */
+	var inJsBlock = !hasTagsOutsideStrings(rawCode);
+	var inStyleBlock = false;
 	var inCfscriptBlock = false;
 	var parenDepth = 0;
 	var bracketDepth = 0;
@@ -792,6 +924,11 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 	 * open's `+1` leaks to every following sibling. Holds the lowercase
 	 * tag name we are waiting to close, or '' when none is pending. */
 	var pendingRawClose = '';
+	/* Persistent named hierarchy for all indenting CFML/HTML tags. This is
+	 * the source of truth for tag depth; indentLevel also carries JS/CSS brace
+	 * depth while inside raw blocks, but a matching raw close restores the
+	 * structural opener level through this stack. */
+	var structuralTagStack = [];
 
 	function applyIndent() {
 		if(indentLevel != 0 && indentSize != 0){
@@ -884,12 +1021,17 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 			if (closesMultiLineTag) {
 				var selfClose = /\/\s*>/.test(line);
 				inMultiLineTag = false;
-				if (selfClose || HTML_VOID_TAGS.indexOf(multiLineTagName) !== -1 || CF_TAGS.inline.indexOf(multiLineTagName) !== -1) {
+				if (selfClose && multiLineTagStructural) {
+					indentLevel = closeStructuralTag(structuralTagStack, multiLineTagName, Math.max(0, indentLevel - 1));
+				} else if (!multiLineTagStructural) {
+					/* Inline/void multi-line tags use one temporary continuation
+					 * level but never enter the structural hierarchy. */
 					indentLevel -= 1;
 				}
 				multiLineTagName = "";
 				multiLineTagOrigPrefix = "";
 				multiLineTagQuote = null;
+				multiLineTagStructural = false;
 			}
 			continue;
 		}
@@ -976,6 +1118,10 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 		// their own handling above.
 		var hasOuterTagClose = hasTagCloseOutsideStrings(line);
 		if (line_data.startsWith("<") && !hasOuterTagClose && tag_name && !line_data.startsWith('<!')) {
+			multiLineTagStructural = isIndentingTag(tag_name);
+			if (multiLineTagStructural) {
+				indentLevel = prepareStructuralOpen(structuralTagStack, tag_name, indentLevel);
+			}
 			applyIndent();
 			multiLineTagName = tag_name;
 			multiLineTagOrigPrefix = origPrefix;
@@ -987,40 +1133,25 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 			 * the state to carry. */
 			multiLineTagQuote = scanMultiLineTagClose(line, null).endQuote;
 			inMultiLineTag = true;
+			if (multiLineTagStructural) {
+				structuralTagStack.push({ name: tag_name, level: indentLevel });
+			}
 			indentLevel += 1;
 			continue;
 		}
 
 		if (line_data.startsWith("<") && hasOuterTagClose) { // Handle HTML Coldfusion
-			/* Middle markers (<cfelse>/<cfelseif>) keep their bespoke
-			 * display dedent + same-line </cfif> net handling — the net
-			 * tag counter below would otherwise place them one column too
-			 * deep (a middle marker divides a block, it does not open one). */
-			if (CF_TAGS.middle.includes(tag_name)) {
-				indentLevel -= 1;
-				applyIndent();
-				indentLevel += 1;
-				/* A middle tag can share its line with the parent block's
-				 * close, e.g. `<cfelse>NULL</cfif>` in an inline SQL VALUES
-				 * list. The `continue` skips the normal `</cfif>` decrement,
-				 * so apply the net block-close delta here. `<cfif\b` does not
-				 * match `<cfelseif`, so the marker is not miscounted. */
-				var midNet = (line_data.match(/<\/cfif\b/g) || []).length
-				           - (line_data.match(/<cfif\b/g) || []).length;
-				indentLevel -= midNet;
-				continue;
-			}
-
-			/* Net block-tag delta across EVERY tag on the line (Bug #2),
-			 * replacing the old single-tag maintain/increase/decrease
-			 * heuristic. Packed markup like `<h2>x<span>y<span>z` (three
-			 * opens) and mixed open/close lines are now counted in full, so
-			 * indent no longer drifts down the rest of the file. Display
-			 * sits at the post-leading-close depth (mirrors the brace
-			 * branch's leadingClosersOf pre-dedent); the full net delta is
-			 * carried to the next line below. */
+			/* Lex every tag on the line, then apply the ordered events to the
+			 * persistent named hierarchy. Packed opens/closes are handled in
+			 * source order; leading packed closes display at the outermost
+			 * matching opener rather than decrementing an anonymous counter. */
 			var tagInfo = tagIndentDelta(line);
-			indentLevel -= tagInfo.lead;
+			var structuralResult = applyStructuralTagEvents(
+				structuralTagStack,
+				tagInfo.events,
+				indentLevel
+			);
+			indentLevel = structuralResult.displayLevel;
 			applyIndent();
 
 			/* inJsBlock boundary tracking (Risk R3 gate). Toggle when we
@@ -1033,7 +1164,8 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 			 * <cfquery>/<style>: NOT JS, suppress continuation logic
 			 * inside the body. Other tags don't change inJsBlock. */
 			if (tag_name === 'script') {
-				inJsBlock = true;
+				inJsBlock = !line_data.startsWith('</');
+				inStyleBlock = false;
 				inCfscriptBlock = false;
 				parenDepth = 0;
 				bracketDepth = 0;
@@ -1042,7 +1174,8 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 				parentAnchorActive      = false;
 				parentAnchorIndentLevel = 0;
 			} else if (tag_name === 'cfscript') {
-				inJsBlock = true;
+				inJsBlock = !line_data.startsWith('</');
+				inStyleBlock = false;
 				inCfscriptBlock = !line_data.startsWith('</');
 				parenDepth = 0;
 				bracketDepth = 0;
@@ -1051,11 +1184,8 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 				parentAnchorActive      = false;
 				parentAnchorIndentLevel = 0;
 			} else if (tag_name === 'cfquery' || tag_name === 'style') {
-				if (line_data.startsWith('</')) {
-					inJsBlock = true;
-				} else {
-					inJsBlock = false;
-				}
+				inJsBlock = false;
+				inStyleBlock = tag_name === 'style' && !line_data.startsWith('</');
 				inCfscriptBlock = false;
 				parenDepth = 0;
 				bracketDepth = 0;
@@ -1065,15 +1195,30 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 				parentAnchorIndentLevel = 0;
 			}
 
-			/* Carry the full net delta to the next line, and remember any
-			 * raw-body block (<style>/<script>/<cfquery>) left open on this
-			 * line so a later GLUED `</tag>` on a content line still gets
-			 * its dedent (Bug #1). */
-			indentLevel += tagInfo.lead + tagInfo.net;
+			/* Carry the hierarchy result to the next line and remember any
+			 * raw-body block whose close may be glued to content. */
+			indentLevel = structuralResult.nextLevel;
 			if (tagInfo.openRawBlock) {
 				pendingRawClose = tagInfo.openRawBlock;
 			}
-		}else{ // Handle JavaScript CSS
+		}else{ // Handle JavaScript CSS / mixed raw-body content
+		/* CFML control tags may be embedded after SQL/text on the same line,
+		 * e.g. `AND <cfif condition>`. The old startsWith('<') gate missed the
+		 * opener, then a later own-line <cfelse> matched the wrong outer cfif
+		 * and collapsed the hierarchy. Scan embedded CF tags with text-string
+		 * protection and feed them into the same persistent structure. */
+		var embeddedTagResult = null;
+		if (!/^\/\/|^--/.test(line) && /<\/?cf[a-zA-Z]/i.test(line)) {
+			var embeddedTagInfo = tagIndentDelta(line, true);
+			if (embeddedTagInfo.events.length > 0) {
+				embeddedTagResult = applyStructuralTagEvents(
+					structuralTagStack,
+					embeddedTagInfo.events,
+					indentLevel
+				);
+			}
+		}
+
 		/* maintain_yn [start] */
 		if(line_data.startsWith("//")){
 			maintain_yn = "y";
@@ -1085,6 +1230,13 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 		/* maintain_yn [end  ] */
 
 		if(maintain_yn == "n"){
+			if (!inJsBlock && !inStyleBlock) {
+				/* Ordinary markup text and SQL are structurally inert apart
+				 * from any embedded CF tags scanned above. Do not interpret
+				 * braces/brackets in prose, SQL, JSON attributes, or values. */
+				applyIndent();
+				if (embeddedTagResult) indentLevel = embeddedTagResult.nextLevel;
+			} else {
 			/* Balanced brace/bracket counting (JS / CSS / JSON-ish lines).
 			 *
 			 * The previous heuristic relied on `startsWith("}")` /
@@ -1180,22 +1332,21 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 			if (bracketDepth < 0) bracketDepth = 0;
 			prevLastTerm = braceCounts.lastTerm;
 
-			indentLevel += (braceCounts.open - braceCounts.close + leadingCl);
+			var braceDelta = braceCounts.open - braceCounts.close + leadingCl;
+			indentLevel += braceDelta;
+			if (embeddedTagResult) {
+				indentLevel = embeddedTagResult.nextLevel + braceDelta;
+			}
+			}
 		}
 
 	}
 
-	/* Bug #1 — settle a pending raw-block close. Fires for BOTH the
-	 * own-line case (`</style>` on its own line, already dedented by the
-	 * tag-close path → here we only clear the flag) and the GLUED case
-	 * (`h1{…}</style>` handled by the JS/CSS branch, which never dedented
-	 * → apply the missing −1 now). A LITERAL `</tag>` match is used
-	 * deliberately: it can never false-fire on a `<` operator such as
-	 * `i<n` the way a generic tag scan would. */
+	/* A raw close can be glued to CSS/JS/SQL content, so that line takes the
+	 * non-markup branch above. Close it by name through the same hierarchy;
+	 * this restores its opener level and discards any malformed descendants. */
 	if (pendingRawClose && line_data.indexOf('</' + pendingRawClose) !== -1) {
-		if (!line_data.startsWith('</' + pendingRawClose)) {
-			indentLevel -= 1;
-		}
+		indentLevel = closeStructuralTag(structuralTagStack, pendingRawClose, indentLevel);
 		pendingRawClose = '';
 	}
 
@@ -1452,7 +1603,8 @@ function beautifyCodes() {
 	var pro_sql = proSqlEl ? proSqlEl.checked : false;
 	var dialectEl = document.getElementById('pro_sql_dialect');
 	var pro_sql_dialect = dialectEl ? dialectEl.value : 'sql';
-	var rawCode = document.getElementById('input').value;
+	var input = document.getElementById('input');
+	var rawCode = input.value;
 	var output = document.getElementById('output');
 	var language = document.getElementById('language').value;
 
@@ -1465,8 +1617,11 @@ function beautifyCodes() {
 		if(auto_copy == true){
 			copied = copy_output_data();
 		}
-		if(auto_clear == true){
-			document.getElementById('input').value = '';
+		/* A lazy Pro SQL/Tree-sitter load can take long enough for the user
+		 * to edit the input. Never erase a newer value than the one this
+		 * formatting request captured. */
+		if(auto_clear == true && input.value === rawCode){
+			input.value = '';
 		}
 		if(auto_clear_output == true && (auto_copy != true || copied == true)){
 			output.value = '';
@@ -1474,6 +1629,9 @@ function beautifyCodes() {
 	}
 
 	function runFormat() {
+		/* The UI may allow editing while an async grammar is loading. A stale
+		 * request must not overwrite the output with a result for old input. */
+		if (input.value !== rawCode) return false;
 		if(language == 'js'){
 			// Bare JS path — routes through formatBraceCode (deep-format.js)
 			// instead of beautifyCFML's per-line brace counter. Wins:
@@ -1539,6 +1697,7 @@ function beautifyCodes() {
 			output.value = result;
 		}
 		finishOutput();
+		return true;
 	}
 
 	/* Lazy-load any async resources the chosen options need, THEN format.
@@ -1580,9 +1739,13 @@ function beautifyCodes() {
 	}
 
 	if (preloads.length) {
-		Promise.all(preloads).then(runFormat);
-		return;
+		/* Return the Promise so the UI can expose a busy state while the
+		 * optional bundle is loading. Resource failures are already converted
+		 * to resolved fallbacks above; formatter failures remain rejected. */
+		return Promise.all(preloads).then(runFormat);
 	}
 
-	runFormat();
+	/* Keep the no-lazy-load path synchronous for the existing formatter API,
+	 * while returning a resolved Promise for the UI integration layer. */
+	return Promise.resolve(runFormat());
 }

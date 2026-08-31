@@ -4,7 +4,7 @@
 
 The `sample/` directory is **gitignored** and holds private `.cfm` files supplied by users for local diagnosis. **Sample files are never committed, never cloned by CI, never shared.**
 
-- `.github/workflows/test.yml` runs `node tests/run-tests.js` against tracked-only sources. `actions/checkout` cannot pull `sample/` because it isn't in the repo.
+- `.github/workflows/test.yml` runs `npm test` against tracked-only sources. This invokes the formatter, UI-contract, and vendored-WASM Tree-sitter suites. `actions/checkout` cannot pull `sample/` because it isn't in the repo.
 - `.github/workflows/test.yml` has an explicit guard step: if any `*.cfm` ever appears under `sample/` in the checked-out tree (e.g. someone forgot to gitignore), the CI fails loudly before tests run.
 - `tools/diagnose-corpus.js` reads from `sample/sample_cfm/` **locally only**. CI never invokes it.
 
@@ -17,10 +17,10 @@ The pinned test must:
 2. Include a **named description** in the first arg to `assertEqual` that calls out the user-reported scenario (so a future reader sees "this exists because user X reported Y").
 3. **Live in `tests/run-tests.js`** — no external file deps, no `require('./sample/...')`.
 
-When CI runs (`node tests/run-tests.js`):
-- All pinned tests run with hard assertions.
+When CI runs (`npm test`):
+- All pinned formatter tests, UI contract tests, and Tree-sitter tests run with hard assertions.
 - Any failure exits non-zero, blocking the merge / deploy.
-- Total runtime is < 5 seconds with no network or install.
+- Total runtime is expected to remain < 5 seconds with no network or install.
 
 ## Inventory — user case → pinned test
 
@@ -67,7 +67,10 @@ Every entry below is a real user-reported scenario from the issue/feedback histo
 ## Running locally
 
 ```bash
-node tests/run-tests.js          # all tests, < 5 seconds, no install
+npm test                         # all CI tests, no install or network
+node tests/run-tests.js          # formatter VM suite only
+node tests/ui.test.js            # UI contract suite only
+node tests/tree-sitter.test.mjs  # real vendored WASM suite only
 node tools/diagnose-corpus.js    # corpus audit — needs your private sample/sample_cfm/ files
 ```
 

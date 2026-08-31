@@ -1,7 +1,6 @@
 function clear_data() {
 	document.getElementById('input').value = '';
 	document.getElementById('output').value = '';
-	console.log("Clear Data");
 	simple_toast_msg('Clear Data');
 }
 function copy_output_data() {
@@ -17,10 +16,8 @@ function copy_output_data() {
 			copied = false;
 		}
 		if (copied) {
-			console.log("Copied the text.");
 			simple_toast_msg('Copied the text.');
 		} else {
-			console.log("Copy failed.");
 			simple_toast_msg('Copy failed.');
 		}
 		return copied;
