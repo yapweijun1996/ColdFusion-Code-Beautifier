@@ -31,6 +31,26 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. N
 3. Toggle the deep-format checkboxes (SQL / CSS / JS) to pick what gets formatted inside embedded blocks.
 4. Click **Beautify**. The right textarea shows the output and is copied to the clipboard if `Auto copy` is on. `Ctrl+Enter` / `Cmd+Enter` also runs Beautify; `Tab` and `Shift+Tab` indent the selected input lines, and `Escape` then `Tab` moves focus out of the editor.
 
+## Command-line use for AI agents
+
+The repository also includes a Node.js CLI, so an AI coding agent can clone this
+GitHub repository and format a file without using the browser UI. It uses the
+same formatter scripts and defaults to a separate `_beutifier.cfm` output file:
+
+```bash
+node tools/beautify-file.js path/to/source.cfm
+# writes path/to/source_beutifier.cfm
+
+# Print formatted code without creating a file
+node tools/beautify-file.js - --stdout < path/to/source.cfm
+
+# Select a language or enable the vendored multi-dialect SQL formatter
+node tools/beautify-file.js path/to/source.cfm --language cfml --pro-sql --dialect postgresql
+```
+
+The CLI never uploads source code. It requires only Node.js for the default
+formatter; `--pro-sql` uses the committed MIT-licensed vendor bundle.
+
 ## Architecture overview
 
 ```
@@ -51,10 +71,11 @@ Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## Testing
 
 ```bash
-npm test          # runs formatter, UI-contract, and Tree-sitter suites
+npm test          # runs formatter, UI-contract, CLI, and Tree-sitter suites
 # or individually:
 node tests/run-tests.js          # VM-harness formatter suite
 node tests/ui.test.js            # static HTML + editor interaction suite
+node tests/cli.test.js            # Node CLI end-to-end suite
 node tests/tree-sitter.test.mjs  # standalone tree-sitter Semantic Indent suite
 ```
 
@@ -66,6 +87,7 @@ node tests/tree-sitter.test.mjs  # standalone tree-sitter Semantic Indent suite
 - [docs/CHANGELOG.md](docs/CHANGELOG.md) — commit-by-commit release notes.
 - [docs/LIMITATIONS.md](docs/LIMITATIONS.md) — known edge cases across CFML / SQL / JS / CSS.
 - [docs/TESTING.md](docs/TESTING.md) — running the suite, helpers, adding new tests.
+- [docs/AI-AGENT-USAGE.md](docs/AI-AGENT-USAGE.md) — GitHub-only CLI usage for coding agents.
 
 ## File map
 
@@ -91,6 +113,8 @@ vendor/sql-formatter.min.js      Pro SQL vendored bundle (MIT)
 vendor/tree-sitter/              vendored tree-sitter runtime + CFML & CFScript grammar WASM (see vendor/tree-sitter/README.md)
 tests/run-tests.js               Node VM harness + assertEqual cases + content-preservation + sample idempotency
 tests/tree-sitter.test.mjs       standalone Semantic Indent suite (real WASM, outside the VM harness)
+tests/cli.test.js                end-to-end Node CLI tests
+tools/beautify-file.js           Node CLI for file/stdin formatting
 tools/spike-tree-sitter.mjs      self-contained tree-sitter CST spike / reference implementation
 ```
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — GitHub CLI access
+
+- Added `tools/beautify-file.js`, a local Node CLI that reuses the production
+  formatter pipeline for coding agents and automation.
+- File input writes a separate `_beutifier.cfm` output; stdin/stdout mode is
+  available for temporary buffers. Source code is never uploaded.
+- Added CLI end-to-end coverage to `npm test` and documented GitHub-only usage
+  in `docs/AI-AGENT-USAGE.md`.
+
 ## v7.4.0 — SCMC UI, accessibility, and CI hardening
 
 - Added semantic `main` / named `nav` landmarks, a polite toast status region,

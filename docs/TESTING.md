@@ -3,10 +3,11 @@
 ## Running the suite
 
 ```bash
-npm test          # runs formatter, UI-contract, and Tree-sitter suites
+npm test          # runs formatter, UI-contract, CLI, and Tree-sitter suites
 # or individually:
 node tests/run-tests.js          # VM-harness formatter suite
 node tests/ui.test.js            # static HTML + editor interaction suite
+node tests/cli.test.js            # Node CLI end-to-end suite
 node tests/tree-sitter.test.mjs  # standalone Semantic Indent suite
 ```
 

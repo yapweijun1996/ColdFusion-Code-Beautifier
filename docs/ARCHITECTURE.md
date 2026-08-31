@@ -4,6 +4,27 @@
 
 Browser-side code beautifier for CFML/HTML/CSS/JS/SQL. No build step, no dependencies. Script tags load in a fixed order, globals hang off `window`, and a Node VM harness re-runs the same browser globals for regression testing.
 
+## Node CLI
+
+`tools/beautify-file.js` provides a GitHub-hosted entry point for coding agents
+and local automation. It loads the same production scripts in a small VM-backed
+DOM harness, then calls `beautifyCodes()`; it does not maintain a second
+formatter implementation and never uploads source code.
+
+```text
+node tools/beautify-file.js source.cfm
+  └─ source_beutifier.cfm
+
+node tools/beautify-file.js - --stdout < source.cfm
+```
+
+File mode keeps the input unchanged and writes the fixed `_beutifier.cfm`
+suffix. Stdin/stdout mode is useful when an agent wants to format a temporary
+buffer. The CLI defaults match the browser's normal formatting options (Auto
+language, deep SQL/CSS/JS, and continuation alignment); flags can disable
+those stages, normalize indentation, select a dialect, or enable the committed
+Pro SQL bundle. Semantic Indent remains browser-only and opt-in.
+
 ## Load order
 
 ```
