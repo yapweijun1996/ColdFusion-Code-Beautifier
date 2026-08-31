@@ -188,6 +188,11 @@ function runRouter(input, language, deepFormat) {
 		'<cfquery name="q">\n\tINSERT INTO t (\n\ta,\n\t<cfif a>\n\t\t<cfif b>\n\t\t\t1\n\t\t<cfelse>\n\t\t\t2\n\t\t</cfif>\n\t<cfelseif c>\n\t\t3\n\t</cfif>\n\t)\n</cfquery>'
 	);
 	assertEqual(
+		'multi-line CFML control tags normalize before query fallback',
+		structuralHarness.context.normalizeStructuralCFMLTags('<cfif flag\n\t>'),
+		'<cfif flag >'
+	);
+	assertEqual(
 		'embedded query cfif is tracked before an own-line cfelse',
 		runRouter(
 			'<section>\n<cfquery name="q">\nSELECT x\nAND <cfif flag>\nx = 1\n<cfelse>\nx = 2\n</cfif>\nORDER BY x\n</cfquery>\nafter\n</section>',
@@ -470,6 +475,13 @@ assertEqual(
 	runRouter('<cfquery name="q">\nselect \'</cfquery>\' as x from t\n</cfquery>', 'cfml', true),
 	'<cfquery name="q">\n\tSELECT \'</cfquery>\' AS x\n\tFROM t\n</cfquery>'
 );
+
+var whitespaceCloseQuery = '<cfquery name="q">\nselect a,b from t where id=1\n</cfquery >';
+var whitespaceCloseExpected = '<cfquery name="q">\n\tSELECT a,\n\t\tb\n\tFROM t\n\tWHERE id = 1\n</cfquery >';
+assertEqual('deep cfquery recognizes whitespace before closing tag',
+	runRouter(whitespaceCloseQuery, 'cfml', true), whitespaceCloseExpected);
+assertEqual('deep cfquery whitespace closing tag is idempotent',
+	runRouter(whitespaceCloseExpected, 'cfml', true), whitespaceCloseExpected);
 
 assertEqual(
 	'sql doubled-quote escape does NOT confuse parser state — subsequent cfquery still gets deep-formatted',
@@ -857,6 +869,26 @@ assertEqual(
 );
 
 assertEqual(
+	'deep script preserves CFML conditional depth',
+	runRouter(
+		'<script>\n<cfif showHoliday>\nleave_preloadHolidays();\n</cfif>\nleave_preloadBalances();\n</script>',
+		'cfml',
+		true
+	),
+	'<script>\n\t<cfif showHoliday>\n\t\tleave_preloadHolidays();\n\t</cfif>\n\tleave_preloadBalances();\n</script>'
+);
+
+assertEqual(
+	'deep script preserves nested CFML and JavaScript brace depth',
+	runRouter(
+		'<script>\n<cfif condition>\nif (x) {\nfoo();\n}\n<cfelse>\nbar();\n</cfif>\nafter();\n</script>',
+		'cfml',
+		true
+	),
+	'<script>\n\t<cfif condition>\n\t\tif (x) {\n\t\t\tfoo();\n\t\t}\n\t<cfelse>\n\t\tbar();\n\t</cfif>\n\tafter();\n</script>'
+);
+
+assertEqual(
 	'deep script preserves closing brace inside string',
 	runRouter('<script>\nvar token = "}";\nif(x){foo();}\n</script>', 'cfml', true),
 	'<script>\n\tvar token = "}";\n\tif(x){\n\t\tfoo();\n\t}\n</script>'
@@ -887,6 +919,16 @@ assertEqual(
 );
 
 assertEqual(
+	'deep script preserves multiline template payload indentation',
+	runRouter(
+		'<script>\nvar html = `\n<div>\n\t<cfif flag>\n\t\tvalue\n\t</cfif>\n</div>\n`;\n</script>',
+		'cfml',
+		true
+	),
+	'<script>\n\tvar html = `\n\t<div>\n\t\t<cfif flag>\n\t\t\tvalue\n\t\t</cfif>\n\t</div>\n\t`;\n</script>'
+);
+
+assertEqual(
 	'deep script preserves regex literal with semicolon — empty {} stays inline',
 	// Expected updated 2026-05-14 commit-followup: empty `{}` no longer
 	// splits to `{\n}`. The verbose split was visually noisy for
@@ -906,6 +948,16 @@ assertEqual(
 	'non javascript script skipped',
 	runRouter('<script type="text/x-template"><div>{{ value }}</div></script>', 'cfml', true),
 	'<script type="text/x-template"><div>{{ value }}</div></script>'
+);
+
+assertEqual(
+	'bare JavaScript inside CFML conditional gets brace indentation',
+	runRouter(
+		'<cfif frommode is \'new\'>\nif ($.trim(document.ERPform.fmi_staff_unique.value))\n{\nleave_renderBU();\n}\n</cfif>',
+		'cfml',
+		true
+	),
+	'<cfif frommode is \'new\'>\n\tif ($.trim(document.ERPform.fmi_staff_unique.value))\n\t{\n\t\tleave_renderBU();\n\t}\n</cfif>'
 );
 
 assertEqual(

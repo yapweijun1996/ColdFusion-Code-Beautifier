@@ -849,6 +849,64 @@ function expandPrefixToVisualCols(prefix) {
 	return col;
 }
 
+/* Conservative detector for JavaScript fragments that are emitted inside
+ * CFML control-flow tags without a surrounding <script> element. A CFML file
+ * can contain HTML, SQL, and prose, so do not turn every tag-free line into
+ * JavaScript; only recognizable JS statements/control headers activate the
+ * brace state for that fragment. */
+function looksLikeJavaScriptLine(line) {
+	var text = (line || '').trim();
+	if (text === '' || text.charAt(0) === '<' || /^\/\/|^--/.test(text)) return false;
+	if (/^(select|from|where|and|or|not|inner|left|right|full|cross|join|on|group|order|having|union|insert|into|update|delete|values|returning)\b/i.test(text)) return false;
+	return /^(?:if|for|while|switch|catch|with)\s*\(/.test(text)
+		|| /^(?:function|else|try|finally)\b/.test(text)
+		|| /^(?:var|let|const)\s+[A-Za-z_$]/.test(text)
+		|| /^(?:return|throw|new)\b/.test(text)
+		|| /^(?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]*\s*\(/.test(text)
+		|| /^(?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]*\s*=/.test(text);
+}
+
+function isJavaScriptBlockHeader(line) {
+	var text = (line || '').trim();
+	return /^(?:if|for|while|switch|catch|with)\s*\(/.test(text)
+		|| /^(?:function|else|try|finally)\b/.test(text);
+}
+
+function hasUnclosedJsTemplateLiteral(line) {
+	var inTemplate = false;
+	var quote = null;
+	for (var i = 0; i < line.length; i++) {
+		var c = line[i];
+		if (quote) {
+			if (c === '\\') { i++; continue; }
+			if (c === quote) quote = null;
+			continue;
+		}
+		if (inTemplate) {
+			if (c === '\\') { i++; continue; }
+			if (c === '`') inTemplate = false;
+			continue;
+		}
+		if (c === '"' || c === "'") {
+			quote = c;
+		} else if (c === '`') {
+			inTemplate = true;
+		} else if (c === '/' && line[i + 1] === '/') {
+			break;
+		}
+	}
+	return inTemplate;
+}
+
+function containsUnescapedBacktick(line) {
+	var count = 0;
+	for (var i = 0; i < line.length; i++) {
+		if (line[i] === '\\') { i++; continue; }
+		if (line[i] === '`') count++;
+	}
+	return count % 2 === 1;
+}
+
 function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, normalize_indent, normalize_tab_width) {
 
 	if (normalize_indent) {
@@ -909,6 +967,15 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 	var inJsBlock = !hasTagsOutsideStrings(rawCode);
 	var inStyleBlock = false;
 	var inCfscriptBlock = false;
+	/* A CFML file may emit bare JavaScript inside `<cfif>` without a
+	 * surrounding `<script>`. Keep a short-lived JS fragment state so braces
+	 * in that region are aligned, while SQL/HTML remains structurally inert. */
+	var inJsFragment = false;
+	var jsFragmentBraceDepth = 0;
+	var jsFragmentPendingBrace = false;
+	var inJsTemplateLiteral = false;
+	var templateOrigPrefix = '';
+	var templateNewPrefix = '';
 	var parenDepth = 0;
 	var bracketDepth = 0;
 	var prevLastTerm = '';
@@ -953,6 +1020,27 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 		var origPrefix = lines[i].substring(0, origCol);
 		var line = lines[i].trim();
 		var line_data = line.toLowerCase();
+
+		/* Template-literal lines are JavaScript string content, not markup or
+		 * CFML structure. Preserve their indentation relative to the opening
+		 * line so embedded `<cfif>`/HTML text cannot alter parser depth. */
+		if (inJsTemplateLiteral) {
+			var templateContent = lines[i].substring(origCol);
+			var templateRelativePrefix = origPrefix.indexOf(templateOrigPrefix) === 0
+				? origPrefix.substring(templateOrigPrefix.length)
+				: '';
+			if (templateContent.trim() === '') {
+				lines[i] = '';
+			} else {
+				lines[i] = templateNewPrefix + templateRelativePrefix + templateContent;
+			}
+			if (containsUnescapedBacktick(templateContent)) {
+				inJsTemplateLiteral = false;
+				templateOrigPrefix = '';
+				templateNewPrefix = '';
+			}
+			continue;
+		}
 
 		// Blank line — emit truly empty, never indentation-only. Otherwise
 		// applyIndent() (or the comment/multi-line-tag continuation handlers)
@@ -1173,6 +1261,12 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 				parentAnchorOrigPrefix  = '';
 				parentAnchorActive      = false;
 				parentAnchorIndentLevel = 0;
+				inJsFragment = false;
+				jsFragmentBraceDepth = 0;
+				jsFragmentPendingBrace = false;
+				inJsTemplateLiteral = false;
+				templateOrigPrefix = '';
+				templateNewPrefix = '';
 			} else if (tag_name === 'cfscript') {
 				inJsBlock = !line_data.startsWith('</');
 				inStyleBlock = false;
@@ -1183,6 +1277,12 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 				parentAnchorOrigPrefix  = '';
 				parentAnchorActive      = false;
 				parentAnchorIndentLevel = 0;
+				inJsFragment = false;
+				jsFragmentBraceDepth = 0;
+				jsFragmentPendingBrace = false;
+				inJsTemplateLiteral = false;
+				templateOrigPrefix = '';
+				templateNewPrefix = '';
 			} else if (tag_name === 'cfquery' || tag_name === 'style') {
 				inJsBlock = false;
 				inStyleBlock = tag_name === 'style' && !line_data.startsWith('</');
@@ -1193,6 +1293,12 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 				parentAnchorOrigPrefix  = '';
 				parentAnchorActive      = false;
 				parentAnchorIndentLevel = 0;
+				inJsFragment = false;
+				jsFragmentBraceDepth = 0;
+				jsFragmentPendingBrace = false;
+				inJsTemplateLiteral = false;
+				templateOrigPrefix = '';
+				templateNewPrefix = '';
 			}
 
 			/* Carry the hierarchy result to the next line and remember any
@@ -1219,6 +1325,16 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 			}
 		}
 
+		/* A bare JS fragment may follow a CFML opener without `<script>`.
+		 * Activate brace handling only for recognizable JS, never for SQL or
+		 * ordinary markup. A pending block header covers Allman-style braces
+		 * where `if (...)` and `{` are on separate lines. */
+		if (!inJsBlock && !inStyleBlock && !inJsFragment && !pendingRawClose
+				&& (jsFragmentPendingBrace || looksLikeJavaScriptLine(line))) {
+			inJsFragment = true;
+			jsFragmentPendingBrace = false;
+		}
+
 		/* maintain_yn [start] */
 		if(line_data.startsWith("//")){
 			maintain_yn = "y";
@@ -1230,7 +1346,7 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 		/* maintain_yn [end  ] */
 
 		if(maintain_yn == "n"){
-			if (!inJsBlock && !inStyleBlock) {
+			if (!inJsBlock && !inStyleBlock && !inJsFragment) {
 				/* Ordinary markup text and SQL are structurally inert apart
 				 * from any embedded CF tags scanned above. Do not interpret
 				 * braces/brackets in prose, SQL, JSON attributes, or values. */
@@ -1269,8 +1385,8 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 			/* Detect-and-anchor continuation alignment. Three OR'd signals
 			 * (see isContinuationLine): prior line ends in open terminal,
 			 * current line starts with joiner, or unclosed ()/[] depth.
-			 * Only active inside <script>...</script> (inJsBlock gate)
-			 * with at least one anchor recorded.
+			 * Active inside <script>...</script> or a detected bare JS
+			 * fragment, with at least one anchor recorded.
 			 *
 			 * Emission strategy — preserve the *raw whitespace* suffix
 			 * that the child added beyond the parent's prefix, so the
@@ -1282,7 +1398,7 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 			 * past parent, e.g. `})` on its own line), fall back to
 			 * applyIndent so leadingClosersOf pre-decrement applies. */
 			var isCont = preserveContAlign
-				&& inJsBlock
+				&& (inJsBlock || inJsFragment)
 				&& parentAnchorActive
 				&& isContinuationLine(braceCounts, prevLastTerm, parenDepth, bracketDepth);
 
@@ -1303,7 +1419,7 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 				 *       parent is a prior statement at the same column). */
 				if (origCol < parentAnchorOrigPrefix.length || extraWs === '') {
 					applyIndent();
-					if (inJsBlock) {
+					if (inJsBlock || inJsFragment) {
 						parentAnchorOrigPrefix  = origPrefix;
 						parentAnchorActive      = true;
 						parentAnchorIndentLevel = indentLevel;
@@ -1315,7 +1431,7 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 				}
 			} else {
 				applyIndent();
-				if (inJsBlock) {
+				if (inJsBlock || inJsFragment) {
 					parentAnchorOrigPrefix  = origPrefix;
 					parentAnchorActive      = true;
 					parentAnchorIndentLevel = indentLevel;
@@ -1336,6 +1452,37 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 			indentLevel += braceDelta;
 			if (embeddedTagResult) {
 				indentLevel = embeddedTagResult.nextLevel + braceDelta;
+			}
+
+			/* Bare JS fragments end when their own brace depth returns to zero.
+			 * Keep a one-line header pending so Allman-style `{` on the next
+			 * line still enters the fragment; CFML/HTML/SQL after that point is
+			 * handled by the normal structural path. */
+			if (inJsFragment) {
+				jsFragmentBraceDepth += braceCounts.open - braceCounts.close;
+				if (jsFragmentBraceDepth <= 0) {
+					jsFragmentBraceDepth = 0;
+					jsFragmentPendingBrace = isJavaScriptBlockHeader(line)
+						&& braceCounts.open === 0
+						&& braceCounts.close === 0;
+					inJsFragment = false;
+					parentAnchorOrigPrefix = '';
+					parentAnchorActive = false;
+					parentAnchorIndentLevel = 0;
+				}
+			}
+
+			if (!inJsTemplateLiteral
+					&& (inJsBlock || inJsFragment)
+					&& hasUnclosedJsTemplateLiteral(line)) {
+				inJsTemplateLiteral = true;
+				/* Continuation alignment can add visual spaces after the
+				 * structural tab prefix on the opener. Those spaces must not
+				 * become the template's common base on the next pass. */
+				templateOrigPrefix = origPrefix.indexOf('\t') === -1
+					? origPrefix
+					: origPrefix.replace(/ +$/, '');
+				templateNewPrefix = (lines[i].match(/^[\t]*/) || [''])[0];
 			}
 			}
 		}

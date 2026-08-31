@@ -1,4 +1,60 @@
+function normalizeStructuralCFMLTags(body) {
+	if (typeof body !== 'string') return body;
+	var lines = body.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+	var result = [];
+	var structuralStart = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b/i;
+	var inComment = false;
+
+	for (var i = 0; i < lines.length; i++) {
+		var line = lines[i];
+		var trimmed = line.trim();
+		var startsComment = /^<!---?/.test(trimmed);
+		if (inComment || startsComment) {
+			result.push(line);
+			if (trimmed.indexOf('--->') !== -1 || trimmed.indexOf('-->') !== -1) inComment = false;
+			else if (startsComment) inComment = true;
+			continue;
+		}
+		if (!structuralStart.test(trimmed) || findCFMLTagClose(trimmed) !== -1) {
+			result.push(line);
+			continue;
+		}
+
+		var combined = trimmed;
+		var closeIndex = -1;
+		while (i + 1 < lines.length) {
+			i++;
+			combined += ' ' + lines[i].trim();
+			closeIndex = findCFMLTagClose(combined);
+			if (closeIndex !== -1) break;
+		}
+		result.push(combined);
+	}
+	return result.join('\n');
+}
+
+function findCFMLTagClose(line) {
+	var quote = null;
+	for (var i = 0; i < line.length; i++) {
+		var char = line[i];
+		if (quote) {
+			if (char === quote) {
+				if (line[i + 1] === quote) { i++; continue; }
+				quote = null;
+			}
+			continue;
+		}
+		if (char === '"' || char === "'") {
+			quote = char;
+		} else if (char === '>') {
+			return i;
+		}
+	}
+	return -1;
+}
+
 function bodyHasStructuralCFMLControlFlow(body) {
+	body = normalizeStructuralCFMLTags(body);
 	// "Structural" = a CFML control-flow tag that occupies its own line
 	// in the input. Both built-in beautifySQL (tokenizer-based) and the
 	// Pro SQL engine (full AST) cannot understand CFML conditionals,
@@ -498,6 +554,21 @@ function detectAllLeavesStartWithWhere(treeLines) {
 	return seenLeaf;
 }
 
+function hasStructuralTreeBody(treeLines) {
+	var structural = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b[^>]*>$/i;
+	for (var i = 0; i < treeLines.length; i++) {
+		var t = treeLines[i].trim();
+		if (t !== '' && !structural.test(t) && !/^<!---[\s\S]*--->$/.test(t)) return true;
+	}
+	return false;
+}
+
+function hasStandaloneWhereAtEnd(text) {
+	if (typeof text !== 'string') return false;
+	var lines = text.trim().split('\n');
+	return lines.length > 0 && /^where$/i.test(lines[lines.length - 1].trim());
+}
+
 function stripWhereFromLeaves(treeLines) {
 	var structural = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b[^>]*>$/i;
 	return treeLines.map(function(line) {
@@ -781,9 +852,10 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 			// multi-line subqueries and inline CFML comments, which the
 			// outer beautifyCFML pass would otherwise flatten.
 			if (bodyHasStructuralCFMLControlFlow(body)) {
+				var structuralBody = normalizeStructuralCFMLTags(body);
 				var verbatimSource = (originalBodies[currentIndex] !== undefined)
-					? originalBodies[currentIndex]
-					: body;
+					? normalizeStructuralCFMLTags(originalBodies[currentIndex])
+					: structuralBody;
 
 				/* If the outer beautifier already produced exactly the same
 				 * structural body as the current source, keep that canonical
@@ -791,8 +863,8 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 				 * query: the first pass uses Tier 3 and the next pass must not
 				 * reinterpret the generated indentation as fresh user indent and
 				 * add another tab to every CFML branch. */
-				if (!sqlPro && body === verbatimSource) {
-					return maybeNormalizeCFMLTags(parentIndent + openTag + body + closeTag);
+				if (!sqlPro && structuralBody === verbatimSource) {
+					return maybeNormalizeCFMLTags(parentIndent + openTag + structuralBody + closeTag);
 				}
 
 				// Tier 1 — Marker-injection: when Pro SQL is enabled, replace
@@ -809,7 +881,14 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 					try {
 						var verbatimCleanedForMarker = cleanEmbeddedBody(verbatimSource);
 						if (verbatimCleanedForMarker !== '') {
-							var marked = protectStructuralCFMLAsColumnMarkers(verbatimCleanedForMarker);
+							/* SQL formatter indentation is not semantic here: marker
+							 * restoration adds the CFML branch depth afterwards. Strip
+							 * every line prefix before formatting so a second pass cannot
+							 * re-add the previous restoration indentation. */
+							var markerInput = verbatimCleanedForMarker.split('\n').map(function(line) {
+								return line.replace(/^[ \t]*/, '');
+							}).join('\n');
+							var marked = protectStructuralCFMLAsColumnMarkers(markerInput);
 							var protectedSQLM = protectCFMLTokens(marked.code);
 							var formattedSQLM = formatProSQLSync(protectedSQLM.code, sqlDialect);
 							var restoredCFMLM = restoreCFMLTokens(formattedSQLM, protectedSQLM.tokens);
@@ -847,10 +926,18 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 					try {
 						var cleanedForHoist = cleanEmbeddedBody(verbatimSource);
 						var split = splitCfqueryBodyAtCfifTree(cleanedForHoist);
-						if (split && detectAllLeavesStartWithWhere(split.treeLines)) {
-							var strippedTree = stripWhereFromLeaves(split.treeLines);
+						var leavesStartWithWhere = split && detectAllLeavesStartWithWhere(split.treeLines);
+						var alreadyHoistedWhere = split
+							&& hasStandaloneWhereAtEnd(split.pre)
+							&& hasStructuralTreeBody(split.treeLines)
+							&& !leavesStartWithWhere;
+						if (split && (leavesStartWithWhere || alreadyHoistedWhere)) {
+							var strippedTree = leavesStartWithWhere
+								? stripWhereFromLeaves(split.treeLines) : split.treeLines;
 							var preTrimmed = split.pre.replace(/\s+$/, '');
-							var preToFormat = preTrimmed + (preTrimmed ? '\n' : '') + 'where';
+							var preToFormat = hasStandaloneWhereAtEnd(preTrimmed)
+								? preTrimmed
+								: preTrimmed + (preTrimmed ? '\n' : '') + 'where';
 							var protectedPre = protectCFMLTokens(preToFormat);
 							var formattedPre = formatProSQLSync(protectedPre.code, sqlDialect);
 							var restoredPre = restoreCFMLTokens(formattedPre, protectedPre.tokens);
@@ -860,16 +947,19 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 							var treeFormatted = formatStrippedTree(strippedTree);
 
 							var postTrimmed = split.post.trim();
+							var postInput = postTrimmed.split('\n').map(function(line) {
+								return line.replace(/^[ \t]*/, '');
+							}).join('\n');
 							var formattedPost = '';
-							if (postTrimmed !== '') {
+							if (postInput !== '') {
 								try {
-									var postProt = protectCFMLTokens(postTrimmed);
+									var postProt = protectCFMLTokens(postInput);
 									var postUppered = uppercaseSQLKeywordsInProtected(postProt.code);
 									var postSpaced = normalizeSQLEqualsSpacing(postUppered);
 									formattedPost = restoreCFMLTokens(postSpaced, postProt.tokens);
 									formattedPost = '\t' + formattedPost.replace(/\n/g, '\n\t');
 								} catch (postErr) {
-									formattedPost = '\t' + postTrimmed;
+									formattedPost = '\t' + postInput;
 									if (typeof console !== 'undefined' && console.warn) {
 										console.warn('[deep-format] Phase 3 post-cfif clause uppercase failed (cfquery #' + currentIndex + '), keeping verbatim. Error:', postErr && postErr.message);
 									}
@@ -960,9 +1050,18 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 				if (bodyHasUserIndent(verbatimSource)) {
 					var verbatimCleaned = cleanEmbeddedBody(verbatimSource);
 					if (verbatimCleaned !== '') {
+						var canonicalStructuralBody = cleanEmbeddedBody(structuralBody);
 						var verbatimFinal = alignStructuralControlFlowIndent(
-							cleanEmbeddedBody(body),
+							canonicalStructuralBody,
 							verbatimCleaned
+						);
+						/* The first merge may change line prefixes used by the
+						 * following structural match. Reconcile once more against the
+						 * same canonical body so a fallback query is a fixed point in
+						 * the same invocation, not only after reformatting the file. */
+						verbatimFinal = alignStructuralControlFlowIndent(
+							canonicalStructuralBody,
+							verbatimFinal
 						);
 						if (sqlPro) {
 							try {
@@ -1022,7 +1121,15 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 				return parentIndent + openTag + body + closeTag;
 			}
 
-			var formattedJS = formatBraceCode(cleanEmbeddedBody(body), false);
+			/* Template-literal payloads can contain HTML, CFML, and whitespace
+			 * that is part of the rendered string. The outer CFML pass now keeps
+			 * that payload relative to its opener; do not run a second JS pass
+			 * that would rewrite its absolute content indentation. */
+			if (hasMultilineBraceCodeTemplate(body)) {
+				return parentIndent + openTag + body + closeTag;
+			}
+
+			var formattedJS = formatBraceCodeWithCFML(cleanEmbeddedBody(body));
 			return parentIndent + openTag + '\n' + indentEmbeddedBody(formattedJS, parentIndent) + '\n' + parentIndent + closeTag;
 		});
 	}
@@ -1071,17 +1178,16 @@ function replaceEmbeddedBlock(code, tagName, formatter) {
 		var parentIndent = /^[ \t]*$/.test(prefix) ? prefix : "";
 		var blockStart = openStart - parentIndent.length;
 		var contentStart = openEnd;
-		var closeStart = findClosingTagOutsideText(code, tagName, contentStart);
+		var closing = findClosingTagOutsideText(code, tagName, contentStart);
 
 		output += code.slice(index, blockStart);
-		if (closeStart == -1) {
+		if (!closing) {
 			output += code.slice(blockStart);
 			break;
 		}
 
-		var closeEnd = closeStart + tagName.length + 3;
-		output += formatter(parentIndent, openMatch[0], code.slice(contentStart, closeStart), code.slice(closeStart, closeEnd));
-		index = closeEnd;
+		output += formatter(parentIndent, openMatch[0], code.slice(contentStart, closing.start), code.slice(closing.start, closing.end));
+		index = closing.end;
 	}
 
 	return output;
@@ -1134,7 +1240,7 @@ function isInsideCommentOrString(code, pos) {
 }
 
 function findClosingTagOutsideText(code, tagName, startIndex) {
-	var closeTag = '</' + tagName + '>';
+	var closeTag = '</' + tagName;
 	var lowerCode = code.toLowerCase();
 	var quote = "";
 	var inLineComment = false;
@@ -1191,12 +1297,15 @@ function findClosingTagOutsideText(code, tagName, startIndex) {
 			quote = char;
 			continue;
 		}
-		if (lowerCode.slice(i, i + closeTag.length) == closeTag) {
-			return i;
+		if (lowerCode.slice(i, i + closeTag.length) == closeTag
+				&& /[\s>]/.test(code[i + closeTag.length] || '')) {
+			var end = i + closeTag.length;
+			while (end < code.length && /[ \t\r\n]/.test(code[end])) end++;
+			if (code[end] == '>') return { start: i, end: end + 1 };
 		}
 	}
 
-	return -1;
+	return null;
 }
 
 function protectCFMLTokens(sqlBody) {
@@ -1363,13 +1472,56 @@ function indentEmbeddedBody(body, parentIndent) {
 	}).join('\n');
 }
 
+/* Count SQL parenthesis changes after hiding quoted strings and CFML tokens.
+ * This lets the structural-query fallback distinguish a real multi-line
+ * subquery continuation from an ordinary CFML branch body. */
+function scanSQLParentheses(line) {
+	var protectedText = protectCFMLTokens(line).code;
+	var delta = 0;
+	var hasSelect = false;
+	for (var i = 0; i < protectedText.length; i++) {
+		if (protectedText[i] === '-' && protectedText[i + 1] === '-') break;
+		if (protectedText[i] === '/' && protectedText[i + 1] === '*') {
+			var endComment = protectedText.indexOf('*/', i + 2);
+			if (endComment === -1) break;
+			i = endComment + 1;
+			continue;
+		}
+		if (protectedText[i] === '(') delta++;
+		else if (protectedText[i] === ')') delta--;
+		else if (/[A-Za-z]/.test(protectedText[i])) {
+			var wordStart = i;
+			while (i < protectedText.length && /[A-Za-z0-9_$]/.test(protectedText[i])) i++;
+			if (protectedText.slice(wordStart, i).toLowerCase() === 'select') hasSelect = true;
+			i--;
+		}
+	}
+	return { delta: delta, hasSelect: hasSelect };
+}
+
+function buildMarkupCommentMask(lines) {
+	var mask = [];
+	var inComment = false;
+	for (var i = 0; i < lines.length; i++) {
+		var trimmed = lines[i].trim();
+		var starts = /^<!---?/.test(trimmed);
+		mask[i] = inComment || starts;
+		if (trimmed.indexOf('--->') !== -1 || trimmed.indexOf('-->') !== -1) {
+			inComment = false;
+		} else if (starts) {
+			inComment = true;
+		}
+	}
+	return mask;
+}
+
 /* Structural query fallback may preserve SQL continuation whitespace from the
  * original body, but CFML control tags and ordinary SQL lines must use the
  * indentation computed by the outer named-tag hierarchy. A minimum-indent trim
  * is unsafe for legacy mixed whitespace: one outlier `<cfelseif>` beginning
  * with a tab makes the common 16-space prefix survive on every other line.
- * Merge canonical structural/baseline lines while preserving substantially
- * deeper pure-tab SQL continuations. */
+ * Merge canonical structural/baseline lines while preserving deeper pure-tab
+ * SQL continuations at the top level or inside an open SQL parenthesis. */
 function alignStructuralControlFlowIndent(canonicalBody, preservedBody) {
 	if (typeof canonicalBody !== 'string' || typeof preservedBody !== 'string') {
 		return preservedBody;
@@ -1378,15 +1530,27 @@ function alignStructuralControlFlowIndent(canonicalBody, preservedBody) {
 	var structural = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b[^>]*>$/i;
 	var canonicalLines = canonicalBody.split('\n');
 	var preservedLines = preservedBody.split('\n');
+	var canonicalCommentMask = buildMarkupCommentMask(canonicalLines);
 	var canonicalIndex = 0;
+	var inMarkupCommentForTags = false;
 
 	for (var i = 0; i < preservedLines.length; i++) {
 		var preservedTrimmed = preservedLines[i].trim();
+		var startsMarkupComment = /^<!---?/.test(preservedTrimmed);
+		if (inMarkupCommentForTags || startsMarkupComment) {
+			if (preservedTrimmed.indexOf('--->') !== -1 || preservedTrimmed.indexOf('-->') !== -1) {
+				inMarkupCommentForTags = false;
+			} else {
+				inMarkupCommentForTags = true;
+			}
+			continue;
+		}
 		if (!structural.test(preservedTrimmed)) continue;
 
 		var preservedName = preservedTrimmed.match(/^<\/?([a-zA-Z][\w-]*)/)[1].toLowerCase();
 		var matchIndex = -1;
 		for (var j = canonicalIndex; j < canonicalLines.length; j++) {
+			if (canonicalCommentMask[j]) continue;
 			var canonicalTrimmed = canonicalLines[j].trim();
 			var canonicalMatch = canonicalTrimmed.match(/^<\/?([a-zA-Z][\w-]*)/);
 			if (canonicalMatch
@@ -1407,23 +1571,60 @@ function alignStructuralControlFlowIndent(canonicalBody, preservedBody) {
 
 	/* Reconcile the remaining SQL lines with the canonical structural body.
 	 * Space-only and mixed prefixes are legacy baseline/column whitespace, so
-	 * the canonical line wins. Preserve only a pure-tab prefix that is at least
-	 * three levels deeper than the canonical line; that is the distinctive
-	 * shape of a real SQL continuation, such as `from u` inside a hand-indented
-	 * subquery, rather than a one-level CFML branch variation. */
+	 * the canonical line wins. Preserve a pure-tab prefix only when it is
+	 * deeper than the canonical line; this keeps intentional SQL continuation
+	 * alignment stable across later passes without allowing outdented or
+	 * mixed-whitespace lines to override the structural hierarchy. */
+	var preservedStructuralDepth = 0;
+	var preservedSQLParenDepth = 0;
+	var preservedSQLSubqueryDepth = 0;
+	var inMarkupComment = false;
 	for (var k = 0; k < preservedLines.length && k < canonicalLines.length; k++) {
 		var preservedPrefix = (preservedLines[k].match(/^[ \t]*/) || [''])[0];
 		var canonicalPrefix = (canonicalLines[k].match(/^[ \t]*/) || [''])[0];
 		var preservedTrimmedAtK = preservedLines[k].trim();
+		var startsMarkupCommentAtK = /^<!---?/.test(preservedTrimmedAtK);
+		if (inMarkupComment || startsMarkupCommentAtK) {
+			if (preservedTrimmedAtK.indexOf('--->') !== -1 || preservedTrimmedAtK.indexOf('-->') !== -1) {
+				inMarkupComment = false;
+			} else {
+				inMarkupComment = true;
+			}
+			continue;
+		}
+		var structuralKindAtK = structural.test(preservedTrimmedAtK)
+				? classifyStructuralCFMLTag(preservedTrimmedAtK) : 'UNKNOWN';
+		var sqlStructureAtK = scanSQLParentheses(preservedLines[k]);
+		var parenDeltaAtK = sqlStructureAtK.delta;
+		if (sqlStructureAtK.hasSelect
+				&& (preservedSQLParenDepth > 0 || parenDeltaAtK > 0)) {
+			preservedSQLSubqueryDepth = Math.max(
+				preservedSQLSubqueryDepth,
+				preservedSQLParenDepth + parenDeltaAtK
+			);
+		}
 		if (preservedTrimmedAtK !== canonicalLines[k].trim()
 				|| /^<!---?/.test(preservedTrimmedAtK)
-				|| /^\/\*/.test(preservedTrimmedAtK)) continue;
+				|| /^\/\*/.test(preservedTrimmedAtK)) {
+			if (structuralKindAtK === 'OPEN') preservedStructuralDepth++;
+			else if (structuralKindAtK === 'CLOSE') preservedStructuralDepth = Math.max(0, preservedStructuralDepth - 1);
+			preservedSQLParenDepth = Math.max(0, preservedSQLParenDepth + parenDeltaAtK);
+			continue;
+		}
 		var pureTabPrefix = preservedPrefix.length > 0
 				&& preservedPrefix.replace(/\t/g, '') === '';
 		if (structural.test(preservedTrimmedAtK)
+				|| (preservedStructuralDepth > 0 && preservedSQLSubqueryDepth <= 0)
 				|| !pureTabPrefix
-				|| preservedPrefix.length - canonicalPrefix.length <= 2) {
+				|| preservedPrefix.length <= canonicalPrefix.length) {
 			preservedLines[k] = canonicalLines[k];
+		}
+		if (structuralKindAtK === 'OPEN') preservedStructuralDepth++;
+		else if (structuralKindAtK === 'CLOSE') preservedStructuralDepth = Math.max(0, preservedStructuralDepth - 1);
+		preservedSQLParenDepth = Math.max(0, preservedSQLParenDepth + parenDeltaAtK);
+		if (preservedSQLSubqueryDepth > 0
+				&& preservedSQLParenDepth < preservedSQLSubqueryDepth) {
+			preservedSQLSubqueryDepth = 0;
 		}
 	}
 
@@ -1490,6 +1691,112 @@ function formatBraceCode(code, splitAdjacentBlocks) {
 		.replace(/__BRACECODE_EMPTY_ARR__/g, '[]');
 	joined = restoreBraceCodeParens(joined, protectedParens.tokens);
 	return restoreBraceCodeText(joined, protectedText.tokens);
+}
+
+/* Format JavaScript blocks that contain own-line CFML control tags.
+ *
+ * `formatBraceCode` intentionally knows nothing about CFML, so a script body
+ * such as `<cfif>\ncall();\n</cfif>` used to lose the CFML depth when the deep
+ * JS pass ran after beautifyCFML. Protect the tags before brace formatting,
+ * then add a separate named CFML depth to the brace-formatted lines. Strings,
+ * comments, and template literals are protected first, so literal `<cfif>`
+ * text is never treated as structure. */
+function hasMultilineBraceCodeTemplate(code) {
+	var opening = -1;
+	for (var i = 0; i < code.length; i++) {
+		if (code[i] !== '`') continue;
+		var slashCount = 0;
+		for (var j = i - 1; j >= 0 && code[j] === '\\'; j--) slashCount++;
+		if (slashCount % 2 === 1) continue;
+		if (opening === -1) {
+			opening = i;
+		} else {
+			if (code.slice(opening, i).indexOf('\n') !== -1) return true;
+			opening = -1;
+		}
+	}
+	return false;
+}
+
+function formatBraceCodeWithCFML(code) {
+	var protectedText = protectBraceCodeText(code);
+	var protectedTags = protectBraceCodeCFMLTags(protectedText.code);
+	var formatted = formatBraceCode(protectedTags.code, false);
+	var lines = formatted.split('\n');
+	var result = [];
+	var cfDepth = 0;
+	var tagLine = /^__CFMLBRACETAG_(\d+)__$/;
+
+	for (var i = 0; i < lines.length; i++) {
+		var line = lines[i];
+		var leading = (line.match(/^[\t]*/) || [''])[0];
+		var trimmed = line.trim();
+		var tagMatch = trimmed.match(tagLine);
+		var tag = tagMatch ? protectedTags.tags[parseInt(tagMatch[1], 10)] : null;
+		var structuralKind = tag ? classifyStructuralCFMLTag(tag.trim()) : 'UNKNOWN';
+
+		if (tag && structuralKind === 'CLOSE') {
+			cfDepth = Math.max(0, cfDepth - 1);
+			result.push(leading + repeatTab(cfDepth) + tag.trim());
+		} else if (tag && structuralKind === 'SIBLING') {
+			cfDepth = Math.max(0, cfDepth - 1);
+			result.push(leading + repeatTab(cfDepth) + tag.trim());
+			cfDepth++;
+		} else if (tag && structuralKind === 'OPEN') {
+			result.push(leading + repeatTab(cfDepth) + tag.trim());
+			cfDepth++;
+		} else {
+			result.push(leading + repeatTab(cfDepth) + trimmed);
+		}
+	}
+
+	return restoreBraceCodeText(
+		restoreBraceCodeCFMLTags(result.join('\n'), protectedTags.tags),
+		protectedText.tokens
+	);
+}
+
+/* Protect CFML tags after protectBraceCodeText has hidden strings/comments.
+ * The small scanner honors quoted attributes so `>` inside a tag value does
+ * not terminate the token early. */
+function protectBraceCodeCFMLTags(code) {
+	var tags = [];
+	var output = '';
+	var i = 0;
+	while (i < code.length) {
+		if (code[i] === '<' && /^<\/?cf[a-z]/i.test(code.slice(i))) {
+			var quote = null;
+			var end = i + 1;
+			for (; end < code.length; end++) {
+				var c = code[end];
+				if (quote) {
+					if (c === quote) quote = null;
+					continue;
+				}
+				if (c === '"' || c === "'") {
+					quote = c;
+					continue;
+				}
+				if (c === '>') break;
+			}
+			if (end < code.length && code[end] === '>') {
+				var index = tags.length;
+				tags.push(code.slice(i, end + 1));
+				output += '__CFMLBRACETAG_' + index + '__';
+				i = end + 1;
+				continue;
+			}
+		}
+		output += code[i++];
+	}
+	return { code: output, tags: tags };
+}
+
+function restoreBraceCodeCFMLTags(code, tags) {
+	for (var i = 0; i < tags.length; i++) {
+		code = code.split('__CFMLBRACETAG_' + i + '__').join(tags[i]);
+	}
+	return code;
 }
 
 function formatCSSCode(code) {

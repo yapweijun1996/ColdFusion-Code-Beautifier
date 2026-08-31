@@ -64,4 +64,30 @@ var customRun = run([inputPath, '--output', customOutput, '--no-deep-sql', '--no
 check('CLI accepts an explicit _beutifier.cfm output', customRun.status === 0, customRun.stderr);
 check('CLI writes the explicit output path', fs.existsSync(customOutput));
 
+var proInputPath = path.join(tempDir, 'structural-query.cfm');
+var proSource = [
+    '<cfquery name="q">',
+    '\tSELECT id',
+    '\tFROM t',
+    '\t<cfif flag>',
+    '\t\twhere x=1',
+    '\t<cfelse>',
+    '\t\twhere x=2',
+    '\t</cfif>',
+    '\tAND y=2',
+    '</cfquery>',
+    ''
+].join('\n');
+fs.writeFileSync(proInputPath, proSource, 'utf8');
+var proRun = run([proInputPath, '--pro-sql', '--dialect', 'postgresql']);
+check('CLI Pro SQL structural query exits successfully', proRun.status === 0, proRun.stderr);
+var proOutputPath = path.join(tempDir, 'structural-query_beutifier.cfm');
+check('CLI Pro SQL structural query output exists', fs.existsSync(proOutputPath));
+var proSecondRun = run([
+    '-', '--stdout', '--pro-sql', '--dialect', 'postgresql'
+], fs.readFileSync(proOutputPath, 'utf8'));
+check('CLI Pro SQL structural query is idempotent',
+    proSecondRun.status === 0 && proSecondRun.stdout === fs.readFileSync(proOutputPath, 'utf8'),
+    proSecondRun.stderr);
+
 console.log('All CLI tests passed.');

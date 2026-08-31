@@ -187,7 +187,7 @@ function findCfqueryRanges(src) {
     for (var i = 0; i < lines.length; i++) {
         var ll = lines[i].toLowerCase();
         if (open === -1 && /<cfquery[\s>]/.test(ll)) open = i;
-        if (open !== -1 && ll.indexOf('</cfquery>') !== -1) {
+        if (open !== -1 && /<\/cfquery\s*>/.test(ll)) {
             var nm = lines[open].match(/name=['"]([^'"]+)['"]/i);
             r.push({ start: open, end: i, name: nm ? nm[1] : '(anon)' });
             open = -1;
