@@ -889,6 +889,16 @@ assertEqual(
 );
 
 assertEqual(
+	'deep script formats CFML inside legacy HTML comment wrapper',
+	runRouter(
+		'<script>\n<!--\n<cfif condition>\nif (x) {\nfoo();\n}\n</cfif>\n//-->\n</script>',
+		'cfml',
+		true
+	),
+	'<script>\n\t<!--\n\t<cfif condition>\n\t\tif (x) {\n\t\t\tfoo();\n\t\t}\n\t</cfif>\n\t//-->\n</script>'
+);
+
+assertEqual(
 	'deep script preserves closing brace inside string',
 	runRouter('<script>\nvar token = "}";\nif(x){foo();}\n</script>', 'cfml', true),
 	'<script>\n\tvar token = "}";\n\tif(x){\n\t\tfoo();\n\t}\n</script>'

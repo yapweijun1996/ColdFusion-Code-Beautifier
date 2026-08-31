@@ -1882,7 +1882,23 @@ function protectBraceCodeText(code) {
 		 * inside the comment text gets counted by the brace depth
 		 * tracker, accumulating mismatch and producing flat-depth output
 		 * for the entire JS body. Mask them as tokens so their content
-		 * is opaque to depth tracking, and restore verbatim at the end. */
+		 * is opaque to depth tracking, and restore verbatim at the end.
+		 *
+		 * Exception: old script blocks commonly use an HTML-comment
+		 * wrapper (`<!--` ... `//-->`) around executable JavaScript. It
+		 * is a compatibility marker, not a real comment enclosing the JS;
+		 * leave the two wrapper lines visible so braces and CFML tags in
+		 * the body can still be formatted. */
+		if (char == '<' && code.substr(i, 4) == '<!--') {
+			var wrapperLineEnd = code.indexOf('\n', i);
+			var wrapperLine = code.slice(i, wrapperLineEnd === -1 ? code.length : wrapperLineEnd).replace(/\r$/, '');
+			var hasLegacyScriptClose = /(?:^|\r?\n)[ \t]*(?:\/\/-->|__BRACETOKEN_\d+__)\s*(?:\r?\n|$)/.test(code.slice(i));
+			if (/^<!--[ \t]*$/.test(wrapperLine) && hasLegacyScriptClose) {
+				output += '<!--';
+				i += 4;
+				continue;
+			}
+		}
 		if (char == '<' && code.substr(i, 5) == '<!---') {
 			var cfStart = i;
 			var cfEnd = code.indexOf('--->', i + 5);
