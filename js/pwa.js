@@ -16,6 +16,7 @@
 		updateRequested: false,
 		reloading: false,
 		promptShown: false,
+		promptToken: null,
 		updateToast: null,
 		watchedWorker: null
 	};
@@ -120,9 +121,65 @@
 	}
 
 	function closeUpdateToast() {
+		state.promptToken = null;
 		if (!state.updateToast) return;
 		if (typeof state.updateToast.remove === 'function') state.updateToast.remove();
 		state.updateToast = null;
+	}
+
+	function normalizeVersion(value, fallback) {
+		value = String(value || '').trim();
+		if (!value || value === '__BUILD_VERSION__' || value === 'dev') return fallback;
+		value = value.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 40);
+		return value || fallback;
+	}
+
+	function currentVersion() {
+		var versionEl = getElement('app-version');
+		if (!versionEl) return 'current';
+		var value = versionEl.textContent;
+		if (!value && typeof versionEl.getAttribute === 'function') {
+			value = versionEl.getAttribute('data-build-version');
+		}
+		return normalizeVersion(value, 'current');
+	}
+
+	function getWorkerVersion(worker, callback) {
+		var Channel = root && root.MessageChannel;
+		if (typeof Channel !== 'function' || !worker || typeof worker.postMessage !== 'function') {
+			callback('');
+			return;
+		}
+
+		var finished = false;
+		var channel;
+		var timer = null;
+		function finish(version) {
+			if (finished) return;
+			finished = true;
+			if (timer && typeof clearTimeout === 'function') clearTimeout(timer);
+			if (channel && channel.port1) channel.port1.onmessage = null;
+			callback(normalizeVersion(version, ''));
+		}
+		try {
+			channel = new Channel();
+			channel.port1.onmessage = function (event) {
+				var data = event && event.data;
+				finish(data && data.type === 'VERSION' ? data.version : '');
+			};
+			worker.postMessage({ type: 'GET_VERSION' }, [channel.port2]);
+			if (typeof setTimeout === 'function') {
+				timer = setTimeout(function () { finish(''); }, 750);
+			}
+		} catch (e) {
+			finish('');
+		}
+	}
+
+	function versionMessage(prefix, newVersion) {
+		newVersion = normalizeVersion(newVersion, '');
+		if (newVersion) return prefix + ' (' + currentVersion() + ' → ' + newVersion + ').';
+		return prefix + '.';
 	}
 
 	function reloadPage() {
@@ -182,12 +239,17 @@
 		}
 
 		state.promptShown = true;
-		state.updateToast = action(
-			'A new version is ready.',
-			'Update now',
-			function () { requestUpdate(registration, worker); },
-			{ duration: 0 }
-		);
+		var token = {};
+		state.promptToken = token;
+		getWorkerVersion(worker, function (newVersion) {
+			if (state.promptToken !== token || state.updateRequested) return;
+			state.updateToast = action(
+				versionMessage('A new version is ready', newVersion),
+				'Update now',
+				function () { requestUpdate(registration, worker); },
+				{ duration: 0 }
+			);
+		});
 	}
 
 	function showReloadPrompt() {
@@ -199,12 +261,18 @@
 			return;
 		}
 		state.promptShown = true;
-		state.updateToast = action(
-			'A new version is active.',
-			'Reload now',
-			reloadFromPrompt,
-			{ duration: 0 }
-		);
+		var token = {};
+		state.promptToken = token;
+		var serviceWorker = getNavigator() && getNavigator().serviceWorker;
+		getWorkerVersion(serviceWorker && serviceWorker.controller, function (newVersion) {
+			if (state.promptToken !== token || state.updateRequested) return;
+			state.updateToast = action(
+				versionMessage('A new version is active', newVersion),
+				'Reload now',
+				reloadFromPrompt,
+				{ duration: 0 }
+			);
+		});
 	}
 
 	function watchInstalling(registration) {

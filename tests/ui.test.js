@@ -88,6 +88,7 @@ pass('script dependency order is stable');
 assert.match(sw, /'\.\/js\/editor-ui\.js'/, 'new UI module must be precached');
 pass('new UI module is in the service-worker precache');
 expectMatch('service-worker has an automatic build-version marker', sw, /CACHE_VERSION\s*=\s*'__BUILD_VERSION__'/);
+expectMatch('service-worker can report its version', sw, /type === 'GET_VERSION'|type: 'VERSION'/);
 expectMatch('PWA exposes an Update now action', pwa, /'Update now'/);
 expectMatch('PWA saves the editor draft before activation', pwa, /sessionStorage|DRAFT_KEY/);
 expectMatch('toast exposes an action button helper', toast, /simple_toast_action/);
@@ -221,6 +222,17 @@ async function runPwaUpdateTest() {
   let reloads = 0;
   let updateChecks = 0;
 
+  function TestMessageChannel() {
+    const port1 = { onmessage: null };
+    const port2 = {
+      postMessage: function (data) {
+        if (port1.onmessage) port1.onmessage({ data });
+      }
+    };
+    this.port1 = port1;
+    this.port2 = port2;
+  }
+
   const registration = {
     waiting: null,
     installing: null,
@@ -245,9 +257,14 @@ async function runPwaUpdateTest() {
       (serviceWorkerListeners[type] || []).forEach(function (handler) { handler(); });
     }
   };
+  const versionElement = { textContent: 'vold' };
   const document = {
     visibilityState: 'visible',
-    getElementById: function (id) { return id === 'input' ? input : null; },
+    getElementById: function (id) {
+      if (id === 'input') return input;
+      if (id === 'app-version') return versionElement;
+      return null;
+    },
     addEventListener: function () {},
     createEvent: function () {
       return { type: '', initEvent: function (type) { this.type = type; } };
@@ -260,6 +277,7 @@ async function runPwaUpdateTest() {
     sessionStorage: storage,
     console: { warn: function () {} },
     Promise,
+    MessageChannel: TestMessageChannel,
     setInterval: function () { return 1; },
     simple_toast_msg: function () {},
     simple_toast_action: function (message, label, onAction) {
@@ -290,7 +308,13 @@ async function runPwaUpdateTest() {
     addEventListener: function (type, handler) {
       (workerListeners[type] || (workerListeners[type] = [])).push(handler);
     },
-    postMessage: function (message) { updateMessages.push(message); },
+    postMessage: function (message, ports) {
+      if (message.type === 'GET_VERSION') {
+        ports[0].postMessage({ type: 'VERSION', version: 'vnew' });
+      } else {
+        updateMessages.push(message);
+      }
+    },
     dispatch: function (type) {
       (workerListeners[type] || []).forEach(function (handler) { handler(); });
     }
@@ -301,6 +325,7 @@ async function runPwaUpdateTest() {
   worker.dispatch('statechange');
   assert.strictEqual(actionPrompts.length, 1);
   assert.strictEqual(actionPrompts[0].label, 'Update now');
+  assert.strictEqual(actionPrompts[0].message, 'A new version is ready (vold → vnew).');
   assert.strictEqual(updateMessages.length, 0);
 
   input.value = 'new draft before update';

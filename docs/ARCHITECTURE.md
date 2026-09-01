@@ -157,6 +157,7 @@ manifest.webmanifest   ← name, scope, display=standalone, theme color, SVG ico
 sw.js                  ← network-first for HTML, stale-while-revalidate for assets
                          CACHE_VERSION deployment-stamped from commit SHA
                          index.html version marker is stamped alongside sw.js
+                         GET_VERSION reports new/active worker version to UI
                          skipWaiting() + clients.claim() after user consent
 js/pwa.js              ← registers ./sw.js and restores one-shot input drafts
                          on 'updatefound' + 'installed' + existing controller
