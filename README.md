@@ -6,7 +6,7 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. T
 
 ## Features
 
-- **CFML + HTML** outer tag indentation with inline / block / middle / void tag classification. Nested CFML comments are depth-aware, so commented-out tags remain opaque to splitting and indentation.
+- **CFML + HTML** outer tag indentation with inline / block / middle / void tag classification. Nested CFML comments are depth-aware: commented-out tags remain opaque to the outer structure, while code-looking multiline CFML comments receive an isolated internal alignment pass.
 - **SQL** formatter (MySQL + PostgreSQL dialects) with:
   - CTE, JOIN, CASE, BETWEEN, window function (`OVER (PARTITION BY …)`), UNION, multi-column SELECT / GROUP BY / ORDER BY list-break.
   - Context-aware keyword uppercasing and unary `-` / `+` detection.

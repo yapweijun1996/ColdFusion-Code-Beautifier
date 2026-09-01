@@ -861,17 +861,144 @@ function containsUnescapedBacktick(line) {
 	return count % 2 === 1;
 }
 
-function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, normalize_indent, normalize_tab_width) {
+/* Align code-looking multiline CFML comments without exposing their tags to
+ * the outer formatter. A comment's first physical prefix is used as the
+ * local base; the isolated beautifyCFML pass contributes only structural
+ * indentation. Prose-only comments remain byte-for-byte unchanged. */
+function alignCFMLCommentedCodeBlocks(rawCode) {
+	if (typeof rawCode !== 'string' || rawCode.indexOf('<!---') === -1) return rawCode;
+
+	var result = '';
+	var position = 0;
+	var markupState = { cfmlDepth: 0, htmlDepth: 0 };
+	while (position < rawCode.length) {
+		var lineEnd = rawCode.indexOf('\n', position);
+		if (lineEnd === -1) lineEnd = rawCode.length;
+		var line = rawCode.slice(position, lineEnd);
+		var linePrefix = (line.match(/^[ \t]*/) || [''])[0];
+		var markerIndex = position + linePrefix.length;
+
+		/* Only an own-line CFML comment is a safe code block candidate. A
+		 * trailing inline comment may be part of a string/HTML/JS construct and
+		 * must continue through the normal opaque path. */
+		if (markupState.cfmlDepth === 0
+				&& markupState.htmlDepth === 0
+				&& line.slice(linePrefix.length, linePrefix.length + 5) === '<!---') {
+			var commentEnd = findCFMLCommentEnd(rawCode, markerIndex);
+			if (commentEnd !== -1) {
+				var closeLineEnd = rawCode.indexOf('\n', commentEnd);
+				if (closeLineEnd === -1) closeLineEnd = rawCode.length;
+				var suffix = rawCode.slice(commentEnd, closeLineEnd);
+				var block = rawCode.slice(markerIndex, commentEnd);
+				if (isCommentOnlySuffix(suffix) && /\r?\n/.test(block)) {
+					var aligned = alignOneCFMLCommentBlock(block, linePrefix);
+					result += rawCode.slice(position, markerIndex) + aligned + suffix;
+					markupState = { cfmlDepth: 0, htmlDepth: 0 };
+					position = closeLineEnd;
+					continue;
+				}
+			}
+		}
+
+		advanceMarkupCommentState(line, markupState);
+		result += line;
+		if (lineEnd < rawCode.length) result += '\n';
+		position = lineEnd < rawCode.length ? lineEnd + 1 : lineEnd;
+	}
+	return result;
+}
+
+function isCommentOnlySuffix(text) {
+	var suffix = (text || '').trim();
+	if (suffix === '') return true;
+	if (suffix.indexOf('<!---') === 0) {
+		var cfmlEnd = findCFMLCommentEnd(suffix, 0);
+		return cfmlEnd === suffix.length;
+	}
+	if (suffix.indexOf('<!--') === 0) {
+		var htmlEnd = findMarkupCommentEnd(suffix, 0);
+		return htmlEnd === suffix.length;
+	}
+	return false;
+}
+
+function alignOneCFMLCommentBlock(block, sourcePrefix) {
+	var newline = /\r\n/.test(block) ? '\r\n' : '\n';
+	var normalized = block.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+	var body = normalized.slice(5, -4);
+	var nestedAligned = alignCFMLCommentedCodeBlocks(body);
+	if (!looksLikeCommentedCode(nestedAligned)) return block;
+
+	var bodyLines = nestedAligned.split('\n');
+	var firstGap = (bodyLines[0].match(/^[ \t]*/) || [''])[0];
+	var lastGap = (bodyLines[bodyLines.length - 1].match(/[ \t]*$/) || [''])[0];
+	/* Continuation lines produced by an earlier pass already carry the
+	 * comment's source prefix. Do not treat that outer prefix as the inline
+	 * spacing before the closing marker, or every pass will add it again. */
+	if (sourcePrefix !== '' && lastGap.indexOf(sourcePrefix) === 0) {
+		lastGap = lastGap.slice(sourcePrefix.length);
+	}
+	var formattedBody;
+	try {
+		/* Use the existing structural scanner in a zero-based virtual file.
+		 * The sixth argument prevents recursive comment processing and the
+		 * seventh disables tag splitting; the physical line/content checks below
+		 * reject any unexpected rewrite. */
+		formattedBody = beautifyCFML(nestedAligned, false, false, false, 0, false, true);
+	} catch (error) {
+		return block;
+	}
+
+	var originalContent = bodyLines.map(function(line) { return line.trim(); }).join('\n');
+	var formattedLines = formattedBody.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+	var formattedContent = formattedLines.map(function(line) { return line.trim(); }).join('\n');
+	if (formattedContent !== originalContent || formattedLines.length !== bodyLines.length) {
+		return block;
+	}
+
+	var rebuilt = [];
+	for (var i = 0; i < formattedLines.length; i++) {
+		var formattedLine = formattedLines[i];
+		if (i === 0) {
+			rebuilt.push('<!---' + firstGap + formattedLine);
+		} else {
+			rebuilt.push(sourcePrefix + formattedLine);
+		}
+	}
+	if (rebuilt.length > 0) {
+		rebuilt[rebuilt.length - 1] += lastGap;
+	}
+	return rebuilt.join(newline) + '--->';
+}
+
+function looksLikeCommentedCode(text) {
+	if (typeof text !== 'string') return false;
+	return /<\/?(?:cf[a-z][a-z0-9]*|(?:html|head|body|form|table|thead|tbody|tfoot|tr|td|div|span|ul|ol|li|select|option|script|style)\b)/i.test(text)
+		|| /(?:^|\n)[ \t]*(?:function\b|(?:var|let|const|class)\b|if\s*\(|for\s*\(|while\s*\(|switch\s*\(|try\b|return\b)/i.test(text)
+		|| /(?:^|\n)[ \t]*(?:SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM|WITH)\b/i.test(text)
+		|| /(?:^|\n)[ \t]*(?:[#.]?[a-z][a-z0-9_-]*)\s*\{/i.test(text);
+}
+
+function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, normalize_indent, normalize_tab_width, format_commented_code, skip_tag_splitter) {
 
 	if (normalize_indent) {
 		rawCode = normalizeLeadingSpacesToTabs(rawCode, normalize_tab_width || 0);
+	}
+
+	/* Commented-out CFML is inert to the outer structural stack, but its
+	 * internal code still needs a local indentation pass. The opt-out is used
+	 * by that local pass to prevent recursive reprocessing. */
+	if (format_commented_code !== false && typeof alignCFMLCommentedCodeBlocks === 'function') {
+		rawCode = alignCFMLCommentedCodeBlocks(rawCode);
 	}
 
 	if(split_html_tag == true){
 		rawCode = rawCode.replace(/></g, '>\n<');
 	}
 
-	rawCode = splitAdjacentCFMLTags(rawCode);
+	if (!skip_tag_splitter) {
+		rawCode = splitAdjacentCFMLTags(rawCode);
+	}
 
 	var lines = rawCode.split('\n');
 	var indentLevel = 0;

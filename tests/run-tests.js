@@ -225,13 +225,13 @@ function runRouter(input, language, deepFormat) {
 		'<cfif active>\n<!--- <tr><!--- inner ---><cfif dead></cfif></tr> --->\n<span>live</span>\n</cfif>'
 	);
 	assertEqual(
-		'nested CFML comment stays opaque to indentation',
+		'commented CFML code follows nested structural indentation',
 		runRouter(
 			'<cfif active>\n    <!--- <tr>\n        <td>\n            <!--- inner --->\n            <cfif dead>\n                dead\n            </cfif>\n        </td>\n    </tr> --->\n    <span>live</span>\n</cfif>',
 			'cfml',
 			false
 		),
-		'<cfif active>\n\t<!--- <tr>\n\t    <td>\n\t        <!--- inner --->\n\t        <cfif dead>\n\t            dead\n\t        </cfif>\n\t    </td>\n\t</tr> --->\n\t<span>live</span>\n</cfif>'
+		'<cfif active>\n\t<!--- <tr>\n\t\t<td>\n\t\t\t<!--- inner --->\n\t\t\t<cfif dead>\n\t\t\t\tdead\n\t\t\t</cfif>\n\t\t</td>\n\t</tr> --->\n\t<span>live</span>\n</cfif>'
 	);
 	assertEqual(
 		'embedded query cfif is tracked before an own-line cfelse',
@@ -1068,9 +1068,39 @@ assertEqual(
 );
 
 assertEqual(
-	'multiline cfml comment does not affect following live code indent',
+	'commented CFML code aligns while live code keeps its depth',
 	runRouter('<cfif x>\n<!---\n<cfif y>\ncomment only\n</cfif>\n--->\n<cfset z = 1>\n</cfif>', 'cfml', false),
-	'<cfif x>\n\t<!---\n\t<cfif y>\n\tcomment only\n\t</cfif>\n\t--->\n\t<cfset z = 1>\n</cfif>'
+	'<cfif x>\n\t<!---\n\t<cfif y>\n\t\tcomment only\n\t</cfif>\n\t--->\n\t<cfset z = 1>\n</cfif>'
+);
+
+var adjacentCommentInput = '<cfloop>\n<!---<cfif old>\n<cfset x=1>\n</cfif>---><!--- note --->\n<cfset live=1>\n</cfloop>';
+var adjacentCommentOutput = '<cfloop>\n\t<!---<cfif old>\n\t\t<cfset x=1>\n\t</cfif>--->\n\t<!--- note --->\n\t<cfset live=1>\n</cfloop>';
+assertEqual(
+	'adjacent CFML comments align commented code idempotently',
+	runRouter(adjacentCommentInput, 'cfml', false),
+	adjacentCommentOutput
+);
+assertEqual(
+	'commented-code alignment is idempotent',
+	runRouter(adjacentCommentOutput, 'cfml', false),
+	adjacentCommentOutput
+);
+
+assertEqual(
+	'unclosed CFML comment remains opaque to commented-code alignment',
+	runRouter('<cfif active>\n<!---\n<cfif disabled>\n<cfset old=1>\n<cfset live=1>', 'cfml', false),
+	'<cfif active>\n\t<!---\n\t<cfif disabled>\n\t<cfset old=1>\n\t<cfset live=1>'
+);
+
+assertEqual(
+	'ordinary HTML comments remain opaque to commented-code alignment',
+	runRouter('<cfif active>\n<!--\n<div>\n<span>\n</span>\n</div>\n-->\n<cfset live=1>\n</cfif>', 'cfml', false),
+	'<cfif active>\n\t<!--\n\t<div>\n\t<span>\n\t</span>\n\t</div>\n\t-->\n\t<cfset live=1>\n</cfif>'
+);
+assertEqual(
+	'CFML comments nested inside HTML comments remain opaque',
+	runRouter('<cfif active>\n<!--\n<!---\n<cfif disabled>\n<cfset old=1>\n</cfif>\n--->\n-->\n<cfset live=1>\n</cfif>', 'cfml', false),
+	'<cfif active>\n\t<!--\n\t<!---\n\t<cfif disabled>\n\t<cfset old=1>\n\t</cfif>\n\t--->\n\t-->\n\t<cfset live=1>\n</cfif>'
 );
 
 assertEqual(

@@ -320,7 +320,7 @@ Major clauses do not break inside `funcDepth > 0` (window function `OVER(PARTITI
 
 ## CFML formatter state
 
-`beautifyCFML` is line-based. Key state: `indentLevel`, plus `inMarkupComment` / `inBlockComment` so multi-line `<!--- … --->` / `/* … */` bodies are re-indented as comments, not re-parsed as code. Tag classification uses `CF_TAGS.inline` / `CF_TAGS.block` / `CF_TAGS.middle` and `HTML_VOID_TAGS`. Middle tags (`cfelse`, `cfelseif`) decrement then re-increment indent so the content after them lines up with the content before.
+`beautifyCFML` is line-based. Key state: `indentLevel`, plus `inMarkupComment` / `inBlockComment` so multi-line `<!--- … --->` / `/* … */` bodies cannot affect the outer structure stack. Before that outer pass, `alignCFMLCommentedCodeBlocks` identifies code-looking multiline CFML comments and runs their body through a zero-based, alignment-only virtual pass; prose-only comments remain unchanged, and failed content/line-count checks fall back to the source block. Tag classification uses `CF_TAGS.inline` / `CF_TAGS.block` / `CF_TAGS.middle` and `HTML_VOID_TAGS`. Middle tags (`cfelse`, `cfelseif`) decrement then re-increment indent so the content after them lines up with the content before.
 
 ## Per-line brace counter (non-tag lines)
 
@@ -372,7 +372,7 @@ regex literal disambiguation".
 
 ## Shared nested markup-comment scanner
 
-`js/cfml-comment-utils.js` provides `findCFMLCommentEnd`, `findMarkupCommentEnd`, `consumeMarkupComment`, and line-oriented `advanceMarkupCommentState`. CFML comments are depth-aware: an inner `<!--- ... --->` does not prematurely terminate the outer comment. Browser, CLI VM, formatter tests, splitter, brace/tag scanner, language detector, SQL token/tree handling, deep JS protection, and the host-side corpus range classifier load the helper before use. HTML comments remain first-close regions.
+`js/cfml-comment-utils.js` provides `findCFMLCommentEnd`, `findMarkupCommentEnd`, `consumeMarkupComment`, and line-oriented `advanceMarkupCommentState`. CFML comments are depth-aware: an inner `<!--- ... --->` does not prematurely terminate the outer comment. Browser, CLI VM, formatter tests, splitter, brace/tag scanner, language detector, SQL token/tree handling, deep JS protection, and the host-side corpus range classifier load the helper before use. HTML comments remain first-close regions. The outer formatter still treats both forms as opaque; only code-looking multiline CFML comments are aligned by the isolated prepass described above.
 
 This module is the only completed extraction related to the broader refactor. Its dependent script-order and SW-precache entries are already present.
 
@@ -380,7 +380,7 @@ This module is the only completed extraction related to the broader refactor. It
 
 The current baseline additionally includes:
 
-- depth-aware nested CFML comments kept opaque across splitting, indentation, SQL, JavaScript, and detection;
+- depth-aware nested CFML comments kept opaque across splitting, outer indentation, SQL, JavaScript, and detection; code-looking multiline CFML comments receive a separate internal alignment pass;
 - routed LF/CRLF output style restoration;
 - CLI/diagnostic preservation of UTF-8 BOM state and BOM-marked UTF-16LE/UTF-16BE source encoding;
 - `normalizeStructuralCFMLTags` before structural query dispatch, including multi-line control tags;

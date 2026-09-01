@@ -126,7 +126,7 @@ node names or recovery behavior and these assertions are the guard.
 
 Recent baseline regressions explicitly cover:
 
-- nested CFML comments consume the outer close and keep commented tags opaque to splitting/indentation;
+- nested CFML comments consume the outer close and keep commented tags opaque to splitting/outer indentation, while code-looking multiline CFML comments are internally aligned by a separate idempotent pass;
 - CLI UTF-16BE BOM preservation together with CRLF formatted output;
 - multi-line structural CFML tags normalized before query fallback;
 - `<cfquery>` closing tags containing whitespace before `>`;
@@ -134,7 +134,8 @@ Recent baseline regressions explicitly cover:
 - own-line and nested CFML control tags inside deep-formatted JavaScript;
 - JavaScript emitted directly inside a CFML conditional;
 - multi-line template payload indentation/content preservation;
-- executable legacy script wrappers using `<!--` and `//-->`.
+- executable legacy script wrappers using `<!--` and `//-->`;
+- adjacent CFML comments, nested commented code, prose-only comments, and ordinary HTML comments.
 
 ## Refactor characterization policy
 
