@@ -1,8 +1,8 @@
 /* PWA registration and user-controlled update flow.
  *
- * The browser detects a new service worker by comparing sw.js. A release must
- * therefore change CACHE_VERSION in sw.js (see the release notes) whenever
- * application source changes. The new worker is installed in the background,
+ * The browser detects a new service worker by comparing sw.js. The deployment
+ * stamps CACHE_VERSION from the source commit, so every source release has a
+ * byte-different worker. The new worker is installed in the background,
  * but it stays waiting until the user chooses "Update now".
  */
 (function (root) {

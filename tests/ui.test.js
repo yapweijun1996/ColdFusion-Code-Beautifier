@@ -19,6 +19,7 @@ const app = fs.readFileSync(path.join(root, 'js', 'app.js'), 'utf8');
 const sw = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
 const pwa = fs.readFileSync(path.join(root, 'js', 'pwa.js'), 'utf8');
 const toast = fs.readFileSync(path.join(root, 'js', 'toast.js'), 'utf8');
+const deployWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'deploy.yml'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
 function pass(name) {
@@ -84,12 +85,14 @@ assert.deepStrictEqual(scriptSources, expectedOrder, 'script dependency order mu
 pass('script dependency order is stable');
 assert.match(sw, /'\.\/js\/editor-ui\.js'/, 'new UI module must be precached');
 pass('new UI module is in the service-worker precache');
-expectMatch('service-worker cache version is bumped for the update flow', sw, /CACHE_VERSION\s*=\s*'v7\.5\.0'/);
+expectMatch('service-worker has an automatic build-version marker', sw, /CACHE_VERSION\s*=\s*'__BUILD_VERSION__'/);
 expectMatch('PWA exposes an Update now action', pwa, /'Update now'/);
 expectMatch('PWA saves the editor draft before activation', pwa, /sessionStorage|DRAFT_KEY/);
 expectMatch('toast exposes an action button helper', toast, /simple_toast_action/);
 expectMatch('toast action meets the touch target contract', css, /\.simple-toast-action\s*\{[\s\S]*?min-height:\s*var\(--tap\)/);
-assert.match(packageJson.scripts.test, /ui\.test\.js/, 'npm test must include UI tests');
+expectMatch('Pages deployment stamps the service-worker version', deployWorkflow, /inject-build-version\.js\s+sw\.js/);
+expectMatch('deployment version comes from the commit SHA', deployWorkflow, /BUILD_VERSION:\s*\$\{\{\s*github\.sha\s*\}\}/);
+assert.match(packageJson.scripts.test, /version\.test\.js/, 'npm test must include version tests');
 pass('npm test includes UI tests');
 
 // ── Minimal DOM double ──────────────────────────────────────────────────────

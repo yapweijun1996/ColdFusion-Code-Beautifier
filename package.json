@@ -28,7 +28,7 @@
     "node": ">=14"
   },
   "scripts": {
-    "test": "node tests/run-tests.js && node tests/ui.test.js && node tests/cli.test.js && node tests/tree-sitter.test.mjs",
+    "test": "node tests/run-tests.js && node tests/ui.test.js && node tests/cli.test.js && node tests/version.test.js && node tests/tree-sitter.test.mjs",
     "spike:tree-sitter": "node tools/spike-tree-sitter.mjs"
   },
   "devDependencies": {

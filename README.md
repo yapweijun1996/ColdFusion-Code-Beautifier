@@ -22,7 +22,7 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. T
 - **Pro SQL** (opt-in) — vendored [sql-formatter](https://github.com/sql-formatter-org/sql-formatter) (MIT) for 16 dialects: MySQL, MariaDB, PostgreSQL, SQLite, T-SQL, PL/SQL, DB2, Redshift, Snowflake, BigQuery, Hive, Spark, Trino, N1QL, SingleStoreDB, Standard. It is runtime-lazy and falls back to the built-in formatter if loading/parsing fails. The current service worker precaches the UMD bundle for offline readiness, so installed PWA users download that asset even when the option remains off.
 - **Normalize Indent** (opt-in) — converts each line's *leading* whitespace from spaces to tabs before formatting (line content is never touched). Auto-detects the file's indent unit (2 / 4 / 8 spaces = 1 tab), or pick the width explicitly from the companion selector. Handles files that mix space-indent and tab-indent lines, including files already run through the beautifier (it recovers the original unit from the tab+space alignment). Checkbox + width persist in `localStorage`.
 - **Semantic Indent** (opt-in, experimental) — uses tree-sitter CFML/CFScript parsers to indent **flat, zero-indent** multi-line nested function-call chains by their real call depth — the case the line-scanner cannot fix because there is no original indentation to preserve. Covers nested calls inside `<cfset>`/`<cfparam>` tags and inside control-structure-free `<cfscript>` blocks. Struct literals and SQL strings stay flat; unbalanced / mid-edit blocks fall back to the line-scanner untouched. Each grammar (~2.6 MB CFML, ~2.1 MB CFScript) lazy-loads only when a matching flat block is present. See [docs/LIMITATIONS.md](docs/LIMITATIONS.md#semantic-indent-tree-sitter-opt-in-experimental).
-- **PWA** — installable and offline-capable via service worker. HTML uses network-first and assets use stale-while-revalidate. New releases show an **Update now** prompt; the current input is saved and restored across the controlled reload. Bump `CACHE_VERSION` in `sw.js` for every source release so the browser detects it.
+- **PWA** — installable and offline-capable via service worker. HTML uses network-first and assets use stale-while-revalidate. New releases show an **Update now** prompt; the current input is saved and restored across the controlled reload. The GitHub Pages deployment automatically stamps `CACHE_VERSION` from the commit SHA so every source release is detected; for another static host, run `node tools/inject-build-version.js sw.js` before publishing.
 
 ## Usage
 
@@ -128,7 +128,9 @@ vendor/tree-sitter/              vendored tree-sitter runtime + CFML & CFScript 
 tests/run-tests.js               Node VM harness + exact assertions + Pro SQL token equivalence + content/sample invariants
 tests/tree-sitter.test.mjs       standalone Semantic Indent suite (real WASM, outside the VM harness)
 tests/cli.test.js                end-to-end Node CLI tests
+tests/version.test.js            deployment version-stamping test
 tools/beautify-file.js           Node CLI for file/stdin formatting
+tools/inject-build-version.js    stamps sw.js with the source commit for deployment
 tools/source-encoding.js         CLI/diagnostic UTF-8 and BOM-marked UTF-16 decode/encode preservation
 tools/spike-tree-sitter.mjs      self-contained tree-sitter CST spike / reference implementation
 ```

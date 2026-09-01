@@ -155,7 +155,7 @@ CRLF; otherwise routed browser/CLI output uses LF.
 ```
 manifest.webmanifest   ← name, scope, display=standalone, theme color, SVG icon
 sw.js                  ← network-first for HTML, stale-while-revalidate for assets
-                         CACHE_VERSION constant — bump on release to evict
+                         CACHE_VERSION deployment-stamped from commit SHA
                          skipWaiting() + clients.claim() after user consent
 js/pwa.js              ← registers ./sw.js and restores one-shot input drafts
                          on 'updatefound' + 'installed' + existing controller
@@ -166,9 +166,7 @@ js/pwa.js              ← registers ./sw.js and restores one-shot input drafts
                          calls reg.update() hourly + on visibilitychange
 ```
 
-Release flow: edit code → bump `CACHE_VERSION` in `sw.js` → push `main` → GitHub Actions. The browser's service-worker update check compares `sw.js`; changing application files without changing that constant will not create a new waiting worker.
-runs `npm test` (formatter + UI contract + Tree-sitter) then deploys via
-`actions/deploy-pages@v4`.
+Release flow: edit code → push `main` → GitHub Actions runs `npm test`, stamps `CACHE_VERSION` from the commit SHA with `tools/inject-build-version.js`, then deploys via `actions/deploy-pages@v4`. For another static host, run the same stamping tool before publishing. The browser's service-worker update check compares the stamped `sw.js`, so every source commit produces a new waiting worker.
 
 ## Pipeline
 

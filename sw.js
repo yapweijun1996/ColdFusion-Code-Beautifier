@@ -2,10 +2,12 @@
  * Strategy:
  *   - HTML (navigation): network-first  → users always see latest source
  *   - JS / CSS / SVG / manifest: stale-while-revalidate
- *   - Bump CACHE_VERSION on every release to evict old assets
+ *   - The deployment workflow stamps CACHE_VERSION from the source commit
  *   - New workers remain waiting until js/pwa.js receives user consent
+ *
+ * Local/static-host builds can run tools/inject-build-version.js sw.js first.
  */
-const CACHE_VERSION = 'v7.5.0';
+const CACHE_VERSION = '__BUILD_VERSION__';
 const CACHE_NAME    = 'cfbeautifier-' + CACHE_VERSION;
 
 const PRECACHE_URLS = [

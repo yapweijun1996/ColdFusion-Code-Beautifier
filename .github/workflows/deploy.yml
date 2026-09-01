@@ -31,6 +31,11 @@ jobs:
       - name: Run regression tests (Node, no install, no network)
         run: npm test
 
+      - name: Stamp service-worker source version
+        env:
+          BUILD_VERSION: ${{ github.sha }}
+        run: node tools/inject-build-version.js sw.js
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
