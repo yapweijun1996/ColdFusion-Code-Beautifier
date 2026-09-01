@@ -41,7 +41,7 @@ For UI-level checks that the harness cannot reach (clipboard, language-selector 
 4. Confirm `Auto copy` is on by default while `Auto clear input` and `Auto clear output` are off by default; enable the latter two and verify their explicit behavior.
 5. While Pro SQL or Semantic Indent is loading, verify Beautify is disabled and returns to normal after success or fallback.
 6. Verify Tab/Shift-Tab indentation, Escape then Tab focus exit, and Control/Command+Enter.
-7. Deploy a changed `sw.js`/`CACHE_VERSION`, wait for the new worker to install, verify **Update now** appears, and confirm input is restored after activation. Test once with another tab accepting the update and verify the other tab offers **Reload now** instead of reloading automatically.
+7. Deploy a changed source commit, verify the footer shows the stamped version, wait for the new worker to install, verify **Update now** appears, and confirm input is restored after activation. Test once with another tab accepting the update and verify the other tab offers **Reload now** instead of reloading automatically.
 
 ## Adding a test
 

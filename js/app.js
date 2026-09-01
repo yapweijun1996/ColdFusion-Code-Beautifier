@@ -1,6 +1,14 @@
 if (typeof document !== 'undefined' && document.querySelector) {
 	var yearEl = document.querySelector('.at_year');
 	if (yearEl) yearEl.textContent = new Date().getFullYear();
+
+	var versionEl = document.getElementById('app-version');
+	if (versionEl) {
+		var version = typeof versionEl.getAttribute === 'function'
+			? versionEl.getAttribute('data-build-version')
+			: versionEl['data-build-version'];
+		versionEl.textContent = version && version !== '__BUILD_VERSION__' ? version : 'dev';
+	}
 }
 
 /* Persist Pro SQL preferences in localStorage so the user's last

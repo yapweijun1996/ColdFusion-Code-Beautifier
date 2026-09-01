@@ -6,7 +6,7 @@
 
 - Replaced automatic update reloads with a persistent `Update now` action toast when a new service worker is waiting.
 - Update consent saves the current input in `sessionStorage` before `SKIP_WAITING`; the draft is restored once after reload. Updates accepted in another tab offer a safe `Reload now` action instead of forcing a reload.
-- Extended `js/toast.js` with keyboard-accessible action notifications and added automatic service-worker version stamping from the source commit.
+- Extended `js/toast.js` with keyboard-accessible action notifications, added automatic service-worker/page version stamping from the source commit, and displays the deployed version in the footer.
 
 ### Documentation and refactor planning
 

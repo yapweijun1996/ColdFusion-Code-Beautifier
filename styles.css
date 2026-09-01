@@ -254,6 +254,11 @@ footer {
 
 footer p { margin: 0; }
 
+.app-version {
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
 footer a {
 	color: var(--link);
 	text-decoration: underline;

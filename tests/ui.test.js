@@ -44,6 +44,8 @@ expectMatch('input label remains associated', html, /<label[^>]*for="input"[^>]*
 expectMatch('output label remains associated', html, /<label[^>]*for="output"[^>]*>Output<\/label>/);
 expectMatch('dialect has a visible label', html, /class="pro-sql-dialect"[\s\S]*?<span>Dialect<\/span>[\s\S]*?id="pro_sql_dialect"/);
 expectMatch('input has keyboard help description', html, /id="input"[^>]*aria-describedby="input-keyboard-help"/);
+expectMatch('footer contains the deployed version marker', html, /id="app-version"[^>]*data-build-version="__BUILD_VERSION__"/);
+expectMatch('app renders the deployed version', app, /data-build-version|app-version/);
 expectMatch('auto-clear input defaults off', html, /id="auto_clear"[^>]*>/);
 expectNoMatch('auto-clear input is not checked by default', html, /id="auto_clear"[^>]*checked/);
 expectNoMatch('auto-clear output is not checked by default', html, /id="auto_clear_output"[^>]*checked/);
@@ -90,7 +92,7 @@ expectMatch('PWA exposes an Update now action', pwa, /'Update now'/);
 expectMatch('PWA saves the editor draft before activation', pwa, /sessionStorage|DRAFT_KEY/);
 expectMatch('toast exposes an action button helper', toast, /simple_toast_action/);
 expectMatch('toast action meets the touch target contract', css, /\.simple-toast-action\s*\{[\s\S]*?min-height:\s*var\(--tap\)/);
-expectMatch('Pages deployment stamps the service-worker version', deployWorkflow, /inject-build-version\.js\s+sw\.js/);
+expectMatch('Pages deployment stamps the service-worker and page versions', deployWorkflow, /inject-build-version\.js/);
 expectMatch('deployment version comes from the commit SHA', deployWorkflow, /BUILD_VERSION:\s*\$\{\{\s*github\.sha\s*\}\}/);
 assert.match(packageJson.scripts.test, /version\.test\.js/, 'npm test must include version tests');
 pass('npm test includes UI tests');

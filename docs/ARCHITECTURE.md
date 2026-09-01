@@ -51,7 +51,7 @@ js/pro-sql.js          ← lazy-loads vendor/sql-formatter.min.js on first Pro S
 js/tree-sitter-cfml.js ← Semantic Indent: algorithm + post-pass + dual grammar lazy-loader
 js/beautifier.js       ← beautifyCFML (+ normalizeLeadingSpacesToTabs) + detectLanguage + beautifyCodes (router)
 js/editor-ui.js        ← button events, keyboard shortcuts, Tab indentation, and async Beautify state
-js/app.js              ← footer year + Pro SQL / Normalize / Semantic / Safe-Mode prefs persistence (localStorage) + bundle pre-warm
+js/app.js              ← footer year/version + Pro SQL / Normalize / Semantic / Safe-Mode prefs persistence (localStorage) + bundle pre-warm
 js/pwa.js              ← service-worker registration + user-controlled update prompt (deferred)
 ```
 
@@ -156,6 +156,7 @@ CRLF; otherwise routed browser/CLI output uses LF.
 manifest.webmanifest   ← name, scope, display=standalone, theme color, SVG icon
 sw.js                  ← network-first for HTML, stale-while-revalidate for assets
                          CACHE_VERSION deployment-stamped from commit SHA
+                         index.html version marker is stamped alongside sw.js
                          skipWaiting() + clients.claim() after user consent
 js/pwa.js              ← registers ./sw.js and restores one-shot input drafts
                          on 'updatefound' + 'installed' + existing controller
