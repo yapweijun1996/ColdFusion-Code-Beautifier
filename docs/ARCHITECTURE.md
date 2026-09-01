@@ -9,15 +9,20 @@ Browser-side code beautifier for CFML/HTML/CSS/JS/SQL. Production has no build s
 ## Node CLI
 
 `tools/beautify-file.js` provides a GitHub-hosted entry point for coding agents
-and local automation. It loads the same production scripts in a small VM-backed
-DOM harness, then calls `beautifyCodes()`; it does not maintain a second
-formatter implementation and never uploads source code.
+and local automation. It is also exposed as the `coldfusion-code-beautifier`
+NPM command, so another agent can run it with `npx` without MCP or a custom
+server. It loads the same production scripts in a small VM-backed DOM harness,
+then calls `beautifyCodes()`; it does not maintain a second formatter
+implementation and never uploads source code.
 
 ```text
-node tools/beautify-file.js source.cfm
+npx coldfusion-code-beautifier source.cfm
   └─ source_beutifier.cfm
 
-node tools/beautify-file.js - --stdout < source.cfm
+coldfusion-code-beautifier - --stdout < source.cfm
+
+# GitHub/offline fallback
+node tools/beautify-file.js source.cfm
 ```
 
 File mode keeps the input unchanged and writes the fixed `_beutifier.cfm`

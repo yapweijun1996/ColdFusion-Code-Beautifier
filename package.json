@@ -1,8 +1,32 @@
 {
   "name": "coldfusion-code-beautifier",
   "version": "1.0.0",
-  "private": true,
-  "description": "Browser-based ColdFusion/CFML, SQL, JS and CSS code beautifier with optional tree-sitter semantic indentation.",
+  "description": "Serverless CLI and browser-based ColdFusion/CFML, SQL, JS and CSS code beautifier.",
+  "bin": {
+    "coldfusion-code-beautifier": "tools/beautify-file.js"
+  },
+  "files": [
+    "js/beautifier.js",
+    "js/cfml-comment-utils.js",
+    "js/cf-tags.js",
+    "js/sql-keywords.js",
+    "js/sql-beautifier.js",
+    "js/js-lexer-utils.js",
+    "js/deep-format.js",
+    "js/tag-utils.js",
+    "js/cfml-splitter.js",
+    "js/toast.js",
+    "js/clipboard.js",
+    "js/pro-sql.js",
+    "tools/beautify-file.js",
+    "tools/source-encoding.js",
+    "vendor/sql-formatter.min.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
   "scripts": {
     "test": "node tests/run-tests.js && node tests/ui.test.js && node tests/cli.test.js && node tests/tree-sitter.test.mjs",
     "spike:tree-sitter": "node tools/spike-tree-sitter.mjs"

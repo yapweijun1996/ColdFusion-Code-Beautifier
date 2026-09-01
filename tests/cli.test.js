@@ -8,10 +8,12 @@ var fs = require('fs');
 var os = require('os');
 var path = require('path');
 var sourceEncoding = require('../tools/source-encoding.js');
+var packageManifest = require('../package.json');
 
 var root = path.join(__dirname, '..');
 var cli = path.join(root, 'tools', 'beautify-file.js');
 var tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cfml-beautifier-'));
+checkPackageManifest();
 var inputPath = path.join(tempDir, 'input.cfm');
 var source = [
     '<cfoutput>',
@@ -45,6 +47,15 @@ function check(name, condition, detail) {
         throw new Error('FAIL: ' + name + (detail ? '\n' + detail : ''));
     }
     console.log('PASS: ' + name);
+}
+
+function checkPackageManifest() {
+    check('NPM package exposes the serverless CLI',
+        packageManifest.private !== true
+        && packageManifest.bin
+        && packageManifest.bin['coldfusion-code-beautifier'] === 'tools/beautify-file.js'
+        && Array.isArray(packageManifest.files)
+        && packageManifest.files.indexOf('vendor/sql-formatter.min.js') !== -1);
 }
 
 var fileRun = run([inputPath]);

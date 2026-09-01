@@ -33,9 +33,16 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. T
 
 ## Command-line use for AI agents
 
-The repository also includes a Node.js CLI, so an AI coding agent can clone this
-GitHub repository and format a file without using the browser UI. It uses the
-same formatter scripts and defaults to a separate `_beutifier.cfm` output file:
+The repository includes a Node.js CLI for AI coding agents and local automation.
+After the package is published, an agent can use the same serverless CLI through
+NPM without cloning the repository:
+
+```bash
+npx coldfusion-code-beautifier path/to/source.cfm
+```
+
+The GitHub clone remains an offline fallback. Both entry points use the same
+formatter scripts and default to a separate `_beutifier.cfm` output file:
 
 ```bash
 node tools/beautify-file.js path/to/source.cfm
