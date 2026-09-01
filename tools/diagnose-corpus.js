@@ -36,6 +36,7 @@ var fs   = require('fs');
 var vm   = require('vm');
 var path = require('path');
 var sourceEncoding = require('./source-encoding.js');
+var commentUtils = require('../js/cfml-comment-utils.js');
 
 var ROOT = path.resolve(__dirname, '..');
 process.chdir(ROOT);
@@ -185,62 +186,13 @@ function runBeautifier(input, dialect) {
 }
 
 // ---------- cfquery range + classifier ----------
-function advanceCorpusMarkupCommentState(text, state) {
-    var hadComment = state.cfmlDepth > 0 || state.htmlDepth > 0;
-    var startsInComment = hadComment;
-    var codeOutsideComment = false;
-    var i = 0;
-    while (i < text.length) {
-        if (state.cfmlDepth > 0) {
-            hadComment = true;
-            if (text.slice(i, i + 5) === '<!---') {
-                state.cfmlDepth++;
-                i += 5;
-            } else if (text.slice(i, i + 4) === '--->') {
-                state.cfmlDepth--;
-                i += 4;
-            } else {
-                i++;
-            }
-            continue;
-        }
-        if (state.htmlDepth > 0) {
-            hadComment = true;
-            if (text.slice(i, i + 3) === '-->') {
-                state.htmlDepth = 0;
-                i += 3;
-            } else {
-                i++;
-            }
-            continue;
-        }
-        if (text.slice(i, i + 5) === '<!---') {
-            state.cfmlDepth = 1;
-            hadComment = true;
-            i += 5;
-        } else if (text.slice(i, i + 4) === '<!--') {
-            state.htmlDepth = 1;
-            hadComment = true;
-            i += 4;
-        } else {
-            if (!/[ \t\r\n]/.test(text[i])) codeOutsideComment = true;
-            i++;
-        }
-    }
-    return {
-        startsInComment: startsInComment,
-        hadComment: hadComment,
-        codeOutsideComment: codeOutsideComment
-    };
-}
-
 function findCfqueryRanges(src) {
     var lines = src.split('\n');
     var r = [];
     var open = -1;
     var commentState = { cfmlDepth: 0, htmlDepth: 0 };
     for (var i = 0; i < lines.length; i++) {
-        var scan = advanceCorpusMarkupCommentState(lines[i], commentState);
+        var scan = commentUtils.advanceMarkupCommentState(lines[i], commentState);
         if (scan.startsInComment || (scan.hadComment && !scan.codeOutsideComment)) continue;
         var ll = lines[i].toLowerCase();
         if (open === -1 && /<cfquery[\s>]/.test(ll)) open = i;

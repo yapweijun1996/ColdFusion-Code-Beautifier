@@ -144,7 +144,7 @@ For each refactor-critical fixture, test exact output plus applicable idempotenc
 
 A Node-only shared production-script manifest is planned but not implemented. Until then, adding a production script requires updating every explicit browser/VM/CLI load list described in `docs/ARCHITECTURE.md`. The new comment utility has been added to those lists.
 
-Known immediate gaps: CLI E2E covers UTF-16BE plus CRLF, but UTF-8 BOM and UTF-16LE still lack direct round-trip cases; unused `isMarkupCommentOnly` has no direct test. The host-side corpus sanitizer also references `findCFMLCommentEnd` without importing it from the VM/helper scope. R01–R03 in root `TASK.md` own these gates.
+No known gaps remain in this hardening matrix. The broader characterization-fixture and formatter-module extraction tasks remain tracked in root `TASK.md`.
 
 ## Regression-check philosophy
 

@@ -1,5 +1,6 @@
 var fs = require('fs');
 var vm = require('vm');
+var cfmlCommentUtils = require('../js/cfml-comment-utils.js');
 
 var scripts = [
 	'js/cfml-comment-utils.js',
@@ -197,6 +198,26 @@ function runRouter(input, language, deepFormat) {
 		'nested CFML comment end consumes the outer close',
 		structuralHarness.context.findCFMLCommentEnd('<!--- outer <!--- inner ---> tail --->', 0),
 		'<!--- outer <!--- inner ---> tail --->'.length
+	);
+	assertEqual(
+		'depth-three CFML comment end consumes all nested closes',
+		structuralHarness.context.findCFMLCommentEnd('<!--- outer <!--- middle <!--- inner ---> middle ---> outer --->', 0),
+		'<!--- outer <!--- middle <!--- inner ---> middle ---> outer --->'.length
+	);
+	assertEqual(
+		'unclosed nested CFML comment fails closed',
+		structuralHarness.context.findCFMLCommentEnd('<!--- outer <!--- inner --->', 0),
+		-1
+	);
+	assertEqual(
+		'CFML close marker inside HTML comment does not close HTML early',
+		structuralHarness.context.findMarkupCommentEnd('<!-- outer <!--- inner ---> tail -->', 0),
+		'<!-- outer <!--- inner ---> tail -->'.length
+	);
+	assertEqual(
+		'unclosed nested CFML comment stays opaque to tag splitting',
+		structuralHarness.context.splitAdjacentCFMLTags('<!--- open\n<cfif dead>\n</cfif>'),
+		'<!--- open\n<cfif dead>\n</cfif>'
 	);
 	assertEqual(
 		'nested CFML comment stays opaque to tag splitting',
@@ -2240,10 +2261,12 @@ assertEqual(
 		'<cfquery name="q">\n\tSELECT\n\t\ta\n\tFROM\n\t\tt\n\tWHERE\n\t\tx = 1\n\t\t<cfif y>\n\t\t\t<!--- a note --->\n\t\t\tAND z = 2\n\t\t</cfif>\n</cfquery>'
 	);
 
+	// T6b — A complex/nested comment uses the safe structural fallback;
+	// SQL text and the full comment must not be dropped or reinterpreted.
 	assertEqual(
 		'Phase4 T6b: nested CFML comment remains one opaque tree line',
 		runProSQL('<cfquery name="q">\nSELECT a FROM t WHERE x = 1\n<cfif y>\n<!--- outer <!--- inner ---> continues --->\nand z = 2\n</cfif>\n</cfquery>'),
-		'<cfquery name="q">\n\tSELECT\n\t\ta\n\tFROM\n\t\tt\n\tWHERE\n\t\tx = 1\n\t\t<cfif y>\n\t\t\t<!--- outer <!--- inner ---> continues --->\n\t\t\tAND z = 2\n\t\t</cfif>\n</cfquery>'
+		'<cfquery name="q">\n\tSELECT a FROM t WHERE x = 1\n\t<cfif y>\n\t\t<!--- outer <!--- inner ---> continues --->\n\t\tand z = 2\n\t</cfif>\n</cfquery>'
 	);
 
 	// T7 — post-tree segment with GROUP BY + ORDER BY. Both must be re-formatted.
@@ -2374,24 +2397,6 @@ assertEqual(
 		'cast','over','partition','within','filter'
 	].forEach(function(k) { SQL_KEYWORDS[k] = 1; });
 
-	function findNestedCFMLCommentEnd(text, startIndex) {
-		var depth = 1;
-		var i = startIndex + 5;
-		while (i < text.length) {
-			if (text.slice(i, i + 5) === '<!---') {
-				depth++;
-				i += 5;
-			} else if (text.slice(i, i + 4) === '--->') {
-				depth--;
-				i += 4;
-				if (depth === 0) return i;
-			} else {
-				i++;
-			}
-		}
-		return -1;
-	}
-
 	function tokenize(text) {
 		var toks = [];
 		var i = 0;
@@ -2402,7 +2407,7 @@ assertEqual(
 			if (c === ' ' || c === '\t' || c === '\n' || c === '\r') { i++; continue; }
 			// CFML markup comment — consume its complete nested region.
 			if (text.substr(i, 5) === '<!---') {
-				var commentEnd = findNestedCFMLCommentEnd(text, i);
+				var commentEnd = cfmlCommentUtils.findCFMLCommentEnd(text, i);
 				if (commentEnd === -1) { toks.push({kind:'COMMENT_CFM', text: text.slice(i).replace(/\s+/g,' ').trim()}); i = n; break; }
 				toks.push({kind:'COMMENT_CFM', text: text.slice(i, commentEnd).replace(/\s+/g,' ').trim()});
 				i = commentEnd; continue;

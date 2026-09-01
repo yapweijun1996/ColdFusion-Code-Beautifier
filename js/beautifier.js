@@ -1078,7 +1078,8 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 			continue;
 		}
 
-		var legacyScriptWrapper = isLegacyJavaScriptHTMLWrapper(rawCode, line);
+		var legacyScriptWrapper = isLegacyJavaScriptHTMLWrapper(rawCode, line)
+			|| isInlineLegacyJavaScriptHTMLWrapper(rawCode, line);
 		var markupScan = legacyScriptWrapper
 			? { startsInComment: false, hadComment: false, codeOutsideComment: true }
 			: advanceMarkupCommentState(line, markupCommentState);
@@ -1153,6 +1154,7 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 		var start_width_tag = get_tag_element_start_width(line_data);
 		var end_width_tag   = get_tag_element_end_width(line_data);
 		var tag_name        = get_tag_name(line_data);
+		var structuralTagName = tag_name ? tag_name.toLowerCase() : '';
 		var maintain_yn     = "n";
 		/* Initial [end  ]   */
 
@@ -1164,12 +1166,12 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 		// their own handling above.
 		var hasOuterTagClose = hasTagCloseOutsideStrings(line);
 		if (line_data.startsWith("<") && !hasOuterTagClose && tag_name && !line_data.startsWith('<!')) {
-			multiLineTagStructural = isIndentingTag(tag_name);
+			multiLineTagStructural = isIndentingTag(structuralTagName);
 			if (multiLineTagStructural) {
-				indentLevel = prepareStructuralOpen(structuralTagStack, tag_name, indentLevel);
+				indentLevel = prepareStructuralOpen(structuralTagStack, structuralTagName, indentLevel);
 			}
 			applyIndent();
-			multiLineTagName = tag_name;
+			multiLineTagName = structuralTagName;
 			multiLineTagOrigPrefix = origPrefix;
 			/* Seed the cross-line quote state: if the opening line leaves a
 			 * string literal open (e.g. `<cfset q = dbgQuery(` then a later
@@ -1180,7 +1182,7 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 			multiLineTagQuote = scanMultiLineTagClose(line, null).endQuote;
 			inMultiLineTag = true;
 			if (multiLineTagStructural) {
-				structuralTagStack.push({ name: tag_name, level: indentLevel });
+				structuralTagStack.push({ name: structuralTagName, level: indentLevel });
 			}
 			indentLevel += 1;
 			continue;
@@ -1191,7 +1193,19 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 			 * persistent named hierarchy. Packed opens/closes are handled in
 			 * source order; leading packed closes display at the outermost
 			 * matching opener rather than decrementing an anonymous counter. */
-			var tagInfo = tagIndentDelta(line);
+			var tagInfo = tagIndentDelta(line,
+				inJsBlock || inCfscriptBlock || inStyleBlock
+				|| structuralTagName === 'script' || structuralTagName === 'cfscript');
+			var closesScriptOnLine = false;
+			var closesCFScriptOnLine = false;
+			var closesStyleOnLine = false;
+			for (var eventIndex = 0; eventIndex < tagInfo.events.length; eventIndex++) {
+				var event = tagInfo.events[eventIndex];
+				if (event.type !== 'close') continue;
+				if (event.name === 'script') closesScriptOnLine = true;
+				if (event.name === 'cfscript') closesCFScriptOnLine = true;
+				if (event.name === 'style') closesStyleOnLine = true;
+			}
 			var structuralResult = applyStructuralTagEvents(
 				structuralTagStack,
 				tagInfo.events,
@@ -1209,8 +1223,8 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 			 * state. <script>: always JS, reset anchors on entry/exit.
 			 * <cfquery>/<style>: NOT JS, suppress continuation logic
 			 * inside the body. Other tags don't change inJsBlock. */
-			if (tag_name === 'script') {
-				inJsBlock = !line_data.startsWith('</');
+			if (structuralTagName === 'script') {
+				inJsBlock = !line_data.startsWith('</') && !closesScriptOnLine;
 				inStyleBlock = false;
 				inCfscriptBlock = false;
 				parenDepth = 0;
@@ -1225,8 +1239,8 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 				inJsTemplateLiteral = false;
 				templateOrigPrefix = '';
 				templateNewPrefix = '';
-			} else if (tag_name === 'cfscript') {
-				inJsBlock = !line_data.startsWith('</');
+			} else if (structuralTagName === 'cfscript') {
+				inJsBlock = !line_data.startsWith('</') && !closesCFScriptOnLine;
 				inStyleBlock = false;
 				inCfscriptBlock = !line_data.startsWith('</');
 				parenDepth = 0;
@@ -1241,9 +1255,10 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 				inJsTemplateLiteral = false;
 				templateOrigPrefix = '';
 				templateNewPrefix = '';
-			} else if (tag_name === 'cfquery' || tag_name === 'style') {
+			} else if (structuralTagName === 'cfquery' || structuralTagName === 'style') {
 				inJsBlock = false;
-				inStyleBlock = tag_name === 'style' && !line_data.startsWith('</');
+				inStyleBlock = structuralTagName === 'style'
+					&& !line_data.startsWith('</') && !closesStyleOnLine;
 				inCfscriptBlock = false;
 				parenDepth = 0;
 				bracketDepth = 0;
@@ -1690,6 +1705,11 @@ function normalizeOutputLineEndings(code, source) {
 function isLegacyJavaScriptHTMLWrapper(code, line) {
 	if (typeof code !== 'string' || !/^<!--[ \t]*$/.test(line)) return false;
 	return /(?:^|\r?\n)[ \t]*<!--[ \t]*(?:\r?\n)[\s\S]*?(?:\r?\n)[ \t]*\/\/-->[ \t]*(?:\r?\n|$)/.test(code);
+}
+
+function isInlineLegacyJavaScriptHTMLWrapper(code, line) {
+	if (typeof code !== 'string' || !/^<script\b[^>]*>[ \t]*<!--[ \t]*$/i.test(line)) return false;
+	return /\/\/-->[ \t]*(?:\r?\n|$)/.test(code);
 }
 
 function beautifyCodes() {

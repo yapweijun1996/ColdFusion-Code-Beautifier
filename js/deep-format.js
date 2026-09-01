@@ -18,6 +18,7 @@ function normalizeStructuralCFMLTags(body) {
 			continue;
 		}
 
+		var tagPrefix = (line.match(/^[ \t]*/) || [''])[0];
 		var combined = trimmed;
 		var closeIndex = -1;
 		while (i + 1 < lines.length) {
@@ -26,7 +27,7 @@ function normalizeStructuralCFMLTags(body) {
 			closeIndex = findCFMLTagClose(combined);
 			if (closeIndex !== -1) break;
 		}
-		result.push(combined);
+		result.push(tagPrefix + combined);
 	}
 	return result.join('\n');
 }
@@ -516,9 +517,22 @@ function formatPhase4PostFragment(post, sqlDialect) {
 	if (typeof post !== 'string') return '';
 	var trimmed = post.trim();
 	if (trimmed === '') return '';
+	/* A cfif tree may be followed by ordinary WHERE continuations before a
+	 * GROUP/ORDER clause. They are not optional post-WHERE clauses and must
+	 * not be discarded when the synthetic formatter slices at GROUP/ORDER. */
+	var postLines = trimmed.split('\n');
+	var clauseIndex = -1;
+	for (var p = 0; p < postLines.length; p++) {
+		if (/^(GROUP BY|ORDER BY|HAVING|LIMIT|OFFSET|FETCH|UNION(?: ALL)?|INTERSECT|EXCEPT)\b/i.test(postLines[p].trim())) {
+			clauseIndex = p;
+			break;
+		}
+	}
+	var leadingContinuation = clauseIndex > 0 ? postLines.slice(0, clauseIndex).join('\n').trim() : '';
+	var clausePost = clauseIndex > 0 ? postLines.slice(clauseIndex).join('\n') : trimmed;
 	// Synthesize a complete SELECT so sql-formatter has a well-formed input;
 	// the output's post-WHERE fragment is what we keep.
-	var synthetic = 'SELECT 1\nFROM t\nWHERE 1=1\n' + trimmed;
+	var synthetic = 'SELECT 1\nFROM t\nWHERE 1=1\n' + clausePost;
 	try {
 		var prot = protectCFMLTokens(synthetic);
 		var formatted = formatProSQLSync(prot.code, sqlDialect);
@@ -527,7 +541,15 @@ function formatPhase4PostFragment(post, sqlDialect) {
 		var postKeywordOwn = /^(GROUP BY|ORDER BY|HAVING|LIMIT|OFFSET|FETCH|UNION|UNION ALL|INTERSECT|EXCEPT)\s*$/;
 		for (var i = 0; i < lines.length; i++) {
 			if (postKeywordOwn.test(lines[i])) {
-				return lines.slice(i).join('\n');
+				var formattedClause = lines.slice(i).join('\n');
+				if (leadingContinuation !== '') {
+					var leadingProt = protectCFMLTokens(leadingContinuation);
+					var leadingUppered = uppercaseSQLKeywordsInProtected(leadingProt.code);
+					var leadingSpaced = normalizeSQLEqualsSpacing(leadingUppered);
+					var leadingFormatted = restoreCFMLTokens(leadingSpaced, leadingProt.tokens);
+					return leadingFormatted + '\n' + formattedClause;
+				}
+				return formattedClause;
 			}
 		}
 	} catch (e) {
@@ -575,6 +597,19 @@ function hasStandaloneWhereAtEnd(text) {
 	if (typeof text !== 'string') return false;
 	var lines = text.trim().split('\n');
 	return lines.length > 0 && /^where$/i.test(lines[lines.length - 1].trim());
+}
+
+function looksLikeCanonicalProSQLBody(text) {
+	if (typeof text !== 'string') return false;
+	var hasSelect = false;
+	var hasFrom = false;
+	var lines = text.split('\n');
+	for (var i = 0; i < lines.length; i++) {
+		var t = lines[i].trim();
+		if (/^(SELECT(?: DISTINCT)?|UPDATE|INSERT(?: INTO)?|DELETE|WITH|MERGE|TRUNCATE)$/i.test(t)) hasSelect = true;
+		if (/^FROM$/i.test(t)) hasFrom = true;
+	}
+	return hasSelect && hasFrom;
 }
 
 function stripWhereFromLeaves(treeLines) {
@@ -883,6 +918,32 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 				var verbatimSource = (originalBodies[currentIndex] !== undefined)
 					? normalizeStructuralCFMLTags(originalBodies[currentIndex])
 					: structuralBody;
+				var hasComplexComments = hasComplexMarkupComments(verbatimSource)
+					|| hasCFMLInsideSQLBlockComment(verbatimSource);
+				var canonicalSQLBody = looksLikeCanonicalProSQLBody(verbatimSource);
+
+				/* A multiline/nested CFML comment or a CFML-looking SQL block
+				 * comment is not safe input for the Pro SQL grammar. Keep the
+				 * outer pass's canonical SQL/CFML hierarchy instead of preserving
+				 * the source's legacy alignment, which can be interpreted as a
+				 * new nesting level on the next pass. */
+				if (hasComplexComments) {
+					var safeBody = normalizeSafeStructuralBody(normalizeStructuralCFMLTags(body));
+					return maybeNormalizeCFMLTags(
+						parentIndent + openTag + '\n'
+						+ indentEmbeddedBody(safeBody, parentIndent) + '\n'
+						+ parentIndent + closeTag
+					);
+				}
+
+				/* A fully formatted Pro SQL body is already canonical. The outer
+				 * CFML pass cannot know that a CFML branch belongs below a SQL
+				 * clause, so rebuilding this body from structuralBody would
+				 * flatten that branch on the next invocation. Preserve the exact
+				 * canonical body, including its SQL continuation indentation. */
+				if (sqlPro && canonicalSQLBody) {
+					return maybeNormalizeCFMLTags(parentIndent + openTag + verbatimSource + closeTag);
+				}
 
 				/* If the outer beautifier already produced exactly the same
 				 * structural body as the current source, keep that canonical
@@ -890,7 +951,7 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 				 * query: the first pass uses Tier 3 and the next pass must not
 				 * reinterpret the generated indentation as fresh user indent and
 				 * add another tab to every CFML branch. */
-				if (!sqlPro && structuralBody === verbatimSource) {
+				if (structuralBody === verbatimSource && (!sqlPro || canonicalSQLBody)) {
 					return maybeNormalizeCFMLTags(parentIndent + openTag + structuralBody + closeTag);
 				}
 
@@ -901,6 +962,8 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 				// preserved AND body indented +1 inside cfif. Falls through
 				// to verbatim if marker round-trip can't be verified.
 				if (bodyHasUserIndent(verbatimSource)
+						&& !hasComplexComments
+						&& !canonicalSQLBody
 						&& sqlPro
 						&& typeof formatProSQLSync === 'function'
 						&& typeof isProSQLLoaded === 'function'
@@ -946,6 +1009,8 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 				// SQL backbone formatting with cfif structure preserved as a
 				// sub-tree under the (now hoisted) WHERE keyword.
 				if (bodyHasUserIndent(verbatimSource)
+						&& !hasComplexComments
+						&& !canonicalSQLBody
 						&& sqlPro
 						&& typeof formatProSQLSync === 'function'
 						&& typeof isProSQLLoaded === 'function'
@@ -958,7 +1023,12 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 							&& hasStandaloneWhereAtEnd(split.pre)
 							&& hasStructuralTreeBody(split.treeLines)
 							&& !leavesStartWithWhere;
-						if (split && (leavesStartWithWhere || alreadyHoistedWhere)) {
+						var postHasPredicateContinuation = split
+							&& /^(?:and|or)\b/i.test(split.post.trim());
+						var preContainsJoin = split
+							&& /\b(?:inner|left(?:\s+outer)?|right(?:\s+outer)?|full(?:\s+outer)?|cross|natural)?\s*join\b/i.test(split.pre);
+						if (split && (alreadyHoistedWhere
+							|| (leavesStartWithWhere && postHasPredicateContinuation && !preContainsJoin))) {
 							var strippedTree = leavesStartWithWhere
 								? stripWhereFromLeaves(split.treeLines) : split.treeLines;
 							var preTrimmed = split.pre.replace(/\s+$/, '');
@@ -1025,7 +1095,9 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 				// — the AND-leaves precondition is specific enough. This means
 				// flat-input AND-leaves cases now produce nicely-formatted
 				// output instead of falling to Tier 3 verbatim.
-				if (sqlPro
+				if (!hasComplexComments
+						&& !canonicalSQLBody
+						&& sqlPro
 						&& typeof formatProSQLSync === 'function'
 						&& typeof isProSQLLoaded === 'function'
 						&& isProSQLLoaded()) {
@@ -1152,7 +1224,8 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 			 * that is part of the rendered string. The outer CFML pass now keeps
 			 * that payload relative to its opener; do not run a second JS pass
 			 * that would rewrite its absolute content indentation. */
-			if (hasMultilineBraceCodeTemplate(body)) {
+			if (hasMultilineBraceCodeTemplate(body)
+					|| hasCFMLTagInsideBraceString(body)) {
 				return parentIndent + openTag + body + closeTag;
 			}
 
@@ -1479,6 +1552,51 @@ function shouldFormatScript(openTag) {
 	return ['text/javascript', 'application/javascript', 'module'].includes(typeValue);
 }
 
+function normalizeSafeStructuralBody(body) {
+	var lines = body.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+	var commentMask = buildMarkupCommentMask(lines);
+	var baseIndent = null;
+	for (var i = 0; i < lines.length; i++) {
+		if (commentMask[i] || lines[i].trim() === '') continue;
+		var prefix = (lines[i].match(/^[ \t]*/) || [''])[0];
+		if (baseIndent === null || prefix.length < baseIndent) baseIndent = prefix.length;
+	}
+	if (baseIndent === null) baseIndent = 0;
+
+	var result = [];
+	var commentState = { cfmlDepth: 0, htmlDepth: 0 };
+	var commentOrigPrefix = null;
+	var structuralDepth = 0;
+	for (var j = 0; j < lines.length; j++) {
+		var line = lines[j];
+		var trimmed = line.trim();
+		var scan = advanceMarkupCommentState(trimmed, commentState);
+		var prefix = (line.match(/^[ \t]*/) || [''])[0];
+		if (scan.startsInComment || (scan.hadComment && !scan.codeOutsideComment)) {
+			if (!scan.startsInComment) commentOrigPrefix = prefix;
+			if (commentOrigPrefix === null) commentOrigPrefix = prefix;
+			var relative = prefix.indexOf(commentOrigPrefix) === 0
+				? prefix.slice(commentOrigPrefix.length) : '';
+			result.push(new Array(structuralDepth + 1).join('\t') + relative + trimmed);
+			continue;
+		}
+		commentOrigPrefix = null;
+		var structuralMatch = trimmed.match(/^<\/(cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b/i);
+		var structuralOpen = trimmed.match(/^<(cfif|cfloop|cfswitch|cfcase)\b/i);
+		var structuralMiddle = trimmed.match(/^<(cfelseif|cfelse|cfdefaultcase)\b/i);
+		if (structuralMatch || structuralMiddle) structuralDepth = Math.max(0, structuralDepth - 1);
+		if (trimmed === '') {
+			result.push('');
+		} else {
+			result.push(line.slice(Math.min(baseIndent, prefix.length)));
+		}
+		if (structuralOpen && !/\/\s*>$/.test(trimmed)) structuralDepth++;
+	}
+	while (result.length > 0 && result[0].trim() === '') result.shift();
+	while (result.length > 0 && result[result.length - 1].trim() === '') result.pop();
+	return result.join('\n');
+}
+
 function cleanEmbeddedBody(body) {
 	var lines = body.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
 
@@ -1566,6 +1684,36 @@ function buildMarkupCommentMask(lines) {
 	return mask;
 }
 
+function hasComplexMarkupComments(text) {
+	if (typeof text !== 'string') return false;
+	/* Comment markers inside strings are conservatively treated as complex.
+	 * The safe structural fallback preserves them, while trying to infer
+	 * string/comment precedence here could reintroduce the same boundary bug. */
+	for (var i = 0; i < text.length; i++) {
+		if (text.slice(i, i + 5) !== '<!---') continue;
+		var end = findCFMLCommentEnd(text, i);
+		var value = end === -1 ? text.slice(i) : text.slice(i, end);
+		if (value.indexOf('\n') !== -1
+				|| value.indexOf('<!---', 5) !== -1
+				|| /<!---\s*\/?cf/i.test(value)) return true;
+		if (end === -1) return true;
+		i = end - 1;
+	}
+	return false;
+}
+
+function hasCFMLInsideSQLBlockComment(text) {
+	if (typeof text !== 'string') return false;
+	var start = 0;
+	while ((start = text.indexOf('/*', start)) !== -1) {
+		var end = text.indexOf('*/', start + 2);
+		var value = end === -1 ? text.slice(start) : text.slice(start, end + 2);
+		if (/<\/?cf[a-z]/i.test(value)) return true;
+		if (end === -1) return true;
+		start = end + 2;
+	}
+	return false;
+}
 
 /* Structural query fallback may preserve SQL continuation whitespace from the
  * original body, but CFML control tags and ordinary SQL lines must use the
@@ -1754,6 +1902,16 @@ function hasMultilineBraceCodeTemplate(code) {
 			if (code.slice(opening, i).indexOf('\n') !== -1) return true;
 			opening = -1;
 		}
+	}
+	return false;
+}
+
+function hasCFMLTagInsideBraceString(code) {
+	if (typeof code !== 'string') return false;
+	var protectedText = protectBraceCodeText(code);
+	for (var i = 0; i < protectedText.tokens.length; i++) {
+		var token = protectedText.tokens[i];
+		if (/^[\"'`]/.test(token) && /<\/?cf[a-z]/i.test(token)) return true;
 	}
 	return false;
 }
@@ -2214,9 +2372,23 @@ function restoreBraceCodeText(code, tokens) {
 			code = code.split(placeholder).join(value);
 			continue;
 		}
-		// Multi-line — only block comments are safe to re-indent.
-		// Template literals and regex content is significant; restore
-		// verbatim.
+		// Multi-line markup comments are opaque, but their continuation
+		// prefixes must be rebased to the placeholder's host line. Otherwise
+		// cleanEmbeddedBody's removed common prefix is restored as extra
+		// indentation on every later pass. Template literals and regex
+		// content remain byte-significant and are restored verbatim.
+		if (value.indexOf('<!---') === 0 || value.indexOf('<!--') === 0) {
+			var markupPieces = code.split(placeholder);
+			var markupRebuilt = markupPieces[0];
+			for (var mk = 1; mk < markupPieces.length; mk++) {
+				var markupHostStart = markupRebuilt.lastIndexOf('\n') + 1;
+				var markupHostPrefix = markupRebuilt.slice(markupHostStart).match(/^[\t]*/);
+				var markupBaseIndent = markupHostPrefix ? markupHostPrefix[0] : '';
+				markupRebuilt += reindentMultilineMarkupComment(value, markupBaseIndent) + markupPieces[mk];
+			}
+			code = markupRebuilt;
+			continue;
+		}
 		if (value.charAt(0) !== '/' || value.charAt(1) !== '*') {
 			code = code.split(placeholder).join(value);
 			continue;
@@ -2256,6 +2428,37 @@ function restoreBraceCodeText(code, tokens) {
  *     /* Header
  *        Continuation A
  *        Continuation B *<slash> */
+function reindentMultilineMarkupComment(value, baseIndent) {
+	var lines = value.split('\n');
+	if (lines.length < 2) return value;
+	var commonPrefix = null;
+	for (var i = 1; i < lines.length; i++) {
+		if (lines[i].replace(/[ \t]/g, '') === '') continue;
+		var prefix = (lines[i].match(/^[ \t]*/) || [''])[0];
+		if (commonPrefix === null) {
+			commonPrefix = prefix;
+			continue;
+		}
+		var commonLength = 0;
+		while (commonLength < commonPrefix.length
+				&& commonLength < prefix.length
+				&& commonPrefix[commonLength] === prefix[commonLength]) {
+			commonLength++;
+		}
+		commonPrefix = commonPrefix.slice(0, commonLength);
+	}
+	if (commonPrefix === null) commonPrefix = '';
+	var output = [lines[0]];
+	for (var j = 1; j < lines.length; j++) {
+		var continuation = lines[j];
+		if (commonPrefix !== '' && continuation.indexOf(commonPrefix) === 0) {
+			continuation = continuation.slice(commonPrefix.length);
+		}
+		output.push(baseIndent + continuation);
+	}
+	return output.join('\n');
+}
+
 function reindentMultilineBlockComment(value, baseIndent) {
 	var lines = value.split('\n');
 	if (lines.length < 2) return value;

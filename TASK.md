@@ -2,13 +2,13 @@
 
 ## Status summary
 
-- **Current source baseline:** working tree based on HEAD `9206986`; full `npm test` passes with the shared comment-scanner changes.
+- **Current source baseline:** current `main`; full `npm test` passes with the completed nested-comment/encoding hardening.
 - **Latest product hardening:** depth-aware nested CFML comments, routed CRLF restoration, UTF-8/BOM-marked UTF-16 CLI encoding preservation, structural SQL fixed-point alignment, whitespace-tolerant raw closes, deep-JS CFML depth, bare-JS fragments in CFML, multi-line templates, and legacy script wrappers are present.
 - **Refactor epic:** planned; production-code extraction has not started.
 - **Next task:** `R01`, characterization/golden baseline.
 - **External blockers:** none.
 - **Sequencing blocker:** R02+ must not start until R01 passes.
-- **Known coverage/tooling gaps:** UTF-16BE + CRLF CLI round trip is now tested; UTF-8 BOM and UTF-16LE still need direct cases. Unused `isMarkupCommentOnly()` is untested, and the host-side `diagnose-corpus.js` sanitizer currently references the VM-only `findCFMLCommentEnd` global; resolve under R01/R03.
+- **Known coverage/tooling gaps:** none in the current hardening matrix. Remaining work is the tracked characterization-fixture and module-extraction sequence.
 - **Privacy constraint:** tracked/CI fixtures must be synthetic; private `sample/*.cfm` remains ignored.
 
 Machine-readable status is mirrored in [task.jsonl](task.jsonl).
@@ -20,7 +20,7 @@ Machine-readable status is mirrored in [task.jsonl](task.jsonl).
 | R00 | Docs | P0 | Align design/spec/epic/roadmap/task and related documentation with current code | — | done |
 | R01 | Baseline | P0 | Add synthetic characterization fixtures and locked golden outputs | R00 | pending / next |
 | R02 | Baseline | P0 | Add exact output, idempotency, content, public-global, string-break, LF/CRLF, and encoding/BOM gates | R01 | pending |
-| R03 | Harness | P1 | Centralize Node VM script loader and import shared comment scanner into host diagnostics | R02 | pending |
+| R03 | Harness | P1 | Centralize Node VM script loader and import shared comment scanner into host diagnostics | R02 | partial — shared comment import done; loader consolidation pending |
 | R04 | Harness | P1 | Replace UI source-regex Promise assertion with runtime contract assertion | R03 | pending |
 | R05 | Extract | P1 | Move indentation and continuation helpers to `js/format-indent-utils.js` | R03 | pending |
 | R06 | Lexer | P1 | Reuse shared regex literal scanner/context without changing output | R05 | pending |
@@ -66,7 +66,7 @@ Machine-readable status is mirrored in [task.jsonl](task.jsonl).
 |---|---|---|
 | Shared nested markup-comment scanner | done | `js/cfml-comment-utils.js` + split/indent regression tests |
 | Routed output line-ending restoration | done; CRLF covered through CLI UTF-16BE E2E | `normalizeOutputLineEndings` + `tests/cli.test.js` |
-| CLI/diagnostic source-encoding preservation | implemented; UTF-16BE tested, UTF-8 BOM/UTF-16LE pending | `tools/source-encoding.js` |
+| CLI/diagnostic source-encoding preservation | implemented; UTF-8 BOM and UTF-16LE/BE tested | `tools/source-encoding.js` |
 | Named CFML/HTML hierarchy | done | formatter structural tests |
 | Optional HTML end tags | done | table/list regression tests |
 | Multi-line tag quote carry | done | multi-line SQL-string tests |

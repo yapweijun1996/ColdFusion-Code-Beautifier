@@ -74,6 +74,22 @@ check('CLI preserves UTF-16BE formatted content and CRLF', utf16Output.text === 
     ''
 ].join('\r\n'));
 
+[
+    { label: 'UTF-8 BOM', encoding: 'utf8', bom: true },
+    { label: 'UTF-16LE', encoding: 'utf16le', bom: true }
+].forEach(function (format) {
+    var encodedInputPath = path.join(tempDir, format.encoding + '_input.cfm');
+    fs.writeFileSync(encodedInputPath, sourceEncoding.encodeSource(source, format));
+    var encodedRun = run([encodedInputPath]);
+    check('CLI ' + format.label + ' input exits successfully', encodedRun.status === 0, encodedRun.stderr);
+    var encodedOutput = sourceEncoding.decodeSource(fs.readFileSync(
+        path.join(tempDir, format.encoding + '_input_beutifier.cfm')
+    ));
+    check('CLI preserves ' + format.label + ' output encoding',
+        encodedOutput.encoding === format.encoding && encodedOutput.bom === format.bom);
+    check('CLI preserves ' + format.label + ' formatted content', encodedOutput.text === expected);
+});
+
 var stdoutRun = run(['-', '--stdout', '--language', 'cfml'], source);
 check('CLI stdin/stdout mode exits successfully', stdoutRun.status === 0, stdoutRun.stderr);
 check('CLI stdout contains only formatted code', stdoutRun.stdout === expected,

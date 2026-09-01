@@ -36,8 +36,16 @@ function findMarkupCommentEnd(text, startIndex) {
 		return findCFMLCommentEnd(text, startIndex);
 	}
 	if (text.slice(startIndex, startIndex + 4) === '<!--') {
-		var htmlEnd = text.indexOf('-->', startIndex + 4);
-		return htmlEnd === -1 ? -1 : htmlEnd + 3;
+		for (var i = startIndex + 4; i < text.length; i++) {
+			/* `--->` is a CFML close marker embedded in an HTML comment;
+			 * its final three characters must not close the HTML region. */
+			if (text.slice(i, i + 4) === '--->') {
+				i += 3;
+				continue;
+			}
+			if (text.slice(i, i + 3) === '-->') return i + 3;
+		}
+		return -1;
 	}
 	return -1;
 }
@@ -90,6 +98,10 @@ function advanceMarkupCommentState(text, state) {
 
 		if (current.htmlDepth > 0) {
 			hadComment = true;
+			if (text.slice(i, i + 4) === '--->') {
+				i += 4;
+				continue;
+			}
 			if (text.slice(i, i + 3) === '-->') {
 				current.htmlDepth = 0;
 				i += 3;
@@ -147,9 +159,11 @@ function advanceMarkupCommentState(text, state) {
 	};
 }
 
-function isMarkupCommentOnly(text) {
-	var state = { cfmlDepth: 0, htmlDepth: 0 };
-	var result = advanceMarkupCommentState(String(text || ''), state);
-	return result.hadComment && !result.codeOutsideComment
-		&& result.cfmlDepth === 0 && result.htmlDepth === 0;
+if (typeof module !== 'undefined' && module.exports) {
+	module.exports = {
+		findCFMLCommentEnd: findCFMLCommentEnd,
+		findMarkupCommentEnd: findMarkupCommentEnd,
+		consumeMarkupComment: consumeMarkupComment,
+		advanceMarkupCommentState: advanceMarkupCommentState
+	};
 }

@@ -372,7 +372,7 @@ regex literal disambiguation".
 
 ## Shared nested markup-comment scanner
 
-`js/cfml-comment-utils.js` provides `findCFMLCommentEnd`, `findMarkupCommentEnd`, `consumeMarkupComment`, and line-oriented `advanceMarkupCommentState`. CFML comments are depth-aware: an inner `<!--- ... --->` does not prematurely terminate the outer comment. Browser, CLI VM, formatter tests, splitter, brace/tag scanner, language detector, SQL token/tree handling, and deep JS protection load the helper before use. HTML comments remain first-close regions. Corpus diagnostics load it inside their formatter VM but still have a separate host-side scanner; consolidating that host scope is tracked in `TASK.md`.
+`js/cfml-comment-utils.js` provides `findCFMLCommentEnd`, `findMarkupCommentEnd`, `consumeMarkupComment`, and line-oriented `advanceMarkupCommentState`. CFML comments are depth-aware: an inner `<!--- ... --->` does not prematurely terminate the outer comment. Browser, CLI VM, formatter tests, splitter, brace/tag scanner, language detector, SQL token/tree handling, deep JS protection, and the host-side corpus range classifier load the helper before use. HTML comments remain first-close regions.
 
 This module is the only completed extraction related to the broader refactor. Its dependent script-order and SW-precache entries are already present.
 
