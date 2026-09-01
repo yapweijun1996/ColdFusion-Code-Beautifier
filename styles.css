@@ -319,6 +319,20 @@ footer a:focus-visible {
 	background: linear-gradient(135deg, #000, #666);
 }
 
+.simple-toast-actions {
+	display: flex;
+	justify-content: center;
+	margin-top: 12px;
+}
+
+.simple-toast-action {
+	min-height: var(--tap);
+	padding: 8px 16px;
+	background: var(--brand);
+	color: #fff;
+	font-size: 14px;
+}
+
 .simple-toast-slidein:before {
 	content: '';
 	position: absolute;

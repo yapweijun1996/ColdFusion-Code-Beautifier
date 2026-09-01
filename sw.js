@@ -3,8 +3,9 @@
  *   - HTML (navigation): network-first  → users always see latest source
  *   - JS / CSS / SVG / manifest: stale-while-revalidate
  *   - Bump CACHE_VERSION on every release to evict old assets
+ *   - New workers remain waiting until js/pwa.js receives user consent
  */
-const CACHE_VERSION = 'v7.4.1';
+const CACHE_VERSION = 'v7.5.0';
 const CACHE_NAME    = 'cfbeautifier-' + CACHE_VERSION;
 
 const PRECACHE_URLS = [

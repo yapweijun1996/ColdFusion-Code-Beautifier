@@ -52,7 +52,7 @@ js/tree-sitter-cfml.js ← Semantic Indent: algorithm + post-pass + dual grammar
 js/beautifier.js       ← beautifyCFML (+ normalizeLeadingSpacesToTabs) + detectLanguage + beautifyCodes (router)
 js/editor-ui.js        ← button events, keyboard shortcuts, Tab indentation, and async Beautify state
 js/app.js              ← footer year + Pro SQL / Normalize / Semantic / Safe-Mode prefs persistence (localStorage) + bundle pre-warm
-js/pwa.js              ← service-worker registration + auto-update reload (deferred)
+js/pwa.js              ← service-worker registration + user-controlled update prompt (deferred)
 ```
 
 `js/tree-sitter-cfml.js` loads before `js/beautifier.js` so its globals
@@ -156,15 +156,17 @@ CRLF; otherwise routed browser/CLI output uses LF.
 manifest.webmanifest   ← name, scope, display=standalone, theme color, SVG icon
 sw.js                  ← network-first for HTML, stale-while-revalidate for assets
                          CACHE_VERSION constant — bump on release to evict
-                         skipWaiting() + clients.claim() so update is one-tab-reload away
-js/pwa.js              ← registers ./sw.js
+                         skipWaiting() + clients.claim() after user consent
+js/pwa.js              ← registers ./sw.js and restores one-shot input drafts
                          on 'updatefound' + 'installed' + existing controller
-                            → postMessage SKIP_WAITING
-                         on 'controllerchange' → location.reload() (once)
+                            → persistent "Update now" action toast
+                         action saves input to sessionStorage, then posts
+                            SKIP_WAITING; controllerchange reloads that tab
+                         an update accepted in another tab offers "Reload now"
                          calls reg.update() hourly + on visibilitychange
 ```
 
-Release flow: edit code → bump `CACHE_VERSION` in `sw.js` → push `main` → GitHub Actions
+Release flow: edit code → bump `CACHE_VERSION` in `sw.js` → push `main` → GitHub Actions. The browser's service-worker update check compares `sw.js`; changing application files without changing that constant will not create a new waiting worker.
 runs `npm test` (formatter + UI contract + Tree-sitter) then deploys via
 `actions/deploy-pages@v4`.
 

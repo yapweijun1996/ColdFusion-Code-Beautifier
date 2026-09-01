@@ -17,6 +17,8 @@ const css = fs.readFileSync(path.join(root, 'styles.css'), 'utf8');
 const beautifier = fs.readFileSync(path.join(root, 'js', 'beautifier.js'), 'utf8');
 const app = fs.readFileSync(path.join(root, 'js', 'app.js'), 'utf8');
 const sw = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
+const pwa = fs.readFileSync(path.join(root, 'js', 'pwa.js'), 'utf8');
+const toast = fs.readFileSync(path.join(root, 'js', 'toast.js'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
 function pass(name) {
@@ -82,6 +84,11 @@ assert.deepStrictEqual(scriptSources, expectedOrder, 'script dependency order mu
 pass('script dependency order is stable');
 assert.match(sw, /'\.\/js\/editor-ui\.js'/, 'new UI module must be precached');
 pass('new UI module is in the service-worker precache');
+expectMatch('service-worker cache version is bumped for the update flow', sw, /CACHE_VERSION\s*=\s*'v7\.5\.0'/);
+expectMatch('PWA exposes an Update now action', pwa, /'Update now'/);
+expectMatch('PWA saves the editor draft before activation', pwa, /sessionStorage|DRAFT_KEY/);
+expectMatch('toast exposes an action button helper', toast, /simple_toast_action/);
+expectMatch('toast action meets the touch target contract', css, /\.simple-toast-action\s*\{[\s\S]*?min-height:\s*var\(--tap\)/);
 assert.match(packageJson.scripts.test, /ui\.test\.js/, 'npm test must include UI tests');
 pass('npm test includes UI tests');
 
@@ -188,6 +195,119 @@ function keyEvent(key, options) {
   };
 }
 
+async function runPwaUpdateTest() {
+  const input = {
+    value: '',
+    dispatched: [],
+    dispatchEvent: function (event) { this.dispatched.push(event.type); }
+  };
+  const storageData = { 'cfb.pwa.draft.input': 'restored draft' };
+  const storage = {
+    getItem: function (key) { return Object.prototype.hasOwnProperty.call(storageData, key) ? storageData[key] : null; },
+    setItem: function (key, value) { storageData[key] = String(value); },
+    removeItem: function (key) { delete storageData[key]; }
+  };
+  const windowListeners = Object.create(null);
+  const serviceWorkerListeners = Object.create(null);
+  const registrationListeners = Object.create(null);
+  const workerListeners = Object.create(null);
+  const updateMessages = [];
+  const actionPrompts = [];
+  let reloads = 0;
+  let updateChecks = 0;
+
+  const registration = {
+    waiting: null,
+    installing: null,
+    addEventListener: function (type, handler) {
+      (registrationListeners[type] || (registrationListeners[type] = [])).push(handler);
+    },
+    dispatch: function (type) {
+      (registrationListeners[type] || []).forEach(function (handler) { handler(); });
+    },
+    update: function () {
+      updateChecks++;
+      return Promise.resolve();
+    }
+  };
+  const serviceWorker = {
+    controller: { id: 'old-worker' },
+    addEventListener: function (type, handler) {
+      (serviceWorkerListeners[type] || (serviceWorkerListeners[type] = [])).push(handler);
+    },
+    register: function () { return Promise.resolve(registration); },
+    dispatch: function (type) {
+      (serviceWorkerListeners[type] || []).forEach(function (handler) { handler(); });
+    }
+  };
+  const document = {
+    visibilityState: 'visible',
+    getElementById: function (id) { return id === 'input' ? input : null; },
+    addEventListener: function () {},
+    createEvent: function () {
+      return { type: '', initEvent: function (type) { this.type = type; } };
+    }
+  };
+  const context = {
+    document,
+    navigator: { serviceWorker },
+    location: { protocol: 'https:', reload: function () { reloads++; } },
+    sessionStorage: storage,
+    console: { warn: function () {} },
+    Promise,
+    setInterval: function () { return 1; },
+    simple_toast_msg: function () {},
+    simple_toast_action: function (message, label, onAction) {
+      actionPrompts.push({ message, label, onAction, remove: function () {} });
+      return actionPrompts[actionPrompts.length - 1];
+    }
+  };
+  context.window = context;
+  context.addEventListener = function (type, handler) {
+    (windowListeners[type] || (windowListeners[type] = [])).push(handler);
+  };
+  context.dispatchWindow = function (type) {
+    (windowListeners[type] || []).forEach(function (handler) { handler(); });
+  };
+  vm.createContext(context);
+  vm.runInContext(pwa, context, { filename: 'js/pwa.js' });
+
+  assert.strictEqual(input.value, 'restored draft');
+  assert.strictEqual(storage.getItem('cfb.pwa.draft.input'), null);
+  assert.ok(input.dispatched.includes('input'));
+  context.dispatchWindow('load');
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.strictEqual(updateChecks, 1);
+
+  const worker = {
+    state: 'installing',
+    addEventListener: function (type, handler) {
+      (workerListeners[type] || (workerListeners[type] = [])).push(handler);
+    },
+    postMessage: function (message) { updateMessages.push(message); },
+    dispatch: function (type) {
+      (workerListeners[type] || []).forEach(function (handler) { handler(); });
+    }
+  };
+  registration.installing = worker;
+  registration.dispatch('updatefound');
+  worker.state = 'installed';
+  worker.dispatch('statechange');
+  assert.strictEqual(actionPrompts.length, 1);
+  assert.strictEqual(actionPrompts[0].label, 'Update now');
+  assert.strictEqual(updateMessages.length, 0);
+
+  input.value = 'new draft before update';
+  actionPrompts[0].onAction();
+  assert.strictEqual(storage.getItem('cfb.pwa.draft.input'), 'new draft before update');
+  assert.strictEqual(updateMessages.length, 1);
+  assert.strictEqual(updateMessages[0].type, 'SKIP_WAITING');
+  serviceWorker.dispatch('controllerchange');
+  assert.strictEqual(reloads, 1);
+  pass('PWA waits for Update now, saves input, activates and reloads');
+}
+
 async function runFormatterAsyncSafetyTest() {
   const ids = {
     split_html_tag: { checked: false },
@@ -252,6 +372,7 @@ async function runFormatterAsyncSafetyTest() {
 }
 
 (async function runBehaviorTests() {
+  await runPwaUpdateTest();
   await runFormatterAsyncSafetyTest();
   const harness = makeHarness();
   const { context, elements, document, counts } = harness;
