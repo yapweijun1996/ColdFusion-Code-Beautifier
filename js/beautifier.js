@@ -46,7 +46,8 @@ function countBracesOutsideStrings(s, options) {
 		}
 	}
 	var i = 0;
-	var inQ = null;        // null | "'" | '"' | '`'
+	var qStack = [];
+	var interpBraceStack = [];
 	var inBlockComment = false;
 	// CFML markup comments are consumed to their depth-aware close marker.
 	// This prevents nested commented-out tags and their braces/brackets from
@@ -64,10 +65,36 @@ function countBracesOutsideStrings(s, options) {
 			i++; continue;
 		}
 
-		if (inQ) {
+		var curQ = qStack.length > 0 ? qStack[qStack.length - 1] : null;
+		if (curQ === "'" || curQ === '"') {
 			if (useJsStringEscapes && c === '\\') { i += 2; continue; }
-			if (c === inQ) { inQ = null; lastSig = 'value'; setTerm('STR'); i++; continue; }
+			if (c === curQ) { qStack.pop(); lastSig = 'value'; setTerm('STR'); i++; continue; }
 			i++; continue;
+		}
+		if (curQ === '`') {
+			if (useJsStringEscapes && c === '\\') { i += 2; continue; }
+			if (c === '$' && s[i + 1] === '{') {
+				qStack.push('${');
+				interpBraceStack.push(1);
+				i += 2;
+				lastSig = 'operator';
+				continue;
+			}
+			if (c === '`') { qStack.pop(); lastSig = 'value'; setTerm('STR'); i++; continue; }
+			i++; continue;
+		}
+		if (curQ === '${') {
+			if (c === '{') {
+				interpBraceStack[interpBraceStack.length - 1]++;
+			} else if (c === '}') {
+				interpBraceStack[interpBraceStack.length - 1]--;
+				if (interpBraceStack[interpBraceStack.length - 1] === 0) {
+					interpBraceStack.pop();
+					qStack.pop();
+					i++;
+					continue;
+				}
+			}
 		}
 		// Line comment — bail until EOL (single-line input → end).
 		if (c === '/' && s[i + 1] === '/') break;
@@ -101,7 +128,7 @@ function countBracesOutsideStrings(s, options) {
 			}
 			// Not a closed regex on this line — `/` becomes division.
 		}
-		if (c === '"' || c === "'" || c === '`') { inQ = c; i++; continue; }
+		if (c === '"' || c === "'" || c === '`') { qStack.push(c); i++; continue; }
 		// Markup comments are opaque. The CFML closer is depth-aware so an
 		// inner `<!--- ... --->` cannot expose the remainder of the outer
 		// comment to the brace counter.
@@ -130,6 +157,12 @@ function countBracesOutsideStrings(s, options) {
 		if (c === '!' && s[i + 1] === '=') {
 			var ne = (s[i + 2] === '=') ? 3 : 2;
 			setTerm('!='); lastSig = 'operator'; i += ne; continue;
+		}
+		if (c === '.' && s[i + 1] === '.' && s[i + 2] === '.') {
+			setTerm('...');
+			lastSig = 'operator';
+			i += 3;
+			continue;
 		}
 		if (/[A-Za-z0-9_$]/.test(c)) {
 			// Identifier / number run — collect, classify as value.
@@ -315,7 +348,7 @@ function isContinuationLine(tokens, prevLastTerm, parenDepth, bracketDepth) {
  * with isBlank:true so the caller can index by lineNo. */
 function computeJsLineClassification(lines) {
 	var out = new Array(lines.length);
-	var parenDepth = 0, bracketDepth = 0;
+	var parenStack = [0], bracketStack = [0];
 	var prevLastTerm = '';
 	var parentIdx = -1;
 	var inBlockComment = false;
@@ -357,8 +390,11 @@ function computeJsLineClassification(lines) {
 		}
 
 		var tokens = countBracesOutsideStrings(trimmed);
+		var curParenDepth = parenStack[parenStack.length - 1] || 0;
+		var curBracketDepth = bracketStack[bracketStack.length - 1] || 0;
+
 		var isCont = (parentIdx >= 0)
-			&& isContinuationLine(tokens, prevLastTerm, parenDepth, bracketDepth);
+			&& isContinuationLine(tokens, prevLastTerm, curParenDepth, curBracketDepth);
 
 		out[i] = {
 			trimmed:   trimmed,
@@ -370,10 +406,31 @@ function computeJsLineClassification(lines) {
 		if (!isCont) {
 			parentIdx = i;
 		}
-		parenDepth   += tokens.parenOpen   - tokens.parenClose;
-		bracketDepth += tokens.bracketOpen - tokens.bracketClose;
-		if (parenDepth   < 0) parenDepth   = 0;
-		if (bracketDepth < 0) bracketDepth = 0;
+
+		// Update stacks on brace open/close so statement bodies inside
+		// function/block braces do not inherit outer expression paren depth
+		// (e.g. top-level IIFE `(function() { ... })();` unclosed paren).
+		var netBraces = tokens.braceOpen - tokens.braceClose;
+		if (netBraces > 0) {
+			for (var b = 0; b < netBraces; b++) {
+				parenStack.push(0);
+				bracketStack.push(0);
+			}
+		} else if (netBraces < 0) {
+			for (var b = 0; b < -netBraces; b++) {
+				if (parenStack.length > 1) parenStack.pop();
+				if (bracketStack.length > 1) bracketStack.pop();
+			}
+		}
+
+		var topP = parenStack.length - 1;
+		parenStack[topP] = (parenStack[topP] || 0) + tokens.parenOpen - tokens.parenClose;
+		if (parenStack[topP] < 0) parenStack[topP] = 0;
+
+		var topB = bracketStack.length - 1;
+		bracketStack[topB] = (bracketStack[topB] || 0) + tokens.bracketOpen - tokens.bracketClose;
+		if (bracketStack[topB] < 0) bracketStack[topB] = 0;
+
 		prevLastTerm = tokens.lastTerm;
 	}
 	return out;
@@ -433,6 +490,7 @@ function preserveContinuationAlignmentPostPass(formatted, original) {
 	for (var oi = 0; oi < oClass.length; oi++) {
 		var info = oClass[oi];
 		if (!info || info.isBlank || !info.isCont) continue;
+		if (info.trimmed.indexOf('...') === 0) continue;
 		var firstChar = info.trimmed.charAt(0);
 		if (!OPERATOR_FIRSTCHAR[firstChar]) continue;
 		var parentLn  = oLines[info.parentIdx] || '';
@@ -1633,7 +1691,8 @@ return lines.join('\n');
 function hasTagsOutsideStrings(code) {
 	if (typeof code !== 'string') return false;
 	var i = 0, n = code.length;
-	var inQ = null;        // null | "'" | '"' | '`'
+	var qStack = [];
+	var interpBraceStack = [];
 	var inLC = false;       // // line comment
 	var inBC = false;       // /* block comment */
 	// `lastSig` tracks whether the previous significant token was a
@@ -1655,10 +1714,36 @@ function hasTagsOutsideStrings(code) {
 		var c = code[i], c2 = code[i + 1];
 		if (inLC) { if (c === '\n') inLC = false; i++; continue; }
 		if (inBC) { if (c === '*' && c2 === '/') { inBC = false; i += 2; continue; } i++; continue; }
-		if (inQ) {
+		var curQ = qStack.length > 0 ? qStack[qStack.length - 1] : null;
+		if (curQ === "'" || curQ === '"') {
 			if (c === '\\') { i += 2; continue; }  // JS escape
-			if (c === inQ) { inQ = null; lastSig = 'value'; i++; continue; }
+			if (c === curQ) { qStack.pop(); lastSig = 'value'; i++; continue; }
 			i++; continue;
+		}
+		if (curQ === '`') {
+			if (c === '\\') { i += 2; continue; }
+			if (c === '$' && c2 === '{') {
+				qStack.push('${');
+				interpBraceStack.push(1);
+				i += 2;
+				lastSig = 'operator';
+				continue;
+			}
+			if (c === '`') { qStack.pop(); lastSig = 'value'; i++; continue; }
+			i++; continue;
+		}
+		if (curQ === '${') {
+			if (c === '{') {
+				interpBraceStack[interpBraceStack.length - 1]++;
+			} else if (c === '}') {
+				interpBraceStack[interpBraceStack.length - 1]--;
+				if (interpBraceStack[interpBraceStack.length - 1] === 0) {
+					interpBraceStack.pop();
+					qStack.pop();
+					i++;
+					continue;
+				}
+			}
 		}
 		if (c === '/' && c2 === '/') { inLC = true; i += 2; continue; }
 		if (c === '/' && c2 === '*') { inBC = true; i += 2; continue; }
@@ -1692,7 +1777,7 @@ function hasTagsOutsideStrings(code) {
 			}
 			// Not a closed regex on this line — `/` becomes division.
 		}
-		if (c === '"' || c === "'" || c === '`') { inQ = c; i++; continue; }
+		if (c === '"' || c === "'" || c === '`') { qStack.push(c); i++; continue; }
 		// Real tag opener: `<` + letter or `<` + `/`. NOT `<!` (handled
 		// above) and NOT `<` followed by space/digit/punctuation.
 		if (c === '<' && c2 && /[a-zA-Z\/]/.test(c2)) return true;

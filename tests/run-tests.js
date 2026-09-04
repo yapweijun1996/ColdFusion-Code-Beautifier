@@ -1583,6 +1583,33 @@ assertEqual(
 	'idempotent'
 );
 
+assertEqual(
+	'js mode — auto-detect routes template literal with nested interpolation template literal to js',
+	runRouter(
+		'(function() {\n  const el = `<div>${cols.map(c => `<span>${c}</span>`).join("")}</div>`;\n})();',
+		'auto', false
+	),
+	'(function() {\n\tconst el = `<div>${cols.map(c => `<span>${c}</span>`).join("")}</div>`;\n})();'
+);
+
+assertEqual(
+	'js mode — switch/case statements indent body lines +1 tab',
+	runRouter(
+		'function test(op) {\nswitch (op) {\ncase "a":\nreturn 1;\ncase "b":\nreturn 2;\ndefault:\nreturn 0;\n}\n}',
+		'js', false
+	),
+	'function test(op) {\n\tswitch (op) {\n\t\tcase "a":\n\t\t\treturn 1;\n\t\tcase "b":\n\t\t\treturn 2;\n\t\tdefault:\n\t\t\treturn 0;\n\t}\n}'
+);
+
+assertEqual(
+	'js mode — IIFE with spread operator does not leak paren depth or strip tabs',
+	runRouter(
+		'(function() {\n  const arr = [\n    first,\n    second,\n    ...rest.items\n  ];\n})();',
+		'js', false
+	),
+	'(function() {\n\tconst arr = [\n\t\tfirst,\n\t\tsecond,\n\t\t...rest.items\n\t];\n})();'
+);
+
 /* Regression: multi-line JS object literals between CFML tags must not
  * drift indent. Previous heuristic `includes("{") && !includes("}")` only
  * decremented ONCE for a line containing two trailing `}`, leaking +1

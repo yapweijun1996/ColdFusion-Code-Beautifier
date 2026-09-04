@@ -1845,6 +1845,7 @@ function formatBraceCode(code, splitAdjacentBlocks) {
 	var lines = normalized.split('\n');
 	var output = [];
 	var indentLevel = 0;
+	var blockStack = [{ baseIndent: 0, inCase: false }];
 
 	for (var i = 0; i < lines.length; i++) {
 		var line = lines[i].trim();
@@ -1852,12 +1853,14 @@ function formatBraceCode(code, splitAdjacentBlocks) {
 			continue;
 		}
 
-		if (indentLevel < 0) {
-			indentLevel = 0;
-		}
+		var top = blockStack[blockStack.length - 1] || { baseIndent: 0, inCase: false };
+		var isCase = /^(?:case\b[^:]+|default)\s*:/.test(line);
+		var startCloser = line.startsWith("}") || line.startsWith("]");
 
-		if (line.startsWith("}") || line.startsWith("]")) {
-			indentLevel -= 1;
+		if (startCloser) {
+			indentLevel = top.baseIndent - 1;
+		} else if (isCase) {
+			indentLevel = top.baseIndent;
 		}
 
 		if (indentLevel < 0) {
@@ -1866,8 +1869,16 @@ function formatBraceCode(code, splitAdjacentBlocks) {
 
 		output.push(''.padStart(indentLevel, '\t') + line);
 
+		if (isCase) {
+			indentLevel = top.baseIndent + 1;
+			top.inCase = true;
+		}
+
 		if (line.endsWith("{") || line.endsWith("[")) {
 			indentLevel += 1;
+			blockStack.push({ baseIndent: indentLevel, inCase: false });
+		} else if (startCloser && blockStack.length > 1) {
+			blockStack.pop();
 		}
 	}
 
@@ -2307,12 +2318,25 @@ function reindentMultilineParenContent(value, baseIndent) {
 	var lines = value.split('\n');
 	var depth = 0;
 	var out = [];
+	var blockStack = [{ baseDepth: 0, inCase: false }];
 	for (var k = 0; k < lines.length; k++) {
 		var trimmed = lines[k].replace(/^[ \t]+/, '');
 		var lineDepth = depth;
+		var top = blockStack[blockStack.length - 1] || { baseDepth: 0, inCase: false };
+		var isCase = /^(?:case\b[^:]+|default)\s*:/.test(trimmed);
+
 		// Lines that start with a closer pre-decrement (so `})` aligns
 		// with its opener).
-		if (/^[\]}]/.test(trimmed)) lineDepth--;
+		var startCloser = /^[\]})]/.test(trimmed);
+		if (startCloser) {
+			if (trimmed.charAt(0) === '}' && top.inCase) {
+				lineDepth = top.baseDepth - 1;
+			} else {
+				lineDepth--;
+			}
+		} else if (isCase) {
+			lineDepth = top.baseDepth;
+		}
 		if (lineDepth < 0) lineDepth = 0;
 		var prefix;
 		if (k === 0) {
@@ -2323,16 +2347,43 @@ function reindentMultilineParenContent(value, baseIndent) {
 			prefix = baseIndent + repeatTab(lineDepth);
 		}
 		out.push(prefix + trimmed);
+
+		if (isCase) {
+			depth = top.baseDepth + 1;
+			top.inCase = true;
+		}
+
 		// Update depth from this line's outer characters. The line's
 		// content may still contain protected __BRACETOKEN_N__ /
 		// __BRACEPAREN_N__ placeholders — they look like
 		// `__BRACETOKEN_0__` with no braces, so counting `{` `[` `}` `]`
 		// on the visible chars is safe.
-		for (var ci = 0; ci < trimmed.length; ci++) {
-			var c = trimmed[ci];
-			if (c === '{' || c === '[') depth++;
-			else if (c === '}' || c === ']') depth--;
+		var startIdx = 0;
+		if (k === 0 && trimmed.charAt(0) === '(') {
+			startIdx = 1;
 		}
+		for (var ci = startIdx; ci < trimmed.length; ci++) {
+			var c = trimmed[ci];
+			if (c === '{' || c === '[') {
+				depth++;
+				blockStack.push({ baseDepth: depth, inCase: false });
+			} else if (c === '(') {
+				depth++;
+			} else if (c === '}' || c === ']') {
+				depth--;
+				if (blockStack.length > 1) {
+					var popped = blockStack.pop();
+					if (popped.inCase) depth = popped.baseDepth - 1;
+				}
+			} else if (c === ')') {
+				if (k === lines.length - 1 && ci === trimmed.length - 1 && depth === 0) {
+					// outer closing paren of the token
+				} else {
+					depth--;
+				}
+			}
+		}
+		if (depth < 0) depth = 0;
 	}
 	return out.join('\n');
 }
