@@ -1,6 +1,6 @@
 {
   "name": "coldfusion-code-beautifier",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Serverless CLI and browser-based ColdFusion/CFML, SQL, JS and CSS code beautifier.",
   "bin": {
     "coldfusion-code-beautifier": "tools/beautify-file.js"
