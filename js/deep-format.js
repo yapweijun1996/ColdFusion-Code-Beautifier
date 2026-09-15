@@ -1859,6 +1859,14 @@ function formatBraceCode(code, splitAdjacentBlocks) {
 
 		if (startCloser) {
 			indentLevel = top.baseIndent - 1;
+			/* A branch line such as `} catch {` or `} else {` closes
+			 * the previous block and opens its replacement on the same
+			 * physical line. Pop the closed block before calculating the
+			 * next block's base; otherwise the replacement remains on the
+			 * old block's stack and every following line drifts one level. */
+			if (line.endsWith("{") && blockStack.length > 1) {
+				blockStack.pop();
+			}
 		} else if (isCase) {
 			indentLevel = top.baseIndent;
 		}

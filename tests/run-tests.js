@@ -1439,6 +1439,18 @@ assertEqual(
 	'document.addEventListener(\'evt\', function() {\n\ttry { render(); } catch (_) {}\n});'
 );
 
+// Regression: a branch line containing both a closer and an opener (for
+// example `} catch {` or `} finally {`) must replace the previous block on
+// the stack. Leaving both blocks there leaks one tab into all later code.
+assertEqual(
+	'js mode — same-line catch/finally branches do not leak indentation',
+	runRouter(
+		'function run() {\ntry {\nwork();\n} catch (err) {\nrecover();\n} finally {\ncleanup();\n}\nfinish();\n}',
+		'js', false
+	),
+	'function run() {\n\ttry {\n\t\twork();\n\t} catch (err) {\n\t\trecover();\n\t} finally {\n\t\tcleanup();\n\t}\n\tfinish();\n}'
+);
+
 assertEqual(
 	'js mode — regex with character class [/] does not poison parity',
 	(function() {
