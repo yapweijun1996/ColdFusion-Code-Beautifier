@@ -100,7 +100,8 @@ node tests/tree-sitter.test.mjs  # standalone tree-sitter Semantic Indent suite
 - [docs/LIMITATIONS.md](docs/LIMITATIONS.md) — known edge cases across CFML / SQL / JS / CSS.
 - [docs/TESTING.md](docs/TESTING.md) — running the suite, helpers, and regression policy.
 - [docs/SAFETY.md](docs/SAFETY.md) — per-language production risk and Safe Mode guidance.
-- [docs/AI-AGENT-USAGE.md](docs/AI-AGENT-USAGE.md) — GitHub-only CLI usage for coding agents.
+- [docs/AI-AGENT-USAGE.md](docs/AI-AGENT-USAGE.md) — unified CLI usage for Codex CLI, Gemini CLI, Claude Code, and other Node/npm agents.
+- [docs/WEB-MCP-USAGE.md](docs/WEB-MCP-USAGE.md) — browser-based Web MCP workflow using the static GitHub Pages demo; no MCP server required.
 
 ## File map
 
