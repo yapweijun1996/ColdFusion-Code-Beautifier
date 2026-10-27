@@ -11,6 +11,9 @@ const CACHE_VERSION = '__BUILD_VERSION__';
 const CACHE_NAME    = 'cfbeautifier-' + CACHE_VERSION;
 
 const PRECACHE_URLS = [
+  './vendor/acorn.js',
+  './js/js-structure.js',
+  './js/js-structure-planner.js',
   './',
   './index.html',
   './styles.css',

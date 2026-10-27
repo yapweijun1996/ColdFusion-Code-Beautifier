@@ -2,19 +2,7 @@ var fs = require('fs');
 var vm = require('vm');
 var cfmlCommentUtils = require('../js/cfml-comment-utils.js');
 
-var scripts = [
-	'js/cfml-comment-utils.js',
-	'js/cf-tags.js',
-	'js/sql-keywords.js',
-	'js/sql-beautifier.js',
-	'js/js-lexer-utils.js',
-	'js/deep-format.js',
-	'js/tag-utils.js',
-	'js/cfml-splitter.js',
-	'js/toast.js',
-	'js/clipboard.js',
-	'js/beautifier.js'
-];
+var scripts = require('../tools/formatter-script-manifest');
 
 var browserCode = scripts.map(function(file) {
 	return fs.readFileSync(file, 'utf8');
@@ -988,7 +976,9 @@ assertEqual(
 		'cfml',
 		true
 	),
-	'<script>\n\tvar html = `\n\t<div>\n\t\t<cfif flag>\n\t\t\tvalue\n\t\t</cfif>\n\t</div>\n\t`;\n</script>'
+	// The old expectation added a tab inside the template value. Returning
+	// the original script body avoids changing runtime string content.
+	'<script>\nvar html = `\n<div>\n\t<cfif flag>\n\t\tvalue\n\t</cfif>\n</div>\n`;\n</script>'
 );
 
 assertEqual(
@@ -1615,6 +1605,33 @@ assertEqual(
 	var protectedRegex = harness.context.protectBraceCodeText('return /a{2}\\/b/g;');
 	assertEqual('regular expression after return remains protected',
 		protectedRegex.tokens.length, 1);
+})();
+
+(function testNestedCallbacksInsideIife() {
+	var script = '(function() {\nfunction boot() {\nfor (var i = 0; i < forms.length; i++) {\n' +
+		'(function(form) {\nform.addEventListener("change", function() {\n' +
+		'update();\n}, true);\nvar state = {\nready: true\n};\n' +
+		'})(forms[i]);\n}\nafter();\n}\n})();';
+	var expected = '(function() {\n\tfunction boot() {\n\t\tfor (var i = 0; i < forms.length; i++) {\n' +
+		'\t\t\t(function(form) {\n\t\t\t\tform.addEventListener("change", function() {\n' +
+		'\t\t\t\t\tupdate();\n\t\t\t\t}, true);\n\t\t\t\tvar state = {\n' +
+		'\t\t\t\t\tready: true\n\t\t\t\t};\n\t\t\t})(forms[i]);\n' +
+		'\t\t}\n\t\tafter();\n\t}\n})();';
+	assertEqual('nested IIFE and event callback use one indent per block',
+		runRouter(script, 'js', false), expected);
+	var input = '<script>\n' + script + '\n</script>';
+	var expectedEmbedded = '<script>\n' + expected.split('\n').map(function(line) {
+		return '\t' + line;
+	}).join('\n') + '\n</script>';
+	var result = runRouter(input, 'cfml', true);
+	assertEqual('embedded nested IIFE and event callback align', result, expectedEmbedded);
+	assertEqual('embedded nested callbacks remain idempotent', runRouter(result, 'cfml', true), result);
+	assertEqual('inline index and object preserve multiline argument indentation',
+		runRouter('(function() {\ncall(items[index], {ready: true},\nnext);\n})();', 'js', false),
+		'(function() {\n\tcall(items[index], {ready: true},\n\t\tnext);\n})();');
+	assertEqual('multiline call containing a callback preserves both nesting levels',
+		runRouter('(function() {\ncall(\nfunction() {\nwork();\n}\n);\n})();', 'js', false),
+		'(function() {\n\tcall(\n\t\tfunction() {\n\t\t\twork();\n\t\t}\n\t);\n})();');
 })();
 
 assertEqual(

@@ -107,6 +107,12 @@ check('CLI stdout contains only formatted code', stdoutRun.stdout === expected,
     'actual=' + JSON.stringify(stdoutRun.stdout));
 check('CLI stdout mode does not print a file message', stdoutRun.stderr.indexOf('Wrote ') === -1);
 
+var invalidJs = 'function f() {\n  if (ready) {';
+var invalidJsRun = run(['-', '--stdout', '--language', 'js'], invalidJs);
+check('CLI preserves unparseable JavaScript', invalidJsRun.status === 0 && invalidJsRun.stdout === invalidJs);
+check('CLI reports safe JavaScript fallback without printing input',
+    invalidJsRun.stderr.indexOf('kept unchanged') !== -1 && invalidJsRun.stderr.indexOf(invalidJs) === -1);
+
 var customOutput = path.join(tempDir, 'custom_beutifier.cfm');
 var customRun = run([inputPath, '--output', customOutput, '--no-deep-sql', '--no-deep-css', '--no-deep-js']);
 check('CLI accepts an explicit _beutifier.cfm output', customRun.status === 0, customRun.stderr);

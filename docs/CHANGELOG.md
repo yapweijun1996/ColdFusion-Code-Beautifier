@@ -16,6 +16,11 @@
 
 ### Latest formatter hardening
 
+- Added offline Acorn-backed JavaScript syntax, token and comment verification. Unsafe or unparseable transformations retain the original region and report a fallback; mixed CFML tags are checked through ordered validation markers.
+- Added a syntax-backed JavaScript indentation planner for supported constructs; unsupported and mixed-language cases use the verified compatibility path.
+- Added a structural contract suite and a shared Node formatter script manifest, with browser/Node load-order verification.
+- Made embedded-script region scanning respect quoted tag attributes, JavaScript escapes, and decrement operators without changing SQL/CFML quote rules.
+- Corrected extra indentation when multiline JavaScript calls contain nested callback blocks or IIFEs, while preserving separate multiline argument indentation.
 - Fixed JavaScript numeric division being mistaken for a regular expression, which could hide a closing parenthesis and shift indentation through the rest of a script. Numeric literal forms and embedded scripts have regression coverage.
 - Added `js/cfml-comment-utils.js`, a shared depth-aware scanner for nested CFML comments. Splitter, indentation, language detection, SQL token/tree handling, deep JS protection, diagnostics, browser, CLI, SW, and tests now consume the same outer comment boundary.
 - Routed browser/CLI output restores CRLF when the captured source uses CRLF and otherwise emits LF; direct lower-level helpers remain canonical-LF.

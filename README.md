@@ -1,6 +1,6 @@
 # ColdFusion Code Beautifier
 
-A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. The production UI has no build step or required network dependency: it is vanilla HTML/CSS/JS with optional libraries vendored in the repository. Open `index.html` and start pasting.
+A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. The production UI has no build step or required network dependency: it is vanilla HTML/CSS/JS with required and optional libraries vendored in the repository. Open `index.html` and start pasting.
 
 **Live demo:** https://yapweijun1996.github.io/ColdFusion-Code-Beautifier/
 
@@ -16,6 +16,8 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. T
   - `<script>` body → JS formatter with protected strings, comments, regex literals, template literals (`${…}` nesting), and `(…)` groups.
   - `<style>` body → CSS formatter.
 - **Language selector** with `Auto` / `CFML / HTML` / `SQL` / `JavaScript` modes; auto-detect routes SQL-looking input to the SQL formatter and tag-free JS-looking input through `formatBraceCode` (template literals, regex, and parens token-protected).
+- **JavaScript safety check** compares the parsed syntax, tokens, and comment positions before accepting formatting. Unparseable or unsafe JavaScript is kept unchanged and reported. Mixed CFML tags use a checked mapping; this is not proof of every server-generated branch.
+- **Structure-based JavaScript indentation** uses parsed blocks, calls, arrays, objects, computed keys, assignment/arrow continuations and switch cases when supported. Unsupported or mixed-language constructs retain the compatibility formatter and still receive the safety check.
 - **Auto-copy / auto-clear input / auto-clear output** independent toggles. Auto-copy defaults on; both auto-clear options default off so source and result remain visible until explicitly cleared.
 - **Force-split `<tag><tag>`** option for dense HTML.
 - **Fullscreen layout** with side-by-side input / output on desktop, stacked on mobile.
@@ -81,15 +83,18 @@ Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## Testing
 
 ```bash
-npm test          # runs formatter, UI-contract, CLI, and Tree-sitter suites
+npm test          # runs formatter, structure, UI, CLI, version, and Tree-sitter suites
 # or individually:
 node tests/run-tests.js          # VM-harness formatter suite
+node tests/structure-contract.test.js # JS/CFML structural and safety contracts
+node tests/js-structure-planner.test.js # syntax-backed indentation planner
 node tests/ui.test.js            # static HTML + editor interaction suite
 node tests/cli.test.js            # Node CLI end-to-end suite
+node tests/version.test.js       # build version stamping
 node tests/tree-sitter.test.mjs  # standalone tree-sitter Semantic Indent suite
 ```
 
-`tests/run-tests.js` replays the formatter scripts in a Node VM context with a faked DOM and currently contains 246 exact `assertEqual` call sites, 22 content-preservation invariants, 27 Pro SQL token-equivalence cases, and the optional local `sample/` idempotency suite. `tests/ui.test.js` verifies static/UI lifecycle contracts, `tests/cli.test.js` exercises the production CLI, and `tests/tree-sitter.test.mjs` runs **outside** the VM harness with real vendored WASM. See [docs/TESTING.md](docs/TESTING.md).
+`tests/run-tests.js` replays the formatter scripts in a Node VM context with a faked DOM. The structure suite covers nesting, JavaScript/CFML preservation and safe fallback; the remaining suites exercise UI, CLI, version stamping and real Tree-sitter WASM. See [docs/TESTING.md](docs/TESTING.md).
 
 ## Documentation
 
@@ -114,6 +119,8 @@ js/sql-keywords.js               SQL_MAJOR_CLAUSES + SQL_UPPERCASE_KEYWORDS + SQ
 js/sql-beautifier.js             tokenizer + formatter (caseLevel, funcDepth, listItemIndent, inBetween, clauseStack)
 js/pro-sql.js                    Pro SQL — lazy-loaded vendored sql-formatter, PRO_SQL_DIALECTS, formatProSQLSync
 js/js-lexer-utils.js             shared JS lexer helpers (REGEX_CONTEXT_KEYWORDS, regex/string/comment scanning)
+js/js-structure.js               offline JavaScript syntax/token/comment verification
+js/js-structure-planner.js       syntax-backed JavaScript indentation for supported structures
 js/deep-format.js                deepFormatEmbedded, protectCFMLTokens, protectBraceCodeText, protectBraceCodeParens, formatBraceCode, formatCSSCode
 js/cfml-splitter.js              splitAdjacentCFMLTags — break glued <tag><tag> lines (comment/string-safe)
 js/tag-utils.js                  get_tag_name / start / end
@@ -125,12 +132,16 @@ js/toast.js                      notification UI + accessible action toasts
 js/pwa.js                        service worker registration + user-controlled Update now flow + draft recovery
 js/app.js                        footer year/version + Pro SQL / Normalize / Semantic / Safe-Mode preference persistence (localStorage)
 vendor/sql-formatter.min.js      Pro SQL vendored bundle (MIT)
+vendor/acorn.js                  vendored JavaScript parser (MIT; see vendor/ACORN.md)
 vendor/tree-sitter/              vendored tree-sitter runtime + CFML & CFScript grammar WASM (see vendor/tree-sitter/README.md)
 tests/run-tests.js               Node VM harness + exact assertions + Pro SQL token equivalence + content/sample invariants
+tests/structure-contract.test.js JS/CFML structure, validation and fallback contracts
+tests/js-structure-planner.test.js syntax-backed indentation and fallback tests
 tests/tree-sitter.test.mjs       standalone Semantic Indent suite (real WASM, outside the VM harness)
 tests/cli.test.js                end-to-end Node CLI tests
 tests/version.test.js            deployment version-stamping test
 tools/beautify-file.js           Node CLI for file/stdin formatting
+tools/formatter-script-manifest.js common Node formatter script order
 tools/inject-build-version.js    stamps sw.js and index.html with the source commit
 tools/source-encoding.js         CLI/diagnostic UTF-8 and BOM-marked UTF-16 decode/encode preservation
 tools/spike-tree-sitter.mjs      self-contained tree-sitter CST spike / reference implementation

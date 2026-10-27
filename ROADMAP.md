@@ -4,8 +4,8 @@
 
 ```text
 R0 Documentation baseline       DONE
-R1 Characterization baseline    NEXT
-R2 VM harness consolidation     PENDING
+R1 Characterization baseline    IN PROGRESS
+R2 VM harness consolidation     IN PROGRESS (script manifest added)
 R3 Indent utility extraction    PENDING
 R4 Lexer convergence            PENDING
 R5 Structure extraction         PENDING
@@ -31,7 +31,9 @@ Exit gate: documents agree that the shared comment/encoding hardening is current
 
 ## R1 — Characterization baseline
 
-**Status:** Next
+**Status:** In progress. `tests/structure-contract.test.js` adds JS/CFML
+structure and JavaScript safety coverage; the complete fixture matrix and
+public-global/encoding characterization gate remain to be audited.
 
 Deliverables:
 
@@ -50,7 +52,9 @@ Exit gate:
 
 ## R2 — Node VM harness consolidation
 
-**Status:** Pending; depends on R1
+**Status:** In progress. Node formatter scripts now use a shared manifest,
+and browser ordering is checked against it. A shared VM loader and the full
+R1 exit gate remain pending.
 
 Deliverables:
 

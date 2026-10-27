@@ -118,12 +118,7 @@ function listCorpus(dir, fileFilter) {
 }
 
 // ---------- browser bootstrap ----------
-var scripts = [
-    'js/cfml-comment-utils.js', 'js/cf-tags.js', 'js/sql-keywords.js', 'js/sql-beautifier.js',
-    'js/js-lexer-utils.js', 'js/deep-format.js', 'js/tag-utils.js',
-    'js/cfml-splitter.js', 'js/toast.js', 'js/clipboard.js',
-    'js/beautifier.js'
-];
+var scripts = require('./formatter-script-manifest');
 var browserCode = scripts.map(function(f) { return fs.readFileSync(f, 'utf8'); }).join('\n');
 var proSrc      = fs.readFileSync('js/pro-sql.js', 'utf8');
 

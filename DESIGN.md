@@ -2,14 +2,14 @@
 
 ## Status
 
-- **Document status:** accepted planning baseline; the shared comment utility exists, while broader formatter decomposition has not started.
-- **Code baseline:** current working tree based on HEAD `9206986`, including the shared nested-markup-comment scanner and output line-ending hardening now present in source.
+- **Document status:** planning baseline; the shared comment utility, shared Node script manifest, and JavaScript verification guard exist. Broader formatter decomposition remains in progress.
+- **Code baseline:** the current working tree and its tests, including nested-comment scanning, output line-ending hardening, and JavaScript verification.
 - **Source of truth:** executable code and tests. If this document conflicts with them, update this document rather than changing behavior silently.
 - **Compatibility policy:** behavior-preserving refactor first; formatter output changes require a separate bug-fix task and regression test.
 
 ## Context
 
-`js/beautifier.js` is currently a 1,849-line classic browser script. It owns JavaScript lexical heuristics, continuation alignment, CFML/HTML structure tracking, the line-based CFML formatter, language detection, DOM option capture, optional-resource loading, routing, stale-request protection, line-ending restoration, copy, and clear behavior. A first focused helper, `js/cfml-comment-utils.js`, already centralizes nested CFML/HTML markup-comment scanning across splitter/formatter/deep-format paths. The broader decomposition remains planned.
+`js/beautifier.js` is a classic browser script that owns JavaScript lexical heuristics, continuation alignment, CFML/HTML structure tracking, the line-based CFML formatter, language detection, DOM option capture, optional-resource loading, routing, stale-request protection, line-ending restoration, copy, and clear behavior. `js/cfml-comment-utils.js` centralizes nested markup-comment scanning. `js/js-structure.js` verifies JavaScript transformations using the vendored Acorn parser. `js/js-structure-planner.js` applies syntax-based indentation to a supported JavaScript subset; mixed-language structure and unsupported constructs retain the compatibility path.
 
 The project intentionally has no build step. Production scripts are classic deferred scripts with global APIs, and the browser, Node VM test harness, and CLI execute the same formatter implementation. This constraint remains in force for the refactor.
 
@@ -151,7 +151,7 @@ Every new production script must be added in dependency order to:
 - `sw.js` `PRECACHE_URLS`;
 - Node VM script lists used by tests and tools.
 
-A planned Node-only formatter script manifest will remove duplicate lists from the CLI and test/diagnostic harnesses. Browser order remains explicit and is checked by `tests/ui.test.js`.
+The Node-only formatter script manifest centralizes the CLI and test/diagnostic script lists. Browser order remains explicit and is checked by `tests/ui.test.js`; a reusable VM loader remains planned.
 
 ## Failure and rollback design
 
@@ -168,7 +168,7 @@ A planned Node-only formatter script manifest will remove duplicate lists from t
 | Refactor style | characterization-first, branch-by-abstraction |
 | Output policy | byte-identical unless handled as a separate fix |
 | Runtime model | classic deferred scripts; no build step |
-| Parser strategy | Tree-sitter remains optional post-pass, not primary formatter |
+| Parser strategy | Acorn verifies and plans a supported JavaScript subset; Tree-sitter remains an optional CFML/CFScript post-pass |
 | Public API | retained throughout epic |
 | First implementation work | test/golden baseline, then shared VM harness |
 | Dead-code removal | final phase only, after dependency and mutation checks |
@@ -176,3 +176,68 @@ A planned Node-only formatter script manifest will remove duplicate lists from t
 ## Open review points
 
 No technical blocker is known. Work is intentionally gated on completing the characterization baseline before production extraction. Performance baseline and the exact internal namespace shape will be finalized during that phase.
+
+## Proposed follow-on: structure-based formatting
+
+**Status: partially implemented.** The current formatter uses several
+independent lexical scanners and counters. A delimiter count is not a syntax
+model: a call's opening parenthesis and its callback block can describe one
+visual level, while a multiline argument list may require a separate continuation
+level. Fixing one nesting pattern does not establish correctness for other
+JavaScript or mixed CFML inputs.
+
+This proposal extends the existing characterization-first roadmap; it does not
+make a parser-first rewrite part of the currently accepted refactor. Before
+adoption, evaluate parser-backed indentation against the actual browser, CLI,
+offline, language-version, size, and performance constraints. Acorn 8.19.0 is
+vendored for verification and a conservative JavaScript indent planner; coverage
+and full mixed-language planning remain separate work.
+
+### Responsibilities
+
+1. **Region discovery:** the existing CFML/HTML boundary owner identifies raw
+   JavaScript, CFScript, SQL, CSS, markup, and CFML regions without altering
+   their content. CFML and JavaScript retain their distinct lexical rules.
+2. **Lossless analysis:** a language-specific lexer/parser identifies syntax,
+   comments, strings, templates, regex literals, delimiters, and original source
+   spans. It must distinguish division from regex using token context and preserve
+   all whitespace that can affect values. Parse results are analysis, not an
+   instruction to regenerate arbitrary source text.
+3. **Indent planning:** a single structural model determines each line's block
+   level, closing-token anchor, and optional expression continuation. Syntax
+   ownership, not the number of delimiter characters, determines visual nesting.
+   Continuation alignment is a separate overlay and must not mutate block state.
+4. **Emission and verification:** apply only reviewed whitespace edits to safe
+   regions, then verify token/comment/template preservation and, for parseable
+   JavaScript, equivalent parsed structure. Preserve line-ending and encoding
+   contracts in their existing output owners.
+
+### Mixed-language and failure boundaries
+
+- Embedded CFML cannot be passed blindly to a JavaScript parser. Preserve exact
+  source spans and use a validated mapping or independently parseable segments;
+  if a tag crosses a token or control-flow boundary, preserve the affected region
+  rather than inventing a JavaScript structure. A placeholder round trip must
+  prove both identity and position before applying edits.
+- Incomplete editor input, unsupported syntax, missing parser assets, ambiguous
+  comments, and failed verification must not produce speculative changes to the
+  affected region. Retain its input and expose an appropriate diagnostic without
+  silently changing CLI or browser contracts.
+- Keep the existing formatter available as an explicit compatibility path during
+  rollout; do not silently fall back to an unverified transformation.
+
+### Adoption gates
+
+1. Build sanitized golden cases for nested callbacks and IIFEs, multiline
+   arguments, arrays/objects, switch branches, comments, regex/division,
+   templates, malformed input, and CFML inside scripts. Check complete structure,
+   not just idempotence or function endpoints.
+2. Prototype the region/source mapping and parser on those cases without replacing
+   production output; measure browser and CLI compatibility, offline loading,
+   bundle size, and warm performance.
+3. Implement a pure indent planner and validate syntax/token equivalence,
+   placeholder round trips, original line endings, and browser/CLI parity.
+4. Introduce the verified path incrementally with explicit fallback diagnostics;
+   retain characterization tests and a reversible compatibility path. Update the
+   script manifest, service-worker cache, packaging, and documentation together if
+   new runtime assets are adopted.

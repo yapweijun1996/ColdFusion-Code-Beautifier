@@ -1899,6 +1899,17 @@ function formatJsWithLeadingComments(code) {
 	if (preserveContAlign && typeof preserveContinuationAlignmentPostPass === 'function') {
 		body = preserveContinuationAlignmentPostPass(body, split.body);
 	}
+	if (typeof applyValidatedJavaScriptIndentation === 'function') {
+		body = applyValidatedJavaScriptIndentation(body);
+	}
+
+	// Do not commit a JavaScript transformation unless its syntax, tokens,
+	// and comment positions match the original parseable source.
+	if (typeof verifyJavaScriptTransformation !== 'function' ||
+			!verifyJavaScriptTransformation(split.body, body).ok) {
+		if (typeof notifyJavaScriptFallback === 'function') notifyJavaScriptFallback();
+		return code;
+	}
 
 	if (leading === '') return body;
 	return leading + '\n' + body;

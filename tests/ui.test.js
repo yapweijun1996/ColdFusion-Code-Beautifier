@@ -21,6 +21,7 @@ const pwa = fs.readFileSync(path.join(root, 'js', 'pwa.js'), 'utf8');
 const toast = fs.readFileSync(path.join(root, 'js', 'toast.js'), 'utf8');
 const deployWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'deploy.yml'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const formatterScripts = require('../tools/formatter-script-manifest');
 
 function pass(name) {
   console.log('PASS UI: ' + name);
@@ -66,11 +67,14 @@ pass('all application scripts are deferred');
 
 const scriptSources = scriptMatches.map((match) => match[2]);
 const expectedOrder = [
+  './vendor/acorn.js',
   './js/cfml-comment-utils.js',
   './js/cf-tags.js',
   './js/sql-keywords.js',
   './js/sql-beautifier.js',
   './js/js-lexer-utils.js',
+  './js/js-structure.js',
+  './js/js-structure-planner.js',
   './js/deep-format.js',
   './js/tag-utils.js',
   './js/cfml-splitter.js',
@@ -85,6 +89,9 @@ const expectedOrder = [
 ];
 assert.deepStrictEqual(scriptSources, expectedOrder, 'script dependency order must stay explicit');
 pass('script dependency order is stable');
+assert.deepStrictEqual(scriptSources.filter((src) => formatterScripts.includes(src.slice(2))),
+  formatterScripts.map((src) => './' + src), 'browser and Node formatter order must agree');
+pass('browser and Node formatter order agree');
 assert.match(sw, /'\.\/js\/editor-ui\.js'/, 'new UI module must be precached');
 pass('new UI module is in the service-worker precache');
 expectMatch('service-worker has an automatic build-version marker', sw, /CACHE_VERSION\s*=\s*'__BUILD_VERSION__'/);
@@ -360,11 +367,7 @@ async function runFormatterAsyncSafetyTest() {
   const document = {
     getElementById: function (id) { return ids[id] || null; }
   };
-  const scripts = [
-    'js/cfml-comment-utils.js', 'js/cf-tags.js', 'js/sql-keywords.js', 'js/sql-beautifier.js',
-    'js/js-lexer-utils.js', 'js/deep-format.js', 'js/tag-utils.js',
-    'js/cfml-splitter.js', 'js/toast.js', 'js/clipboard.js', 'js/beautifier.js'
-  ];
+  const scripts = formatterScripts;
   const context = {
     document,
     console: { warn: function () {}, log: function () {} },

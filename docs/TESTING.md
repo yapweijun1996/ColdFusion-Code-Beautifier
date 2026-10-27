@@ -3,15 +3,26 @@
 ## Running the suite
 
 ```bash
-npm test          # runs formatter, UI-contract, CLI, and Tree-sitter suites
+npm test          # runs formatter, structure, UI, CLI, version, and Tree-sitter suites
 # or individually:
 node tests/run-tests.js          # VM-harness formatter suite
+node tests/structure-contract.test.js # JS/CFML structure and verification contracts
+node tests/js-structure-planner.test.js # syntax-backed indentation and safe fallback
 node tests/ui.test.js            # static HTML + editor interaction suite
 node tests/cli.test.js            # Node CLI end-to-end suite
+node tests/version.test.js       # deployment version injection
 node tests/tree-sitter.test.mjs  # standalone Semantic Indent suite
 ```
 
-`tests/run-tests.js` loads production formatter scripts inside a Node `vm` context with a faked DOM. In the current working tree it contains 246 exact `assertEqual` call sites, 22 content-preservation invariants, and 27 Pro SQL token-equivalence cases. `tests/ui.test.js` uses a separate minimal DOM double because the editor event layer is browser-facing. On success the suites print `All ... tests passed.`; on failure they print a named failure and set a non-zero exit code.
+`tests/run-tests.js` loads production formatter scripts inside a Node `vm` context with a faked DOM. The structure suite covers nested callbacks and IIFEs, JavaScript lexical preservation, mixed CFML, parser failures and safe fallback. `tests/ui.test.js` uses a separate minimal DOM double because the editor event layer is browser-facing. On success the suites print `All ... tests passed.`; on failure they print a named failure and set a non-zero exit code.
+
+The parser and indent planner perform additional passes. On a local Windows
+Node 25 run over a 27 KB sample, warmed embedded-script formatting increased
+from approximately 7 ms to 42 ms per pass; results vary with hardware and input.
+After consolidating AST traversal, a synthetic 0.9 MB / 100,000-line JavaScript
+planning pass took approximately 0.7 seconds. The overhead is accepted for the
+current safety and structure checks; large files still require monitoring. The
+sample remains local and is not part of the committed test fixtures.
 
 ## Helper functions
 

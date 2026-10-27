@@ -37,11 +37,7 @@ const tsCfml = require('../js/tree-sitter-cfml.js');
 
 // ── Load the beautifier into a vm context (for end-to-end output) ────────────
 function loadBeautifier() {
-	const scripts = [
-		'js/cfml-comment-utils.js', 'js/cf-tags.js', 'js/sql-keywords.js', 'js/sql-beautifier.js',
-		'js/js-lexer-utils.js', 'js/deep-format.js', 'js/tag-utils.js',
-		'js/cfml-splitter.js', 'js/toast.js', 'js/clipboard.js', 'js/beautifier.js'
-	];
+	const scripts = require('../tools/formatter-script-manifest');
 	const code = scripts.map((f) => fs.readFileSync(path.join(root, f), 'utf8')).join('\n');
 	const ctx = { console: { log() {}, warn() {} } };
 	vm.createContext(ctx);

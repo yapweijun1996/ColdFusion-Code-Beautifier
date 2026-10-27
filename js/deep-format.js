@@ -1215,7 +1215,45 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 	}
 
 	if (doJs) {
+		var originalScripts = [];
+		var formattedScripts = [];
+		function collectScriptBodies(code, target) {
+			replaceEmbeddedBlock(code, 'script', function(indent, open, body, close) {
+				target.push({ open: open, body: body });
+				return indent + open + body + close;
+			});
+		}
+		function normalizeScriptOpenIndent(tag) {
+			var text = tag.replace(/\r\n?/g, '\n');
+			var quote = null;
+			var normalized = '';
+			for (var i = 0; i < text.length; i++) {
+				var character = text[i];
+				normalized += character;
+				if (quote) {
+					if (character === quote) quote = null;
+				} else if (character === '"' || character === "'") {
+					quote = character;
+				} else if (character === '\n') {
+					while (text[i + 1] === ' ' || text[i + 1] === '\t') i++;
+				}
+			}
+			return normalized;
+		}
+		collectScriptBodies(typeof originalSource === 'string' ? originalSource : cfmlCode, originalScripts);
+		collectScriptBodies(out, formattedScripts);
+		var scriptMappingValid = originalScripts.length === formattedScripts.length;
+		for (var scriptMapIndex = 0; scriptMappingValid && scriptMapIndex < originalScripts.length; scriptMapIndex++) {
+			if (normalizeScriptOpenIndent(originalScripts[scriptMapIndex].open) !==
+					normalizeScriptOpenIndent(formattedScripts[scriptMapIndex].open)) scriptMappingValid = false;
+		}
+		if (!scriptMappingValid) {
+			if (typeof notifyJavaScriptFallback === 'function') notifyJavaScriptFallback();
+			return typeof originalSource === 'string' ? originalSource : cfmlCode;
+		}
+		var scriptIndex = 0;
 		out = replaceEmbeddedBlock(out, 'script', function(parentIndent, openTag, body, closeTag) {
+			var originalScript = originalScripts[scriptIndex++];
 			if (!shouldFormatScript(openTag) || body.trim() == "") {
 				return parentIndent + openTag + body + closeTag;
 			}
@@ -1226,10 +1264,21 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 			 * that would rewrite its absolute content indentation. */
 			if (hasMultilineBraceCodeTemplate(body)
 					|| hasCFMLTagInsideBraceString(body)) {
+				if (!verifyMixedJavaScriptTransformation(originalScript.body, body)) {
+					if (typeof notifyJavaScriptFallback === 'function') notifyJavaScriptFallback();
+					return parentIndent + openTag + originalScript.body + closeTag;
+				}
 				return parentIndent + openTag + body + closeTag;
 			}
 
 			var formattedJS = formatBraceCodeWithCFML(cleanEmbeddedBody(body));
+			if (typeof applyValidatedJavaScriptIndentation === 'function') {
+				formattedJS = applyValidatedJavaScriptIndentation(formattedJS);
+			}
+			if (!verifyMixedJavaScriptTransformation(originalScript.body, formattedJS)) {
+				if (typeof notifyJavaScriptFallback === 'function') notifyJavaScriptFallback();
+				return parentIndent + openTag + originalScript.body + closeTag;
+			}
 			return parentIndent + openTag + '\n' + indentEmbeddedBody(formattedJS, parentIndent) + '\n' + parentIndent + closeTag;
 		});
 	}
@@ -1251,7 +1300,7 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 function replaceEmbeddedBlock(code, tagName, formatter) {
 	var output = "";
 	var index = 0;
-	var openRegex = new RegExp('<' + tagName + '\\b[^>]*>', 'gi');
+	var openRegex = new RegExp('<' + tagName + '\\b', 'gi');
 
 	while (true) {
 		var openStart = -1;
@@ -1266,7 +1315,13 @@ function replaceEmbeddedBlock(code, tagName, formatter) {
 			}
 			openMatch = candidate;
 			openStart = candidate.index;
-			openEnd = openRegex.lastIndex;
+			var tagClose = findCFMLTagClose(code.slice(openStart));
+			if (tagClose === -1) {
+				output += code.slice(index);
+				return output;
+			}
+			openEnd = openStart + tagClose + 1;
+			openMatch[0] = code.slice(openStart, openEnd);
 			break;
 		}
 		if (!openMatch) {
@@ -1365,6 +1420,20 @@ function findClosingTagOutsideText(code, tagName, startIndex) {
 			continue;
 		}
 
+		if (quote != "") {
+			// JS strings and templates use backslash escapes; CFML/SQL use
+			// doubled quotes and treat a backslash as an ordinary character.
+			if (tagName.toLowerCase() === 'script' && char === '\\') { i++; continue; }
+			if (char == quote) {
+				if (tagName.toLowerCase() !== 'script' && (quote == "'" || quote == '"') && nextChar == quote) {
+					i++;
+					continue;
+				}
+				quote = "";
+			}
+			continue;
+		}
+
 		if (char == '<' && code.substr(i, 5) == '<!---') {
 			var cfmlCommentEnd = findCFMLCommentEnd(code, i);
 			if (cfmlCommentEnd === -1) return null;
@@ -1378,20 +1447,12 @@ function findClosingTagOutsideText(code, tagName, startIndex) {
 			continue;
 		}
 
-		if (quote != "") {
-			// CFML / HTML strings do NOT use backslash escapes (`\` is literal).
-			// Mirrors the same fix in isInsideCommentOrString — see comment there.
-			if (char == quote) {
-				if ((quote == "'" || quote == '"') && nextChar == quote) {
-					i++;
-					continue;
-				}
-				quote = "";
-			}
-			continue;
+		if (tagName.toLowerCase() === 'script' && char === '<' && /^<\/?cf[a-z]/i.test(code.slice(i))) {
+			var cfTagClose = findCFMLTagClose(code.slice(i));
+			if (cfTagClose !== -1) { i += cfTagClose; continue; }
 		}
 
-		if (char == '-' && nextChar == '-') {
+		if (char == '-' && nextChar == '-' && tagName.toLowerCase() !== 'script') {
 			inLineComment = true;
 			i++;
 			continue;
@@ -1973,6 +2034,41 @@ function formatBraceCodeWithCFML(code) {
 	);
 }
 
+/* Map real CFML tags to ordered JS comments for validation only. Strings,
+ * regexes, templates and comments stay opaque while tag locations are found.
+ * If a marker is ambiguous or the resulting JavaScript cannot be parsed, the
+ * caller must retain the original region. */
+function prepareMixedJavaScriptForValidation(code) {
+	if (/__BRACETOKEN_\d+__|__CFMLBRACETAG_\d+__|__CFMLVALIDATION_\d+__/.test(code)) return null;
+	var protectedText = protectBraceCodeText(code);
+	var protectedTags = protectBraceCodeCFMLTags(protectedText.code);
+	function restoreTokens(value) {
+		return value.replace(/__BRACETOKEN_(\d+)__/g, function(match, index) {
+			var token = protectedText.tokens[parseInt(index, 10)];
+			return token === undefined ? match : token;
+		});
+	}
+	var tags = protectedTags.tags.map(restoreTokens);
+	var masked = protectedTags.code.replace(/__CFMLBRACETAG_(\d+)__/g, function(match, index) {
+		var tag = tags[parseInt(index, 10)];
+		var newlines = (tag.match(/\n/g) || []).length;
+		return '/*__CFMLVALIDATION_' + index + '__' + new Array(newlines + 1).join('\n') + '*/';
+	});
+	return { code: restoreTokens(masked), tags: tags };
+}
+
+function verifyMixedJavaScriptTransformation(original, formatted) {
+	if (typeof verifyJavaScriptTransformation !== 'function') return false;
+	// The common pure-JavaScript path needs no placeholder round trip.
+	if (!/<\/?cf[a-z]/i.test(original) && !/<\/?cf[a-z]/i.test(formatted)) {
+		return verifyJavaScriptTransformation(original, formatted).ok;
+	}
+	var before = prepareMixedJavaScriptForValidation(original);
+	var after = prepareMixedJavaScriptForValidation(formatted);
+	if (!before || !after || JSON.stringify(before.tags) !== JSON.stringify(after.tags)) return false;
+	return verifyJavaScriptTransformation(before.code, after.code).ok;
+}
+
 /* Protect CFML tags after protectBraceCodeText has hidden strings/comments.
  * The small scanner honors quoted attributes so `>` inside a tag value does
  * not terminate the token early. */
@@ -2339,6 +2435,15 @@ function reindentMultilineParenContent(value, baseIndent) {
 	var depth = 0;
 	var out = [];
 	var blockStack = [{ baseDepth: 0, inCase: false }];
+	var parenStack = [];
+	function remainsOpenOnLine(line, index, open, close) {
+		var nesting = 0;
+		for (var pos = index; pos < line.length; pos++) {
+			if (line[pos] === open) nesting++;
+			else if (line[pos] === close && --nesting === 0) return false;
+		}
+		return true;
+	}
 	for (var k = 0; k < lines.length; k++) {
 		var trimmed = lines[k].replace(/^[ \t]+/, '');
 		var lineDepth = depth;
@@ -2385,9 +2490,20 @@ function reindentMultilineParenContent(value, baseIndent) {
 		for (var ci = startIdx; ci < trimmed.length; ci++) {
 			var c = trimmed[ci];
 			if (c === '{' || c === '[') {
+				// A multiline block beginning on a call's opening line shares
+				// its visual level; an inline object or index does not.
+				if (remainsOpenOnLine(trimmed, ci, c, c === '{' ? '}' : ']')) {
+					for (var pi = parenStack.length - 1; pi >= 0 && parenStack[pi].line === k; pi--) {
+						if (parenStack[pi].indents) {
+							parenStack[pi].indents = false;
+							depth--;
+						}
+					}
+				}
 				depth++;
 				blockStack.push({ baseDepth: depth, inCase: false });
 			} else if (c === '(') {
+				parenStack.push({ line: k, indents: true });
 				depth++;
 			} else if (c === '}' || c === ']') {
 				depth--;
@@ -2396,7 +2512,9 @@ function reindentMultilineParenContent(value, baseIndent) {
 					if (popped.inCase) depth = popped.baseDepth - 1;
 				}
 			} else if (c === ')') {
-				if (k === lines.length - 1 && ci === trimmed.length - 1 && depth === 0) {
+				if (parenStack.length > 0) {
+					if (parenStack.pop().indents) depth--;
+				} else if (k === lines.length - 1 && ci === trimmed.length - 1 && depth === 0) {
 					// outer closing paren of the token
 				} else {
 					depth--;

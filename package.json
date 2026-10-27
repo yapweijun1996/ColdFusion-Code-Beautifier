@@ -12,6 +12,8 @@
     "js/sql-keywords.js",
     "js/sql-beautifier.js",
     "js/js-lexer-utils.js",
+    "js/js-structure.js",
+    "js/js-structure-planner.js",
     "js/deep-format.js",
     "js/tag-utils.js",
     "js/cfml-splitter.js",
@@ -19,8 +21,12 @@
     "js/clipboard.js",
     "js/pro-sql.js",
     "tools/beautify-file.js",
+    "tools/formatter-script-manifest.js",
     "tools/source-encoding.js",
     "vendor/sql-formatter.min.js",
+    "vendor/acorn.js",
+    "vendor/acorn.LICENSE",
+    "vendor/ACORN.md",
     "README.md",
     "LICENSE"
   ],
@@ -28,7 +34,7 @@
     "node": ">=14"
   },
   "scripts": {
-    "test": "node tests/run-tests.js && node tests/ui.test.js && node tests/cli.test.js && node tests/version.test.js && node tests/tree-sitter.test.mjs",
+    "test": "node tests/run-tests.js && node tests/structure-contract.test.js && node tests/js-structure-planner.test.js && node tests/ui.test.js && node tests/cli.test.js && node tests/version.test.js && node tests/tree-sitter.test.mjs",
     "spike:tree-sitter": "node tools/spike-tree-sitter.mjs"
   },
   "devDependencies": {

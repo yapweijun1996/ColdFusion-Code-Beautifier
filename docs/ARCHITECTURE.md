@@ -4,7 +4,7 @@
 
 Browser-side code beautifier for CFML/HTML/CSS/JS/SQL. Production has no build step or required network dependency; optional third-party runtimes are vendored. Script tags load in a fixed order, globals are exposed by classic scripts, and Node VM harnesses re-run the same browser code for regression and CLI use.
 
-**Current baseline:** working tree based on HEAD `9206986`. `js/cfml-comment-utils.js` is now a shared depth-aware nested-markup-comment scanner loaded by all production/VM paths. `js/beautifier.js` remains the combined 1,849-line CFML formatter, language detector, line-ending restorer, and DOM/async router. The broader decomposition in root `DESIGN.md` / `ROADMAP.md` remains planned.
+`js/cfml-comment-utils.js` is the shared depth-aware nested-markup-comment scanner. `js/beautifier.js` remains the combined CFML formatter, language detector, line-ending restorer, and DOM/async router. The broader decomposition in root `DESIGN.md` / `ROADMAP.md` remains in progress.
 
 ## Node CLI
 
@@ -37,11 +37,14 @@ Pro SQL bundle. Semantic Indent remains browser-only and opt-in.
 ## Load order
 
 ```
+vendor/acorn.js         ← vendored JavaScript parser, used offline
 js/cfml-comment-utils.js ← nested CFML/HTML comment scanning shared by all formatter paths
 js/cf-tags.js          ← CF_TAGS config (inline / block / middle + HTML_VOID_TAGS)
 js/sql-keywords.js     ← SQL_MAJOR_CLAUSES, SQL_UPPERCASE_KEYWORDS, SQL_FUNCTION_KEYWORDS
 js/sql-beautifier.js   ← beautifySQL + tokenizeSQL + matchSQLMajorClause
 js/js-lexer-utils.js   ← shared JS regex/string lexical helpers
+js/js-structure.js     ← JavaScript syntax, token and comment validation
+js/js-structure-planner.js ← syntax-backed indentation plans for supported JavaScript
 js/deep-format.js      ← deepFormatEmbedded + token protection layers
 js/tag-utils.js        ← get_tag_name / start / end
 js/cfml-splitter.js    ← splitAdjacentCFMLTags pre-pass
@@ -64,6 +67,35 @@ preserves the global API while allowing the document to parse before execution.
 The UI module guards browser-only initialization and the Node VM harness loads
 it separately in `tests/ui.test.js`; the standalone `tests/tree-sitter.test.mjs`
 exercises the semantic path directly.
+
+The Node CLI, diagnostics and formatter VM tests use the common
+`tools/formatter-script-manifest.js`; the browser order stays explicit in
+`index.html` and is checked against that manifest.
+
+## JavaScript verification and fallback
+
+For supported standalone or embedded JavaScript, the planner derives indentation
+from syntax owners such as blocks, calls, arrays, objects, assignment/arrow
+continuations, computed keys, and switch cases.
+It preserves protected multiline text and continuation alignment. Unsupported
+or ambiguous constructs use the existing formatter, subject to the same final
+verification; CFML inside JavaScript is not yet structurally planned.
+
+Before accepting a standalone or embedded JavaScript transformation, Acorn
+parses the input and output and compares their syntax trees, lexical tokens and
+comment positions. Multiline comment common indentation may be adjusted while
+the comment text and relative indentation remain preserved. CFML tags inside a
+script are mapped to ordered comment markers for validation and checked for an
+exact round trip; the masked program must still parse. This does not prove every
+runtime branch of dynamically generated CFML/JavaScript is valid.
+
+When parsing, mapping, or equivalence verification fails, the formatter keeps the
+original JavaScript region and reports the fallback. If script regions cannot be
+reliably paired, it retains the original document. Multiline template content is
+therefore not rewritten merely to adjust indentation. The parser-backed planner
+is incremental and does not yet replace the complete mixed-language formatter.
+Acorn is included in the npm package and PWA precache; `vendor/ACORN.md` records
+its version and license.
 
 ## Pro SQL (optional, opt-in)
 
@@ -381,7 +413,7 @@ regex literal disambiguation".
 
 `js/cfml-comment-utils.js` provides `findCFMLCommentEnd`, `findMarkupCommentEnd`, `consumeMarkupComment`, and line-oriented `advanceMarkupCommentState`. CFML comments are depth-aware: an inner `<!--- ... --->` does not prematurely terminate the outer comment. Browser, CLI VM, formatter tests, splitter, brace/tag scanner, language detector, SQL token/tree handling, deep JS protection, and the host-side corpus range classifier load the helper before use. HTML comments remain first-close regions. The outer formatter still treats both forms as opaque; only code-looking multiline CFML comments are aligned by the isolated prepass described above.
 
-This module is the only completed extraction related to the broader refactor. Its dependent script-order and SW-precache entries are already present.
+Its dependent script-order and SW-precache entries are present. JavaScript structure verification and planning are separate modules.
 
 ## Latest implementation hardening
 
@@ -404,4 +436,4 @@ Beyond the existing shared comment scanner, the current combined module will be 
 
 ## Test harness
 
-`tests/run-tests.js` uses Node `vm.runInContext` to execute production browser scripts in a faked `document` / timer context and currently contains 246 exact `assertEqual` call sites, 22 content-preservation invariants, and 27 Pro SQL token-equivalence cases. Separate suites cover UI behavior, CLI E2E, and real-WASM Semantic Indent. This avoids a required headless browser while exercising the same formatter code loaded by production.
+`tests/run-tests.js` uses Node `vm.runInContext` to execute production browser scripts in a faked `document` / timer context. Separate suites cover structure contracts, the syntax-backed planner, UI behavior, CLI E2E, version stamping, and real-WASM Semantic Indent. This avoids a required headless browser while exercising the same formatter code loaded by production.

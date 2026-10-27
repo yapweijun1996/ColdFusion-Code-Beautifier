@@ -172,19 +172,7 @@ function element(value, checked) {
 }
 
 function loadFormatter() {
-    var scripts = [
-        'js/cfml-comment-utils.js',
-        'js/cf-tags.js',
-        'js/sql-keywords.js',
-        'js/sql-beautifier.js',
-        'js/js-lexer-utils.js',
-        'js/deep-format.js',
-        'js/tag-utils.js',
-        'js/cfml-splitter.js',
-        'js/toast.js',
-        'js/clipboard.js',
-        'js/beautifier.js'
-    ];
+    var scripts = require('./formatter-script-manifest');
     var browserCode = scripts.map(function(file) {
         return fs.readFileSync(path.join(ROOT, file), 'utf8');
     }).join('\n');

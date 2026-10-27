@@ -75,6 +75,15 @@ Deep JS MUST continue to protect and restore:
 
 CFML control-flow depth and JavaScript brace depth MUST compose. Multi-line template bodies MUST bypass transformations that would alter payload indentation.
 
+For supported JavaScript, syntax-backed indentation MUST preserve syntax,
+lexical tokens, and comment placement. CFML tags inside JavaScript MUST be
+mapped and round-tripped before validation; this check does not prove every
+server-generated branch. If mapping, parsing, or equivalence validation fails,
+the affected original region MUST be retained and a diagnostic reported. If
+region pairing is uncertain, the original document MUST be retained. Unsupported
+planner shapes MAY use the compatibility formatter only if the final result
+passes the same validation.
+
 ### FR-08 — Optional semantic indentation
 
 Semantic Indent MUST remain opt-in and browser-only for current CLI behavior. CFML and CFScript grammars MUST remain independently lazy-loaded. Parse errors, unavailable grammars, and CFScript blocks containing statement blocks MUST leave line-scanner output unchanged.

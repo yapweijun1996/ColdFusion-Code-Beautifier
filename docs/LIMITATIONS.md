@@ -33,7 +33,10 @@ Real cases where the formatter does not produce ideal output. None of these corr
 
 ## JavaScript (Deep JS)
 
-- **Nested parens are not reformatted** — `protectBraceCodeParens` protects every `(…)` so `for(;;)` and function arguments stay intact. The tradeoff: `(function(){ body })()` IIFE bodies are kept on the same line inside the paren.
+- **Structural planner coverage** — supported JavaScript uses syntax-backed indentation. Classes, JSX, dynamic imports and unsupported control-body shapes use the compatibility formatter. Multiline condition and expression continuation alignment is conservatively preserved where the planner cannot establish a safe new alignment.
+- **Mixed CFML and JavaScript** — CFML tags are mapped and checked when possible, but the parser cannot prove every server-generated branch. If mapping or verification fails, the affected original region is retained and a warning is shown.
+- **Large scripts** — parsing, planning and verification are synchronous. Very large scripts can temporarily block the browser; see [TESTING.md](TESTING.md) for local performance observations.
+- **Nested parens** — `protectBraceCodeParens` protects `(…)` groups so `for(;;)` and function arguments stay intact; a single-line IIFE may remain on one line.
 - **Unterminated string literals** stop at the next line break for safety. The broken input is preserved as-is rather than consuming the rest of the file, but the output still reflects the original bug.
 - **Object literal formatting** — every `{` triggers a newline. Small inline `{a:1}` becomes multi-line. This is verbose but not incorrect.
 
