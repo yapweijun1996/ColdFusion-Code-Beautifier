@@ -100,6 +100,17 @@ grammar. Boundaries:
   If loading or parsing fails, the applicable post-pass is skipped and the
   line-scanner output stands. The feature is OFF by default; review output.
 
+## PWA update recovery
+
+- Update recovery uses tab-local `sessionStorage`; inaccessible or full
+  storage postpones application-controlled reloads. Native `beforeunload`
+  confirmation is best-effort: a browser may suppress it or a user may choose
+  to leave, and a stale snapshot may be impossible to remove if storage is
+  entirely blocked. Keep an external copy of important work.
+- A page running an older release only saves input during its first update to
+  this version; copy any output before accepting that update. Existing
+  input-only snapshots are migrated on first load.
+
 ## CSS (Deep CSS)
 
 - **`@media` / `@keyframes` with nested rules** — opening `{` triggers a new line and increments indent, but the simple formatter does not separately format each inner rule. Complex animations may need manual tidy-up.

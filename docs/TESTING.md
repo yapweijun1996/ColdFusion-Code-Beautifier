@@ -3,7 +3,7 @@
 ## Running the suite
 
 ```bash
-npm test          # runs formatter, structure, UI, CLI, version, and Tree-sitter suites
+npm test          # runs formatter, structure, UI, CLI, version, Pages, and Tree-sitter suites
 # or individually:
 node tests/run-tests.js          # VM-harness formatter suite
 node tests/html-whitespace.test.js # HTML rendered-text preservation
@@ -16,6 +16,7 @@ node tests/js-structure-planner.test.js # syntax-backed indentation and safe fal
 node tests/ui.test.js            # static HTML + editor interaction suite
 node tests/cli.test.js            # Node CLI end-to-end suite
 node tests/version.test.js       # deployment version injection
+node tests/pages.test.js         # private corpus guard and Pages staging
 node tests/tree-sitter.test.mjs  # standalone Semantic Indent suite
 ```
 
@@ -57,7 +58,7 @@ For UI-level checks that the harness cannot reach (clipboard, language-selector 
 4. Confirm `Auto copy` is on by default while `Auto clear input` and `Auto clear output` are off by default; enable the latter two and verify their explicit behavior.
 5. While Pro SQL or Semantic Indent is loading, verify Beautify is disabled and returns to normal after success or fallback.
 6. Verify Tab/Shift-Tab indentation, Escape then Tab focus exit, and Control/Command+Enter.
-7. Deploy a changed source commit, verify the footer shows the stamped version, wait for the new worker to install, verify **Update now** appears, and confirm input is restored after activation. Test once with another tab accepting the update and verify the other tab offers **Reload now** instead of reloading automatically.
+7. With isolated A/B workers, verify **Update now** restores both input and output, including an output-only result. Delay activation and inject a storage failure after editing the input; confirm no automatic reload, then restore storage and retry. Check that another tab offers **Reload now** rather than reloading automatically. Native `beforeunload` confirmation remains browser-dependent.
 
 ## Adding a test
 

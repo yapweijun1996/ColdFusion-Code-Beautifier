@@ -31,10 +31,11 @@
 			action.textContent = actionText;
 			action.addEventListener('click', function (event) {
 				if (event && typeof event.stopPropagation === 'function') event.stopPropagation();
+				var dismiss = true;
 				try {
-					if (typeof onAction === 'function') onAction();
+					if (typeof onAction === 'function' && onAction() === false) dismiss = false;
 				} finally {
-					removeToast(toast);
+					if (dismiss) removeToast(toast);
 				}
 			});
 			actionRow.appendChild(action);

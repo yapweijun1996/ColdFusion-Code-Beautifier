@@ -207,14 +207,21 @@ sw.js                  ← network-first for HTML, stale-while-revalidate for as
                          index.html version marker is stamped alongside sw.js
                          GET_VERSION reports new/active worker version to UI
                          skipWaiting() + clients.claim() after user consent
-js/pwa.js              ← registers ./sw.js and restores one-shot input drafts
+js/pwa.js              ← registers ./sw.js and restores one-shot editor state
                          on 'updatefound' + 'installed' + existing controller
                             → persistent "Update now" action toast
-                         action saves input to sessionStorage, then posts
-                            SKIP_WAITING; controllerchange reloads that tab
+                         snapshots input and output atomically in sessionStorage,
+                            then posts SKIP_WAITING; saves again before reload
                          an update accepted in another tab offers "Reload now"
                          calls reg.update() hourly + on visibilitychange
 ```
+
+On failed final save or pending formatting, automatic reload is postponed and
+the page offers a retry. A failed save attempts to discard stale snapshots.
+During a pending update, failed `beforeunload` saving requests a native browser
+confirmation; browsers or users can still allow navigation, so it is not a
+guaranteed backup. An input-only snapshot from the previous release is read
+once for upgrade continuity. Browser-restored nonempty fields take precedence.
 
 HTML requests return network responses, including HTTP errors, while caching
 only same-origin basic HTTP 200 responses. On network failure the worker uses

@@ -7,10 +7,8 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Privacy guarantee: this workflow runs ONLY tracked files. The `sample/`
-# directory is gitignored (private user-supplied .cfm corpus) and is NEVER
-# cloned by `actions/checkout`. Every regression test below uses synthetic
-# / sanitized inputs hard-coded into tests/run-tests.js.
+# Checkout contains tracked files, including any files accidentally force-added.
+# The guard rejects private sample entries before tests run.
 
 permissions:
   contents: read
@@ -20,15 +18,11 @@ jobs:
     name: Run regression suite (synthetic inputs only)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (tracked files only — sample/ is gitignored)
+      - name: Checkout tracked files
         uses: actions/checkout@v4
 
       - name: Assert no private corpus leaked into repo
-        run: |
-          if [ -d sample ] && find sample -name '*.cfm' -type f | grep -q .; then
-            echo "::error::Private .cfm corpus appears under sample/ — sample/ is gitignored but a file slipped through. Fix .gitignore or remove the file."
-            exit 1
-          fi
+        run: node tools/prepare-pages.js --check
 
       - name: Run all regression tests (no install, no network)
         run: npm test

@@ -8,7 +8,9 @@
 (function (root) {
 	'use strict';
 
-	var DRAFT_KEY = 'cfb.pwa.draft.input';
+	var DRAFT_KEY = 'cfb.pwa.draft.state';
+	// One-time migration of input-only drafts saved by older deployed pages.
+	var LEGACY_DRAFT_KEY = 'cfb.pwa.draft.input';
 	var state = {
 		registration: null,
 		initialized: false,
@@ -52,8 +54,14 @@
 
 	function removeDraft() {
 		var storage = getStorage();
-		if (!storage) return;
-		try { storage.removeItem(DRAFT_KEY); } catch (e) {}
+		if (!storage) return false;
+		try {
+			storage.removeItem(DRAFT_KEY);
+			storage.removeItem(LEGACY_DRAFT_KEY);
+			return true;
+		} catch (e) {
+			return false;
+		}
 	}
 
 	function dispatchInputEvent(input) {
@@ -80,35 +88,50 @@
 	function restoreDraft() {
 		var storage = getStorage();
 		var input = getElement('input');
-		if (!storage || !input || typeof input.value !== 'string') return;
+		var output = getElement('output');
+		if (!storage) return;
 
-		var draft;
-		try { draft = storage.getItem(DRAFT_KEY); } catch (e) { return; }
-		if (draft === null) return;
+		var saved, snapshot;
+		try {
+			saved = storage.getItem(DRAFT_KEY);
+			if (saved !== null) {
+				snapshot = JSON.parse(saved);
+				if (!snapshot || typeof snapshot.input !== 'string' || typeof snapshot.output !== 'string') return;
+			} else {
+				saved = storage.getItem(LEGACY_DRAFT_KEY);
+				if (saved === null) return;
+				snapshot = { input: saved, output: '' };
+			}
+		} catch (e) { return; }
 
-		/* Never overwrite a value restored by the browser or supplied by an
-		 * embedding page. The saved draft is single-use either way. */
-		if (input.value !== '') {
-			removeDraft();
-			return;
+		// Browser-restored or embedded values take precedence independently.
+		if (input && input.value === '' && snapshot.input !== '') {
+			input.value = snapshot.input;
+			dispatchInputEvent(input);
 		}
-		input.value = draft;
+		if (output && output.value === '' && snapshot.output !== '') {
+			output.value = snapshot.output;
+			dispatchInputEvent(output);
+		}
 		removeDraft();
-		dispatchInputEvent(input);
 	}
 
 	function saveDraft() {
 		var input = getElement('input');
-		if (!input || typeof input.value !== 'string' || input.value === '') {
-			removeDraft();
-			return true;
-		}
+		var output = getElement('output');
+		var inputValue = input && typeof input.value === 'string' ? input.value : '';
+		var outputValue = output && typeof output.value === 'string' ? output.value : '';
 		var storage = getStorage();
+		if (!inputValue && !outputValue) return storage ? removeDraft() : true;
 		if (!storage) return false;
 		try {
-			storage.setItem(DRAFT_KEY, input.value);
+			// One write makes input and output a single coherent snapshot.
+			storage.setItem(DRAFT_KEY, JSON.stringify({ input: inputValue, output: outputValue }));
+			storage.removeItem(LEGACY_DRAFT_KEY);
 			return true;
 		} catch (e) {
+			// Never silently restore an older snapshot after a failed save.
+			removeDraft();
 			return false;
 		}
 	}
@@ -192,40 +215,45 @@
 		}
 	}
 
-	function reloadFromPrompt() {
-		if (!saveDraft()) {
-			notify('Update postponed because your input could not be saved.');
-			state.reloading = false;
-			return;
+	function prepareReload() {
+		if (root && root.CFBEditorUI && typeof root.CFBEditorUI.isBusy === 'function'
+				&& root.CFBEditorUI.isBusy()) {
+			notify('Update postponed until formatting finishes.');
+			return false;
 		}
+		if (!saveDraft()) {
+			notify('Update postponed because your input and output could not be saved.');
+			return false;
+		}
+		return true;
+	}
+
+	function reloadFromPrompt() {
+		if (!prepareReload()) return false;
 		reloadPage();
+		return true;
 	}
 
 	function requestUpdate(registration, worker) {
-		if (state.updateRequested) return;
-		if (!saveDraft()) {
-			notify('Update postponed because your input could not be saved.');
-			state.promptShown = false;
-			return;
-		}
+		if (state.updateRequested || !prepareReload()) return false;
 
 		state.updateRequested = true;
 		var waiting = (registration && registration.waiting) || worker;
 		if (!waiting || typeof waiting.postMessage !== 'function') {
 			removeDraft();
 			state.updateRequested = false;
-			state.promptShown = false;
 			notify('The update is no longer available. Please try again.');
-			return;
+			return false;
 		}
 		try {
 			waiting.postMessage({ type: 'SKIP_WAITING' });
 		} catch (e) {
 			removeDraft();
 			state.updateRequested = false;
-			state.promptShown = false;
 			notify('The update could not be started. Please try again.');
+			return false;
 		}
+		return true;
 	}
 
 	function showUpdatePrompt(registration, worker) {
@@ -246,7 +274,7 @@
 			state.updateToast = action(
 				versionMessage('A new version is ready', newVersion),
 				'Update now',
-				function () { requestUpdate(registration, worker); },
+				function () { return requestUpdate(registration, worker); },
 				{ duration: 0 }
 			);
 		});
@@ -323,7 +351,16 @@
 		state.hasController = !!serviceWorker.controller;
 		serviceWorker.addEventListener('controllerchange', function () {
 			if (state.updateRequested) {
-				reloadPage();
+				// Input or output can change while the new worker activates.
+				state.updateRequested = false;
+				state.hasController = true;
+				if (prepareReload()) {
+					reloadPage();
+				} else {
+					closeUpdateToast();
+					state.promptShown = false;
+					showReloadPrompt();
+				}
 				return;
 			}
 			if (state.hasController) {
@@ -338,10 +375,20 @@
 
 		var win = root || (typeof window !== 'undefined' ? window : null);
 		if (!win || typeof win.addEventListener !== 'function') return;
-		win.addEventListener('beforeunload', function () {
-			/* If activation is slow and the user closes/reloads manually after
-			 * consenting, refresh the snapshot so a later restore is not stale. */
-			if (state.updateRequested) saveDraft();
+		win.addEventListener('beforeunload', function (event) {
+			if ((state.updateRequested || state.reloading) && !prepareReload()) {
+				// Browsers may still leave if the user confirms the native prompt.
+				// A pending formatter may still change the visible fields.
+				removeDraft();
+				state.reloading = false;
+				if (!state.updateRequested) {
+					closeUpdateToast();
+					state.promptShown = false;
+					showReloadPrompt();
+				}
+				if (event && typeof event.preventDefault === 'function') event.preventDefault();
+				if (event) event.returnValue = '';
+			}
 		});
 		win.addEventListener('load', function () {
 			serviceWorker.register('./sw.js').then(function (registration) {

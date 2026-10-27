@@ -34,7 +34,7 @@
     "node": ">=14"
   },
   "scripts": {
-    "test": "node tests/run-tests.js && node tests/html-whitespace.test.js && node tests/sql-token-safety.test.js && node tests/sql-lexical-safety.test.js && node tests/embedded-literal-safety.test.js && node tests/mixed-literal-safety.test.js && node tests/structure-contract.test.js && node tests/js-structure-planner.test.js && node tests/ui.test.js && node tests/sw.test.js && node tests/cli.test.js && node tests/version.test.js && node tests/tree-sitter.test.mjs",
+    "test": "node tests/run-tests.js && node tests/html-whitespace.test.js && node tests/sql-token-safety.test.js && node tests/sql-lexical-safety.test.js && node tests/embedded-literal-safety.test.js && node tests/mixed-literal-safety.test.js && node tests/structure-contract.test.js && node tests/js-structure-planner.test.js && node tests/ui.test.js && node tests/sw.test.js && node tests/cli.test.js && node tests/version.test.js && node tests/pages.test.js && node tests/tree-sitter.test.mjs",
     "spike:tree-sitter": "node tools/spike-tree-sitter.mjs"
   },
   "devDependencies": {

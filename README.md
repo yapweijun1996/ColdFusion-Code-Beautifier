@@ -26,7 +26,7 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. T
 - **Normalize Indent** (opt-in) — converts each line's *leading* whitespace from spaces to tabs before formatting (line content is never touched). Auto-detects the file's indent unit (2 / 4 / 8 spaces = 1 tab), or pick the width explicitly from the companion selector. Handles files that mix space-indent and tab-indent lines, including files already run through the beautifier (it recovers the original unit from the tab+space alignment). Checkbox + width persist in `localStorage`.
 - **HTML output safety** — the browser and CLI preserve source text and whitespace between HTML and CFML tags, including preformatted content. As a result, some HTML tag layouts remain as authored. Embedded SQL, CSS and JavaScript still use their selected formatters; ambiguous tag sequences fall back to the original document.
 - **Semantic Indent** (opt-in, experimental) — uses tree-sitter CFML/CFScript parsers to indent multi-line nested function-call chains by their real call depth, including flat, zero-indent input. Covers nested calls inside `<cfset>`/`<cfparam>` tags and inside control-structure-free `<cfscript>` blocks. Struct literals and SQL strings stay flat; unbalanced / mid-edit blocks fall back to the line-scanner untouched. Each grammar (~2.6 MB CFML, ~2.1 MB CFScript) lazy-loads when its supported tag appears in the input; tag-like text in comments or strings can also trigger loading. See [docs/LIMITATIONS.md](docs/LIMITATIONS.md#semantic-indent-tree-sitter-opt-in-experimental).
-- **PWA** — installable and offline-capable via service worker. HTML uses network-first and assets use stale-while-revalidate. Online HTTP errors remain visible but do not overwrite the cached offline page; offline use requires a previously cached usable page. New releases show an **Update now** prompt with the old/new versions; the current input is saved and restored across the controlled reload. The footer displays the deployed source version. GitHub Pages automatically stamps it from the commit SHA; for another static host, run `node tools/inject-build-version.js` before publishing.
+- **PWA** — installable and offline-capable via service worker. HTML uses network-first and assets use stale-while-revalidate. Online HTTP errors remain visible but do not overwrite the cached offline page; offline use requires a previously cached usable page. New releases show an **Update now** prompt with the old/new versions; input and output are saved in tab-local `sessionStorage` and restored after the controlled reload. A failed save postpones the reload; browser confirmation on manual navigation is best-effort. The footer displays the deployed source version. GitHub Pages automatically stamps it from the commit SHA; for another static host, run `node tools/inject-build-version.js` before publishing.
 
 ## Usage
 
@@ -93,7 +93,7 @@ Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## Testing
 
 ```bash
-npm test          # runs formatter, structure, UI, CLI, version, and Tree-sitter suites
+npm test          # runs formatter, structure, UI, CLI, version, Pages, and Tree-sitter suites
 # or individually:
 node tests/run-tests.js          # VM-harness formatter suite
 node tests/html-whitespace.test.js # rendered HTML text preservation
@@ -106,10 +106,11 @@ node tests/js-structure-planner.test.js # syntax-backed indentation planner
 node tests/ui.test.js            # static HTML + editor interaction suite
 node tests/cli.test.js            # Node CLI end-to-end suite
 node tests/version.test.js       # build version stamping
+node tests/pages.test.js         # CI privacy and Pages asset staging
 node tests/tree-sitter.test.mjs  # standalone tree-sitter Semantic Indent suite
 ```
 
-`tests/run-tests.js` replays the formatter scripts in a Node VM context with a faked DOM. The structure suite covers nesting, JavaScript/CFML preservation and safe fallback; the remaining suites exercise UI, CLI, version stamping and real Tree-sitter WASM. See [docs/TESTING.md](docs/TESTING.md).
+`tests/run-tests.js` replays the formatter scripts in a Node VM context with a faked DOM. The structure suite covers nesting, JavaScript/CFML preservation and safe fallback; the remaining suites exercise UI, CLI, version stamping, Pages staging and real Tree-sitter WASM. Pages publishes only the assets listed in `tools/prepare-pages.js`; repository documentation is available on GitHub, not from the Pages artifact. See [docs/TESTING.md](docs/TESTING.md).
 
 ## Documentation
 

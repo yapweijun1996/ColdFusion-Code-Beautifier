@@ -2,11 +2,22 @@
 
 ## Privacy contract
 
-The `sample/` directory is **gitignored** and holds private `.cfm` files supplied by users for local diagnosis. **Sample files are never committed, never cloned by CI, never shared.**
+The `sample/` and `sample_codebase/` directories are gitignored and reserved
+for local private material. Do not commit their contents: `.gitignore` does
+not prevent a force-add, and a CI guard cannot undo a Git history disclosure.
 
-- `.github/workflows/test.yml` runs `npm test` against tracked-only sources. This invokes formatter, UI-contract, CLI E2E, and vendored-WASM Tree-sitter suites. `actions/checkout` cannot pull private `sample/*.cfm` because those files are ignored.
-- `.github/workflows/test.yml` has an explicit guard step: if any `*.cfm` ever appears under `sample/` in the checked-out tree (e.g. someone forgot to gitignore), the CI fails loudly before tests run.
-- `tools/diagnose-corpus.js` reads from `sample/sample_cfm/` **locally only**. CI never invokes it.
+- Both test and deploy workflows run `node tools/prepare-pages.js --check`
+  immediately after checkout. It rejects unexpected files, directories and
+  links in either sample directory, regardless of extension, without printing
+  private filenames. Only regular `sample/.gitkeep`, `sample/README.md` and
+  `sample_codebase/.gitkeep` placeholders are permitted.
+- Pages staging repeats the guard and copies only the public browser asset
+  allowlist into a new directory. It rejects symlinked assets and never uploads
+  the repository root. Other repository files, including documentation and
+  both sample directories, are not served by Pages; browse them on GitHub.
+  When adding a browser resource, update `tools/prepare-pages.js` and verify
+  the staged page and offline resources.
+- `tools/diagnose-corpus.js` is a local diagnostic; CI never invokes it.
 
 ## The rule
 

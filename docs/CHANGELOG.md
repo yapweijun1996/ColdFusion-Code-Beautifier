@@ -14,11 +14,12 @@
 - Load the relevant Semantic Indent grammar for supported tag candidates, rather than only flat-looking input, so tested cold and warm parser states produce the same output.
 - Keep caret and selection positions on their original lines when outdenting, and include an initial selected empty line when indenting.
 - Reject invalid explicit `--indent-width` values instead of accepting numeric prefixes or the internal auto-width sentinel.
+- Reject unexpected private sample entries in both CI workflows and publish an explicit browser-asset allowlist rather than the repository root. Pages no longer serves repository documentation or sample directories.
 
 ### PWA user-controlled updates
 
 - Replaced automatic update reloads with a persistent `Update now` action toast when a new service worker is waiting.
-- Update consent saves the current input in `sessionStorage` before `SKIP_WAITING`; the draft is restored once after reload. Updates accepted in another tab offer a safe `Reload now` action instead of forcing a reload.
+- Update consent snapshots input and output together in tab-local `sessionStorage`, rechecks before reload, and restores empty fields once. Failed saves or pending formatting postpone automatic reload; cross-tab updates offer a retryable `Reload now` action.
 - Extended `js/toast.js` with keyboard-accessible action notifications, added automatic service-worker/page version stamping from the source commit, displays the deployed version in the footer, and shows old/new versions in update prompts.
 - Keep HTTP error responses visible online without replacing a cached HTML page; skip previously cached errors during offline fallback and track successful cache writes through the fetch event lifetime.
 

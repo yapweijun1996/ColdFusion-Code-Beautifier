@@ -18,15 +18,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (tracked files only — sample/ is gitignored)
+      - name: Checkout tracked files
         uses: actions/checkout@v4
 
       - name: Assert no private corpus leaked into repo
-        run: |
-          if [ -d sample ] && find sample -name '*.cfm' -type f | grep -q .; then
-            echo "::error::Private .cfm corpus appears under sample/ — sample/ is gitignored but a file slipped through. Fix .gitignore or remove the file."
-            exit 1
-          fi
+        run: node tools/prepare-pages.js --check
 
       - name: Run regression tests (Node, no install, no network)
         run: npm test
@@ -36,13 +32,20 @@ jobs:
           BUILD_VERSION: ${{ github.sha }}
         run: node tools/inject-build-version.js
 
+      - name: Prepare public Pages files
+        id: pages_site
+        run: |
+          staging="$(mktemp -d "${RUNNER_TEMP}/cfb-pages.XXXXXX")"
+          node tools/prepare-pages.js --output "$staging/site"
+          echo "path=$staging/site" >> "$GITHUB_OUTPUT"
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: ${{ steps.pages_site.outputs.path }}
 
   deploy:
     needs: build

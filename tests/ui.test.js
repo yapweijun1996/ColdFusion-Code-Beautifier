@@ -214,6 +214,7 @@ async function runPwaUpdateTest() {
     dispatched: [],
     dispatchEvent: function (event) { this.dispatched.push(event.type); }
   };
+  const outputElement = { value: '', dispatchEvent: function () {} };
   const storageData = { 'cfb.pwa.draft.input': 'restored draft' };
   const storage = {
     getItem: function (key) { return Object.prototype.hasOwnProperty.call(storageData, key) ? storageData[key] : null; },
@@ -269,6 +270,7 @@ async function runPwaUpdateTest() {
     visibilityState: 'visible',
     getElementById: function (id) {
       if (id === 'input') return input;
+      if (id === 'output') return outputElement;
       if (id === 'app-version') return versionElement;
       return null;
     },
@@ -336,13 +338,151 @@ async function runPwaUpdateTest() {
   assert.strictEqual(updateMessages.length, 0);
 
   input.value = 'new draft before update';
+  outputElement.value = 'formatted result';
   actionPrompts[0].onAction();
-  assert.strictEqual(storage.getItem('cfb.pwa.draft.input'), 'new draft before update');
+  assert.deepStrictEqual(JSON.parse(storage.getItem(context.CFBPWA.draftKey)),
+    { input: 'new draft before update', output: 'formatted result' });
   assert.strictEqual(updateMessages.length, 1);
   assert.strictEqual(updateMessages[0].type, 'SKIP_WAITING');
+  input.value = 'latest input';
+  outputElement.value = 'latest output';
   serviceWorker.dispatch('controllerchange');
   assert.strictEqual(reloads, 1);
-  pass('PWA waits for Update now, saves input, activates and reloads');
+  assert.deepStrictEqual(JSON.parse(storage.getItem(context.CFBPWA.draftKey)),
+    { input: 'latest input', output: 'latest output' });
+  input.value = '';
+  outputElement.value = '';
+  context.CFBPWA.restoreDraft();
+  assert.strictEqual(input.value, 'latest input');
+  assert.strictEqual(outputElement.value, 'latest output');
+  assert.strictEqual(storage.getItem(context.CFBPWA.draftKey), null);
+  pass('PWA restores the latest input and output after update');
+}
+
+function runPwaSafetyTest() {
+  function makePwaCase() {
+    const input = new Element();
+    const output = new Element();
+    const data = new Map();
+    const serviceEvents = {};
+    const windowEvents = {};
+    const prompts = [];
+    const notices = [];
+    const messages = [];
+    let failSet = false;
+    let reloads = 0;
+    const storage = {
+      getItem: function (key) { return data.has(key) ? data.get(key) : null; },
+      setItem: function (key, value) {
+        if (failSet) throw new Error('synthetic quota error');
+        data.set(key, String(value));
+      },
+      removeItem: function (key) { data.delete(key); }
+    };
+    const worker = { postMessage: function (message) { messages.push(message.type); } };
+    const context = {
+      document: {
+        getElementById: function (id) { return id === 'input' ? input : id === 'output' ? output : null; },
+        createEvent: function () { return { initEvent: function (type) { this.type = type; } }; }
+      },
+      navigator: { serviceWorker: {
+        controller: worker,
+        addEventListener: function (type, fn) { serviceEvents[type] = fn; }
+      } },
+      sessionStorage: storage,
+      location: { protocol: 'https:', reload: function () { reloads++; } },
+      simple_toast_msg: function (message) { notices.push(message); },
+      simple_toast_action: function (message, label, onAction) {
+        const prompt = { label, onAction, remove: function () {} };
+        prompts.push(prompt);
+        return prompt;
+      }
+    };
+    context.window = context;
+    context.addEventListener = function (type, fn) { windowEvents[type] = fn; };
+    vm.createContext(context);
+    vm.runInContext(pwa, context);
+    return {
+      context, input, output, storage, worker, serviceEvents, windowEvents, prompts, notices, messages,
+      setFailure: function (value) { failSet = value; },
+      reloadCount: function () { return reloads; }
+    };
+  }
+
+  const outputOnly = makePwaCase();
+  outputOnly.output.value = 'only formatted result';
+  assert.strictEqual(outputOnly.context.CFBPWA.requestUpdate({ waiting: outputOnly.worker }), true);
+  outputOnly.serviceEvents.controllerchange();
+  assert.strictEqual(outputOnly.reloadCount(), 1);
+  outputOnly.output.value = '';
+  outputOnly.context.CFBPWA.restoreDraft();
+  assert.strictEqual(outputOnly.input.value, '');
+  assert.strictEqual(outputOnly.output.value, 'only formatted result');
+
+  const failure = makePwaCase();
+  failure.input.value = 'draft A';
+  failure.output.value = 'output A';
+  assert.strictEqual(failure.context.CFBPWA.requestUpdate({ waiting: failure.worker }), true);
+  failure.input.value = 'draft B';
+  failure.output.value = 'output B';
+  failure.setFailure(true);
+  failure.serviceEvents.controllerchange();
+  assert.strictEqual(failure.reloadCount(), 0, 'failed final save must not reload');
+  assert.strictEqual(failure.input.value, 'draft B');
+  assert.strictEqual(failure.output.value, 'output B');
+  assert.strictEqual(failure.storage.getItem(failure.context.CFBPWA.draftKey), null, 'stale snapshot removed');
+  assert.strictEqual(failure.prompts[failure.prompts.length - 1].label, 'Reload now');
+  assert.strictEqual(failure.prompts[failure.prompts.length - 1].onAction(), false);
+  failure.setFailure(false);
+  assert.strictEqual(failure.prompts[failure.prompts.length - 1].onAction(), true);
+  assert.strictEqual(failure.reloadCount(), 1, 'retry succeeds after storage recovers');
+  failure.input.value = '';
+  failure.output.value = '';
+  failure.context.CFBPWA.restoreDraft();
+  assert.strictEqual(failure.input.value, 'draft B');
+  assert.strictEqual(failure.output.value, 'output B');
+
+  const unload = makePwaCase();
+  unload.input.value = 'draft A';
+  assert.strictEqual(unload.context.CFBPWA.requestUpdate({ waiting: unload.worker }), true);
+  unload.input.value = 'draft B';
+  unload.setFailure(true);
+  const event = { prevented: false, preventDefault: function () { this.prevented = true; } };
+  unload.windowEvents.beforeunload(event);
+  assert.strictEqual(event.prevented, true, 'failed manual-unload save requests browser confirmation');
+  assert.strictEqual(unload.input.value, 'draft B');
+  assert.strictEqual(unload.storage.getItem(unload.context.CFBPWA.draftKey), null);
+  assert.strictEqual(unload.prompts.length, 0, 'pending activation must not claim the new worker is active');
+  unload.serviceEvents.controllerchange();
+  assert.strictEqual(unload.prompts[0].label, 'Reload now');
+
+  const unloadAfterActivation = makePwaCase();
+  unloadAfterActivation.input.value = 'latest input';
+  assert.strictEqual(unloadAfterActivation.context.CFBPWA.requestUpdate({ waiting: unloadAfterActivation.worker }), true);
+  unloadAfterActivation.serviceEvents.controllerchange();
+  unloadAfterActivation.setFailure(true);
+  const activatedEvent = { prevented: false, preventDefault: function () { this.prevented = true; } };
+  unloadAfterActivation.windowEvents.beforeunload(activatedEvent);
+  assert.strictEqual(activatedEvent.prevented, true);
+  assert.strictEqual(unloadAfterActivation.prompts[0].label, 'Reload now');
+
+  const restored = makePwaCase();
+  restored.input.value = 'saved input';
+  restored.output.value = 'saved output';
+  assert.strictEqual(restored.context.CFBPWA.saveDraft(), true);
+  restored.input.value = 'browser-restored input';
+  restored.output.value = '';
+  restored.context.CFBPWA.restoreDraft();
+  assert.strictEqual(restored.input.value, 'browser-restored input');
+  assert.strictEqual(restored.output.value, 'saved output');
+
+  const busy = makePwaCase();
+  busy.input.value = 'draft';
+  busy.context.CFBEditorUI = { isBusy: function () { return true; } };
+  assert.strictEqual(busy.context.CFBPWA.requestUpdate({ waiting: busy.worker }), false);
+  assert.deepStrictEqual(busy.messages, []);
+  assert.strictEqual(busy.input.value, 'draft');
+  pass('PWA protects output and latest drafts across update failures');
 }
 
 function runSafeModePreferenceTest() {
@@ -566,6 +706,7 @@ async function runFormatterAsyncSafetyTest() {
 
 (async function runBehaviorTests() {
   await runPwaUpdateTest();
+  runPwaSafetyTest();
   runSafeModePreferenceTest();
   await runFormatterAsyncSafetyTest();
   const harness = makeHarness();

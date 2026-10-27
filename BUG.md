@@ -42,11 +42,11 @@ Current priorities use **P1** for confirmed input-specific source corruption, da
 | BUG-28 | Targeted fix | P2 if regressed | Odd-byte BOM-marked UTF-16 is rejected; valid UTF-16 encoding is preserved in focused CLI tests. |
 | BUG-29 | Targeted fix | P2 if regressed | CLI accepts only explicit widths `2`, `4` or `8`; omitted width keeps auto detection and invalid values exit before output. |
 | BUG-30 | Targeted fix | P1 if regressed | Safe Mode disables Deep SQL/CSS/JS, Pro SQL and Semantic Indent; recognized standalone SQL/JS is unchanged. CFML/HTML still receives outer formatting. |
-| BUG-31 | Open | P1 | A PWA update discarded the only formatted output in the tested Chromium flow when Auto copy was off and Auto clear input was on. |
-| BUG-32 | Open | P1 conditional | A failed final draft save can restore an older snapshot after reload; observed with injected storage failure and a delayed activation. |
-| BUG-33 | Open | P2 | A dismissed update prompt, or a failed cross-tab reload save, cannot be re-opened by the tested update check. |
+| BUG-31 | Targeted fix | P1 if regressed | Chromium preserved an output-only result across a controlled update; older clients must copy output before their first upgrade. |
+| BUG-32 | Targeted fix | P1 conditional | Final-save failures postpone automatic reload and attempt to remove stale data; manual navigation relies on browser confirmation. |
+| BUG-33 | Open | P2 | A dismissed update prompt cannot be re-opened by the tested update check; failed save actions now remain available for retry. |
 | BUG-34 | Open | P2 | A controlled A/B deployment served B HTML with A JavaScript before update consent; real-version incompatibility is unverified. |
-| BUG-35 | Open | P1 conditional | The CI privacy guard misses uppercase `.CFM` and other extensions; exposure requires such files to enter the deployed workspace. |
+| BUG-35 | Targeted fix | P1 if regressed | CI rejects unexpected entries in both sample directories; Pages stages only explicitly listed public assets. Linux CI and live deployment remain unverified locally. |
 
 The review used isolated synthetic CLI files, actual Chromium and real vendored Tree-sitter WASM. Follow-up fixes were checked with CLI, browser and focused regression tests, but not with a CFML engine or database. The working tree contained pre-existing changes; see the detailed observations for original repros and limitations.
 
@@ -354,6 +354,9 @@ establish behavior of an existing deployment or a published npm package.
 - `js/pwa.js` saves only the input; browser form restoration is not an
   application-level output backup and can differ between browsers. Loss
   matters when no other copy exists.
+- **Current status:** input and output are saved together before controlled
+  reloads; the tested Chromium update restored the output-only result. An old
+  page cannot save output before its first upgrade to this fix.
 
 ### BUG-32 — Final draft-save failure can restore stale input
 
@@ -366,6 +369,10 @@ establish behavior of an existing deployment or a published npm package.
   not observed production conditions. The initial save failure is handled
   separately: it postpones the update. Browser-restored input can also prevent
   the stale snapshot from replacing it.
+- **Current status:** automatic reload is postponed when the final snapshot
+  fails, and stale-snapshot removal is attempted. Manual `beforeunload` failure
+  requests browser confirmation; suppression or explicit departure can still
+  lose unsaved data, particularly when storage also blocks removal.
 
 ### BUG-33 — Some PWA update prompts cannot be retried
 
@@ -379,6 +386,8 @@ establish behavior of an existing deployment or a published npm package.
 - A controlled source-level probe found a narrower distinction: an initial
   **Update now** save failure resets the prompt state, so a later update check
   can display that action again.
+- **Current status:** failed save actions remain visible for retry, but manual
+  dismissal of an update toast still leaves the prompt unavailable.
 
 ### BUG-34 — HTML and assets can mix before update consent
 
@@ -402,6 +411,16 @@ establish behavior of an existing deployment or a published npm package.
   extension or `.gitignore` filter. Exposure requires a private file to enter
   the checked-out or generated workspace and subsequent workflow steps to
   succeed. Real sample contents, artifacts and deployment were not inspected.
+- **Fix:** Both workflows reject unexpected entries in `sample/` and
+  `sample_codebase/`, independent of extension; the deployment step stages
+  explicitly listed browser assets instead of uploading the repository. The
+  staging step repeats the guard and rejects symlinked public assets.
+- **Checks:** Synthetic `.cfm`, `.CFM`, `.cfc`, `.txt`, nested-directory and
+  `sample_codebase` cases were blocked locally. A staged site formatted CFML,
+  CFScript and Pro SQL in Chromium, loaded both Tree-sitter grammars and
+  installed its service worker. The Pages regression suite also passed on WSL
+  Linux, including symlink checks; actual GitHub CI and live Pages were not run.
+  This does not remove private files already committed to Git history.
 
 ### SQL comment/JOIN candidate — final output protected in the tested sample
 
@@ -430,7 +449,7 @@ establish behavior of an existing deployment or a published npm package.
 
 ## Fix and regression priorities
 
-1. Address BUG-31/32 data-loss conditions and the conditional BUG-35 privacy exposure first; validate actual browser update and deployment boundaries.
-2. Address BUG-33 prompt retry and BUG-34 mixed-version behavior; verify that update consent and offline use remain coherent.
+1. Preserve BUG-35 privacy boundaries and BUG-31/32 data-recovery coverage, including first-upgrade and storage-failure boundaries.
+2. Address remaining BUG-33 dismissal and BUG-34 mixed-version behavior; verify update consent and offline use.
 3. Preserve existing editor, formatter, CLI, Safe Mode and cold/warm Semantic Indent regression coverage.
 4. Validate formatted CFML/SQL in target runtimes and keep safety/limitations documents aligned; whitespace-only changes do not prove semantic equivalence.
