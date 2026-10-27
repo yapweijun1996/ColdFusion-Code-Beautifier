@@ -16,6 +16,7 @@
 
 ### Latest formatter hardening
 
+- Fixed JavaScript numeric division being mistaken for a regular expression, which could hide a closing parenthesis and shift indentation through the rest of a script. Numeric literal forms and embedded scripts have regression coverage.
 - Added `js/cfml-comment-utils.js`, a shared depth-aware scanner for nested CFML comments. Splitter, indentation, language detection, SQL token/tree handling, deep JS protection, diagnostics, browser, CLI, SW, and tests now consume the same outer comment boundary.
 - Routed browser/CLI output restores CRLF when the captured source uses CRLF and otherwise emits LF; direct lower-level helpers remain canonical-LF.
 - Added `tools/source-encoding.js`; CLI and corpus diagnostics preserve UTF-8 BOM state and BOM-marked UTF-16LE/UTF-16BE output encoding instead of decoding legacy UTF-16 files as UTF-8.

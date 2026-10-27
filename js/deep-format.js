@@ -2199,6 +2199,18 @@ function protectBraceCodeText(code) {
 			continue;
 		}
 
+		// Numbers end an expression, so a following slash is division. Consume
+		// decimals, exponents, radix literals and bigint suffixes as one value.
+		if (/[0-9]/.test(char) || (char == '.' && /[0-9]/.test(nextChar || ''))) {
+			var numberMatch = code.slice(i).match(/^(?:0[xX][\da-fA-F_]+n?|0[bB][01_]+n?|0[oO][0-7_]+n?|(?:\d[\d_]*(?:\.[\d_]*)?|\.[\d_]+)(?:[eE][+-]?[\d_]+)?n?)/);
+			if (numberMatch) {
+				output += numberMatch[0];
+				i += numberMatch[0].length;
+				lastSig = 'value';
+				continue;
+			}
+		}
+
 		/* Identifier / keyword run. Consume the full word so we can
 		 * classify regex-context keywords (`return`, `typeof`, `throw`,
 		 * `void`, `delete`, `in`, `of`, `new`, `yield`, `await`,

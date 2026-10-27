@@ -1580,6 +1580,43 @@ assertEqual(
 	'var r = /\\d+;\\s+/g;\nif(x){\n\ty();\n}'
 );
 
+(function testNumericDivisionDoesNotHideParentheses() {
+	var script = '(function() {\nfunction finish() {\n' +
+		'var percentage = Math.round(restored * 10000 / fields.length) / 100;\n' +
+		'var result = {\nvalue: percentage\n};\n}\n' +
+		'function pass() {\nrun();\n}\n})();';
+	var expected = '(function() {\n\tfunction finish() {\n' +
+		'\t\tvar percentage = Math.round(restored * 10000 / fields.length) / 100;\n' +
+		'\t\tvar result = {\n\t\t\tvalue: percentage\n\t\t};\n\t}\n' +
+		'\tfunction pass() {\n\t\trun();\n\t}\n})();';
+	assertEqual('numeric division preserves IIFE and sibling function indentation',
+		runRouter(script, 'js', false), expected);
+	var embedded = '<script>\n' + script + '\n</script>';
+	var expectedEmbedded = '<script>\n' + expected.split('\n').map(function(line) {
+		return '\t' + line;
+	}).join('\n') + '\n</script>';
+	var result = runRouter(embedded, 'cfml', true);
+	assertEqual('numeric division preserves embedded script indentation', result, expectedEmbedded);
+	assertEqual('embedded numeric division formatting is idempotent',
+		runRouter(result, 'cfml', true), result);
+	assertEqual('numeric division preserves intentional ternary alignment',
+		runRouter('function render() {\nvar percentage = fields.length\n' +
+			'          ? Math.round(restored * 10000 / fields.length) / 100\n' +
+			'          : 100;\nreturn percentage;\n}', 'js', false),
+		'function render() {\n\tvar percentage = fields.length\n' +
+			'\t          ? Math.round(restored * 10000 / fields.length) / 100\n' +
+			'\t          : 100;\n\treturn percentage;\n}');
+	var harness = makeContext('', 'js');
+	['10000', '1.', '.5', '1e+2', '0xff', '0b101', '0o77', '10n'].forEach(function(number) {
+		var expression = number + ' / divisor) / 100';
+		assertEqual('numeric literal ' + number + ' keeps division visible',
+			harness.context.protectBraceCodeText(expression).code, expression);
+	});
+	var protectedRegex = harness.context.protectBraceCodeText('return /a{2}\\/b/g;');
+	assertEqual('regular expression after return remains protected',
+		protectedRegex.tokens.length, 1);
+})();
+
 assertEqual(
 	'js mode — leading CFML comment header preserved verbatim',
 	runRouter('<!--- file header --->\nfunction f(){return 1;}', 'js', false),
