@@ -94,10 +94,11 @@
 		var delta = 0;
 		for (var i = 0; i < changes.length; i++) {
 			var change = changes[i];
-			/* For indent, a selection beginning at the line start should stay
-			 * attached to the original code after the new tab. For outdent, a
-			 * cursor at the line start is already before the removed whitespace. */
-			if (outdent ? change.position < position : change.position <= position) {
+			if (outdent && change.position < position) {
+				// A caret inside removed indentation stops at its line start.
+				delta += Math.max(change.delta, change.position - position);
+			} else if (!outdent && change.position <= position) {
+				// Keep the selection attached to its original text.
 				delta += change.delta;
 			}
 		}
@@ -123,8 +124,8 @@
 			return true;
 		}
 
-		var lineStart = value.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
-		var endLineStart = value.lastIndexOf('\n', Math.max(0, end - 1)) + 1;
+		var lineStart = start === 0 ? 0 : value.lastIndexOf('\n', start - 1) + 1;
+		var endLineStart = end === 0 ? 0 : value.lastIndexOf('\n', end - 1) + 1;
 		var includeEndLine = end > endLineStart || (outdent && start === end);
 		var blockEnd;
 		if (includeEndLine) {

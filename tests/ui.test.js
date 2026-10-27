@@ -551,7 +551,7 @@ async function runFormatterAsyncSafetyTest() {
   ids.output.value = 'previous semantic output';
   ids.semantic_indent.checked = true;
   let resolveSemantic;
-  context.hasFlatInlineTagBlock = function () { return true; };
+  context.hasSemanticCFMLCandidate = function () { return true; };
   context.isTreeSitterCFMLLoaded = function () { return false; };
   context.ensureTreeSitterCFML = function () {
     return new Promise((resolve) => { resolveSemantic = resolve; });
@@ -586,6 +586,41 @@ async function runFormatterAsyncSafetyTest() {
   assert.strictEqual(ui.applyTabEdit(elements.input, true), true);
   assert.strictEqual(elements.input.value, 'alpha\nbeta');
   pass('Shift-Tab removes one indentation level');
+
+  for (const position of [4, 5, 6, 7, 8, 9, 11]) {
+    elements.input.value = 'xyz\n    abc';
+    elements.input.selectionStart = position;
+    elements.input.selectionEnd = position;
+    assert.strictEqual(ui.applyTabEdit(elements.input, true), true);
+    assert.strictEqual(elements.input.value, 'xyz\nabc');
+    assert.strictEqual(elements.input.selectionStart, Math.max(4, position - 4),
+      'outdent keeps caret on its line at position ' + position);
+    assert.strictEqual(elements.input.selectionEnd, elements.input.selectionStart);
+  }
+  elements.input.value = 'xyz\n    a\n    b';
+  elements.input.selectionStart = 5;
+  elements.input.selectionEnd = 12;
+  assert.strictEqual(ui.applyTabEdit(elements.input, true), true);
+  assert.strictEqual(elements.input.value, 'xyz\na\nb');
+  assert.strictEqual(elements.input.selectionStart, 4);
+  assert.strictEqual(elements.input.selectionEnd, 6);
+  pass('outdent clamps caret and selection inside removed indentation');
+
+  for (const fixture of [
+    { input: '\na', start: 0, end: 2, output: '\t\n\ta', from: 1, to: 4 },
+    { input: '\na', start: 0, end: 1, output: '\t\na', from: 1, to: 2 },
+    { input: 'a\n\nb', start: 0, end: 4, output: '\ta\n\t\n\tb', from: 1, to: 7 },
+    { input: 'one\ntwo', start: 0, end: 4, output: '\tone\ntwo', from: 1, to: 5 }
+  ]) {
+    elements.input.value = fixture.input;
+    elements.input.selectionStart = fixture.start;
+    elements.input.selectionEnd = fixture.end;
+    assert.strictEqual(ui.applyTabEdit(elements.input, false), true);
+    assert.strictEqual(elements.input.value, fixture.output);
+    assert.strictEqual(elements.input.selectionStart, fixture.from);
+    assert.strictEqual(elements.input.selectionEnd, fixture.to);
+  }
+  pass('indent includes selected empty lines but excludes an unselected next line');
 
   elements.input.value = 'x';
   elements.input.selectionStart = 1;

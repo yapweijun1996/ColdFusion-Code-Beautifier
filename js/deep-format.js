@@ -1446,69 +1446,63 @@ function replaceEmbeddedBlock(code, tagName, formatter) {
 }
 
 function isInsideCommentOrString(code, pos) {
-	var quote = "";
-	var inLine = false;
-	var inBlock = false;
 	for (var i = 0; i < pos; i++) {
-		var c = code[i];
-		var n = code[i + 1];
-		if (inLine) {
-			if (c == '\n') inLine = false;
-			continue;
-		}
-		if (inBlock) {
-			if (c == '*' && n == '/') { inBlock = false; i++; }
-			continue;
-		}
-		if (quote != "") {
-			// CFML / HTML strings do NOT use backslash escapes — `\` is a literal
-			// character. Treating `\"` as an escape (C/JS-style) would swallow the
-			// closing quote of strings like
-			//   "..\..\..\#mainstorefld#\contentstore\#cookie.cookcfnunique#\"
-			// and leave parser parity off-by-one for the rest of the file, which
-			// silently skips every subsequent <cfquery> as "inside a string".
-			if (c == quote) {
-				// SQL standard escape: doubled quote = literal quote inside string.
-				// Without this, a body containing 'it''s OK' would close the string
-				// at the second `'` and re-open at the third, leaving the parity
-				// flipped for the rest of the file — and subsequent cfqueries
-				// would be wrongly judged "inside a string" and skipped entirely.
-				if ((c == "'" || c == '"') && n == c) { i++; continue; }
-				quote = "";
+		var c = code[i], n = code[i + 1];
+		if (c === '#' && n === '#') { i++; continue; }
+		if (c === '#') {
+			// A tag-looking string inside a CFML interpolation is not markup.
+			var hashQuote = "", hashEnd = -1;
+			for (var h = i + 1; h < code.length; h++) {
+				if (hashQuote) {
+					if (code[h] === hashQuote) {
+						if (code[h + 1] === hashQuote) h++;
+						else hashQuote = "";
+					}
+				} else if (code[h] === "'" || code[h] === '"') {
+					hashQuote = code[h];
+				} else if (code[h] === '#') {
+					if (code[h + 1] === '#') h++;
+					else { hashEnd = h; break; }
+				}
 			}
-			continue;
+			if (hashEnd !== -1) {
+				if (hashEnd >= pos) return true;
+				i = hashEnd;
+				continue;
+			}
 		}
-		if (c == '/' && n == '/') { inLine = true; i++; continue; }
-		if (c == '/' && n == '*') { inBlock = true; i++; continue; }
-		if (c == '<' && n == '!' && code[i + 2] == '-' && code[i + 3] == '-') {
+		if (c !== '<') continue; // Quotes and slashes in HTML text are literal.
+		if (n === '!' && code[i + 2] === '-' && code[i + 3] === '-') {
 			var markupEnd = findMarkupCommentEnd(code, i);
 			if (markupEnd === -1 || markupEnd > pos) return true;
 			i = markupEnd - 1;
 			continue;
 		}
-		/* A preceding raw-text element has its own lexical rules. In
-		 * particular, quotes inside JS regex literals are not HTML quotes.
-		 * Skip its complete body rather than letting it hide later blocks;
-		 * candidates inside that body must still not become markup blocks. */
-		if (c === '<') {
-			var rawOpen = code.slice(i).match(/^<(script|style)\b/i);
-			if (rawOpen) {
-				var rawTagEnd = findCFMLTagClose(code.slice(i));
-				if (rawTagEnd === -1 || i + rawTagEnd >= pos) return true;
-				var rawContentStart = i + rawTagEnd + 1;
-				if (/\/\s*>$/.test(code.slice(i, rawContentStart))) {
-					i = rawContentStart - 1;
-					continue;
-				}
-				var rawClose = findClosingTagOutsideText(code, rawOpen[1], rawContentStart);
+		var tag = code.slice(i).match(/^<(\/?)([a-z][\w:.-]*)(?=[\s/>])/i);
+		if (!tag) continue;
+		var tagEnd = findCFMLTagClose(code.slice(i));
+		if (tagEnd === -1 || i + tagEnd >= pos) return true;
+		var contentStart = i + tagEnd + 1;
+		var name = tag[2].toLowerCase();
+		if (!tag[1] && !/\/\s*>$/.test(code.slice(i, contentStart))) {
+			if (/^(?:script|style|cfquery|cfscript)$/.test(name)) {
+				var rawClose = findClosingTagOutsideText(code, name, contentStart);
 				if (!rawClose || rawClose.start >= pos) return true;
 				i = rawClose.end - 1;
 				continue;
 			}
+			if (name === 'textarea' || name === 'title') {
+				var rcdataClose = new RegExp('</' + name + '\\s*>', 'ig');
+				rcdataClose.lastIndex = contentStart;
+				var rcdataMatch = rcdataClose.exec(code);
+				if (!rcdataMatch || rcdataMatch.index >= pos) return true;
+				i = rcdataClose.lastIndex - 1;
+				continue;
+			}
 		}
-		if (c == '"' || c == "'" || c == '`') { quote = c; continue; }
+		i = contentStart - 1;
 	}
-	return inLine || inBlock || quote != "";
+	return false;
 }
 
 function findClosingTagOutsideText(code, tagName, startIndex) {

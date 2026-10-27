@@ -1938,10 +1938,21 @@ function hasTagsOutsideStrings(code) {
 		// Real tag opener: `<` + letter or `<` + `/`. NOT `<!` (handled
 		// above) and NOT `<` followed by space/digit/punctuation.
 		if (c === '<' && c2 && /[a-zA-Z\/]/.test(c2)) return true;
-		// Update lastSig for next iteration.
+		// Track complete identifier tokens: expression-leading keywords such
+		// as `return` allow a following regex, but a property named `return`
+		// remains a value (including when comments follow the dot).
 		if (c === ' ' || c === '\t' || c === '\n' || c === '\r') { i++; continue; }
-		if (c === ')' || c === ']' || /[A-Za-z0-9_$]/.test(c)) { lastSig = 'value'; }
-		else { lastSig = 'operator'; }
+		if (/[A-Za-z_$]/.test(c)) {
+			var wordStart = i++;
+			while (i < n && /[A-Za-z0-9_$]/.test(code[i])) i++;
+			var word = code.slice(wordStart, i);
+			lastSig = lastSig !== 'dot' && typeof REGEX_CONTEXT_KEYWORDS !== 'undefined'
+				&& Object.prototype.hasOwnProperty.call(REGEX_CONTEXT_KEYWORDS, word) ? 'operator' : 'value';
+			continue;
+		}
+		if (c === '.') lastSig = 'dot';
+		else if (c === ')' || c === ']' || /[0-9]/.test(c)) lastSig = 'value';
+		else lastSig = 'operator';
 		i++;
 	}
 	return false;
@@ -1980,8 +1991,13 @@ function detectLanguage(code) {
 	var bodyAfterBanner = (typeof splitLeadingCommentBlock === 'function')
 		? splitLeadingCommentBlock(code).body
 		: code;
-	if (jsPrefix.test(bodyAfterBanner) && !hasTagsOutsideStrings(code)) {
-		return 'js';
+	if (jsPrefix.test(bodyAfterBanner)) {
+		if (!hasTagsOutsideStrings(code)) return 'js';
+		// Lexical context after a control-condition `)` can be ambiguous.
+		// Only override an apparent tag when the whole body parses as JS;
+		// mixed markup or unsupported syntax keeps the conservative route.
+		if (typeof parseJavaScriptStructure === 'function'
+				&& parseJavaScriptStructure(bodyAfterBanner).ok) return 'js';
 	}
 	return 'cfml';
 }
@@ -2243,12 +2259,12 @@ function beautifyCodes() {
 		}));
 	}
 
-	/* Fetch the 2.6 MB CFML grammar ONLY when semantic indent is on, the input
-	 * is CFML, and a flat multi-line inline-tag block is actually present —
-	 * users who never hit that case pay zero bytes. */
+	/* Fetch the CFML grammar for any supported tag candidate. A conservative
+	 * check avoids cold/warm differences when the post-pass can change input
+	 * that already has indentation or has non-flat continuation lines. */
 	if (!safe_mode && semantic_indent
 		&& language == 'cfml'
-		&& typeof hasFlatInlineTagBlock === 'function' && hasFlatInlineTagBlock(rawCode)
+		&& typeof hasSemanticCFMLCandidate === 'function' && hasSemanticCFMLCandidate(rawCode)
 		&& typeof ensureTreeSitterCFML === 'function'
 		&& typeof isTreeSitterCFMLLoaded === 'function' && !isTreeSitterCFMLLoaded()) {
 		preloads.push(ensureTreeSitterCFML().catch(function(err) {
@@ -2256,12 +2272,11 @@ function beautifyCodes() {
 		}));
 	}
 
-	/* Separately fetch the 2.1 MB cfscript grammar ONLY when a flat multi-line
-	 * nested call inside a <cfscript> block is present — so a file with only
-	 * <cfset> blocks never pays for the cfscript grammar, and vice-versa. */
+	/* Fetch the CFScript grammar independently for supported tag candidates;
+	 * the post-pass decides which blocks are actually safe to re-indent. */
 	if (!safe_mode && semantic_indent
 		&& language == 'cfml'
-		&& typeof hasFlatCfscriptBlock === 'function' && hasFlatCfscriptBlock(rawCode)
+		&& typeof hasSemanticCFScriptCandidate === 'function' && hasSemanticCFScriptCandidate(rawCode)
 		&& typeof ensureTreeSitterCFScript === 'function'
 		&& typeof isTreeSitterCFScriptLoaded === 'function' && !isTreeSitterCFScriptLoaded()) {
 		preloads.push(ensureTreeSitterCFScript().catch(function(err) {

@@ -211,6 +211,47 @@ check('CLI stdout contains only formatted code', stdoutRun.stdout === expected,
     'actual=' + JSON.stringify(stdoutRun.stdout));
 check('CLI stdout mode does not print a file message', stdoutRun.stderr.indexOf('Wrote ') === -1);
 
+var indentSource = '<cfset x = func(\n    nested(1),\n        nested(2)\n)>\n';
+[
+    { width: '2', output: '<cfset x = func(\n\t\tnested(1),\n\t\t\t\tnested(2)\n)>\n' },
+    { width: '4', output: '<cfset x = func(\n\tnested(1),\n\t\tnested(2)\n)>\n' },
+    { width: '8', output: '<cfset x = func(\n\tnested(1),\n\tnested(2)\n)>\n' }
+].forEach(function (fixture) {
+    var result = run(['-', '--stdout', '--language', 'cfml', '--indent-width', fixture.width], indentSource);
+    check('CLI uses explicit indent width ' + fixture.width,
+        result.status === 0 && result.stdout === fixture.output, result.stderr);
+});
+var autoWidth = run(['-', '--stdout', '--language', 'cfml', '--normalize-indent'], indentSource);
+check('CLI omission of indent width preserves auto detection',
+    autoWidth.status === 0 && autoWidth.stdout === '<cfset x = func(\n\tnested(1),\n\t\tnested(2)\n)>\n',
+    autoWidth.stderr);
+['0', '4garbage', '4.0', '04', '2e0', '4 ', '16', ''].forEach(function (width) {
+    var result = run(['-', '--stdout', '--indent-width', width], source);
+    check('CLI rejects invalid indent width ' + JSON.stringify(width),
+        result.status === 2 && result.stdout === '' && /--indent-width/.test(result.stderr), result.stderr);
+});
+var repeatedWidth = run(['-', '--stdout', '--indent-width', '0', '--indent-width', '4'], source);
+check('CLI rejects an invalid width even if a later option is valid',
+    repeatedWidth.status === 2 && repeatedWidth.stdout === '', repeatedWidth.stderr);
+var missingWidth = run(['-', '--stdout', '--indent-width'], source);
+check('CLI rejects a missing indent width', missingWidth.status === 2 && /--indent-width/.test(missingWidth.stderr),
+    missingWidth.stderr);
+var widthDestination = path.join(tempDir, 'width_beutifier.cfm');
+fs.writeFileSync(widthDestination, 'preserve width destination');
+var invalidFileWidth = run([inputPath, '--output', widthDestination, '--indent-width', '4garbage']);
+check('CLI invalid width leaves input and existing output unchanged',
+    invalidFileWidth.status === 2 && fs.readFileSync(inputPath, 'utf8') === source
+    && fs.readFileSync(widthDestination, 'utf8') === 'preserve width destination');
+
+var regexJs = 'function f(){return /<div>/.test("<div>");}';
+var autoRegexRun = run(['-', '--stdout'], regexJs);
+var autoRegexExecution = childProcess.spawnSync(process.execPath,
+    ['-e', autoRegexRun.stdout + '\nprocess.stdout.write(String(f()));'], { encoding: 'utf8' });
+check('CLI auto mode formats JavaScript with tag-like regex content',
+    autoRegexRun.status === 0 && autoRegexRun.stdout !== regexJs
+    && autoRegexExecution.status === 0 && autoRegexExecution.stdout === 'true',
+    autoRegexRun.stderr + autoRegexExecution.stderr);
+
 var invalidJs = 'function f() {\n  if (ready) {';
 var invalidJsRun = run(['-', '--stdout', '--language', 'js'], invalidJs);
 check('CLI preserves unparseable JavaScript', invalidJsRun.status === 0 && invalidJsRun.stdout === invalidJs);

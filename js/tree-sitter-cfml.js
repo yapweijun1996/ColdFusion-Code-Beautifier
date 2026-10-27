@@ -479,52 +479,15 @@
 		return _cfsPromise;
 	}
 
-	/* Cheap pre-check: is there a multi-line inline-CF-tag block whose
-	 * continuation lines look under-indented relative to the opener? Used to
-	 * decide whether the 2.6 MB grammar is worth fetching at all. */
-	function hasFlatInlineTagBlock(code) {
-		var lines = String(code || '').split('\n');
-		for (var i = 0; i < lines.length; i++) {
-			var t = lines[i].trim();
-			if (!/^<(cfset|cfparam)\b/i.test(t)) continue;
-			if (/>\s*$/.test(t)) continue;                 // single-line tag
-			// Opener has no `>`; look at the next non-blank line's indentation.
-			for (var j = i + 1; j < lines.length; j++) {
-				if (lines[j].trim() === '') continue;
-				var openerIndent = (lines[i].match(/^[ \t]*/) || [''])[0].length;
-				var contIndent = (lines[j].match(/^[ \t]*/) || [''])[0].length;
-				if (contIndent <= openerIndent) return true;  // flat / under-indented
-				break;
-			}
-		}
-		return false;
+	/* Conservative lazy-load gates: the post-pass can change blocks even when
+	 * the input is already indented or an opener ends in a comma. Look for
+	 * supported tags rather than trying to predict the parser's result. */
+	function hasSemanticCFMLCandidate(code) {
+		return /<(?:cfset|cfparam)\b/i.test(String(code || ''));
 	}
 
-	/* Cheap pre-check for the cfscript path: is there a <cfscript> block whose
-	 * body has a line ending in `(` followed by a non-more-indented line (a flat
-	 * multi-line nested call)? Gates the 2.1 MB cfscript grammar fetch. */
-	function hasFlatCfscriptBlock(code) {
-		var lines = String(code || '').split('\n');
-		var inScript = false;
-		for (var i = 0; i < lines.length; i++) {
-			var t = lines[i].trim();
-			if (!inScript) {
-				if (/^<cfscript\b/i.test(t) && !/<\/cfscript>/i.test(t)) inScript = true;
-				continue;
-			}
-			if (/<\/cfscript>/i.test(t)) { inScript = false; continue; }
-			// Inside cfscript body: a line ending in `(` that opens a call.
-			if (/\(\s*$/.test(lines[i])) {
-				for (var j = i + 1; j < lines.length; j++) {
-					if (lines[j].trim() === '') continue;
-					var openIndent = (lines[i].match(/^[ \t]*/) || [''])[0].length;
-					var contIndent = (lines[j].match(/^[ \t]*/) || [''])[0].length;
-					if (contIndent <= openIndent) return true;
-					break;
-				}
-			}
-		}
-		return false;
+	function hasSemanticCFScriptCandidate(code) {
+		return /<cfscript\b/i.test(String(code || ''));
 	}
 
 	// ── Exports ────────────────────────────────────────────────────────────────
@@ -538,8 +501,8 @@
 		ensureTreeSitterCFScript: ensureTreeSitterCFScript,
 		isTreeSitterCFScriptLoaded: isTreeSitterCFScriptLoaded,
 		getCfsParser: getCfsParser,
-		hasFlatInlineTagBlock: hasFlatInlineTagBlock,
-		hasFlatCfscriptBlock: hasFlatCfscriptBlock
+		hasSemanticCFMLCandidate: hasSemanticCFMLCandidate,
+		hasSemanticCFScriptCandidate: hasSemanticCFScriptCandidate
 	};
 
 	// Browser globals (classic <script> usage).
@@ -552,8 +515,8 @@
 	global.ensureTreeSitterCFScript = ensureTreeSitterCFScript;
 	global.isTreeSitterCFScriptLoaded = isTreeSitterCFScriptLoaded;
 	global.getCfsParser = getCfsParser;
-	global.hasFlatInlineTagBlock = hasFlatInlineTagBlock;
-	global.hasFlatCfscriptBlock = hasFlatCfscriptBlock;
+	global.hasSemanticCFMLCandidate = hasSemanticCFMLCandidate;
+	global.hasSemanticCFScriptCandidate = hasSemanticCFScriptCandidate;
 
 	// Node/CommonJS (test harness).
 	if (typeof module !== 'undefined' && module.exports) {

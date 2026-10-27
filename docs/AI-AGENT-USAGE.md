@@ -125,6 +125,10 @@ coldfusion-code-beautifier source.cfm --pro-sql --dialect postgresql --stdout
 coldfusion-code-beautifier source.cfm --normalize-indent --indent-width 4 --stdout
 ```
 
+`--indent-width` accepts exactly `2`, `4`, or `8` and enables normalization.
+Omit it with `--normalize-indent` to detect the width automatically; invalid
+explicit values exit with an error before writing output.
+
 The default pipeline uses Auto language detection, Deep SQL/CSS/JS, and
 continuation-alignment preservation. Disable stages with `--no-deep-sql`,
 `--no-deep-css`, `--no-deep-js`, or `--no-preserve-continuation-alignment`.

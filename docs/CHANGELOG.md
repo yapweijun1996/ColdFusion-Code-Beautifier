@@ -9,12 +9,18 @@
 - Preserve embedded SQL literal/comment bytes, reject unsafe marker restoration per query, and validate emitted JavaScript after indentation. The built-in SQL formatter preserves numeric/parameter tokens and retains a dialect-ambiguous quoted suffix rather than guessing its interpretation.
 - Create default CLI output exclusively; explicit output cannot alias the input. Reject truncated BOM-marked UTF-16 with an odd byte count. Added focused literal, SQL and filesystem regression suites.
 - Safe Mode skips standalone SQL/JS formatting and disables Semantic Indent as well as deep formatting. Cancel pending formatting before output, copy or clear when captured formatting or output settings change; retain a user-visible cancellation message. SQL fallback diagnostics no longer log source text or parser exception messages.
+- Auto language detection recognizes regex literals after expression-leading keywords and uses the JavaScript parser for ambiguous slash contexts; tested mixed CFML/HTML samples remain on the outer route.
+- Keep HTML text punctuation from hiding later embedded JS, SQL or CSS blocks; preserve tested tag attributes, comments, CFML interpolation and raw-text boundaries during discovery.
+- Load the relevant Semantic Indent grammar for supported tag candidates, rather than only flat-looking input, so tested cold and warm parser states produce the same output.
+- Keep caret and selection positions on their original lines when outdenting, and include an initial selected empty line when indenting.
+- Reject invalid explicit `--indent-width` values instead of accepting numeric prefixes or the internal auto-width sentinel.
 
 ### PWA user-controlled updates
 
 - Replaced automatic update reloads with a persistent `Update now` action toast when a new service worker is waiting.
 - Update consent saves the current input in `sessionStorage` before `SKIP_WAITING`; the draft is restored once after reload. Updates accepted in another tab offer a safe `Reload now` action instead of forcing a reload.
 - Extended `js/toast.js` with keyboard-accessible action notifications, added automatic service-worker/page version stamping from the source commit, displays the deployed version in the footer, and shows old/new versions in update prompts.
+- Keep HTTP error responses visible online without replacing a cached HTML page; skip previously cached errors during offline fallback and track successful cache writes through the fetch event lifetime.
 
 ### Documentation and refactor planning
 

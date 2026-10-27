@@ -135,5 +135,34 @@ assert.ok(normal.includes('\n\t<cfset y=1>'), 'ordinary CFML indentation remains
 	await context.beautifyCodes();
 	assert.notStrictEqual(ids.output.value, safeOutput, 'real Semantic Indent resumes after Safe Mode is disabled');
 	assert.ok(ids.output.value.includes("\n\t\tfAy(Tlt('Analysis')"), 'real Semantic Indent indents the nested call');
+	let cfLoaded = false;
+	let csLoaded = false;
+	context.hasSemanticCFMLCandidate = semantic.hasSemanticCFMLCandidate;
+	context.hasSemanticCFScriptCandidate = semantic.hasSemanticCFScriptCandidate;
+	context.isTreeSitterCFMLLoaded = () => cfLoaded;
+	context.getCfmlParser = () => cf;
+	context.ensureTreeSitterCFML = () => { cfLoaded = true; return Promise.resolve(); };
+	context.isTreeSitterCFScriptLoaded = () => csLoaded;
+	context.getCfsParser = () => cs;
+	context.ensureTreeSitterCFScript = () => { csLoaded = true; return Promise.resolve(); };
+	for (const source of [
+		'<cfscript>\nresult = outer(inner(1,\ninner(2,\ninner(3))));\n</cfscript>',
+		'<cfscript>\nresult = outer(inner(\n    inner(2,\n      inner(3))));\n</cfscript>',
+		semanticInput,
+		semanticInput.replace(/\nfAy\(/g, '\n    fAy(')
+	]) {
+		cfLoaded = false;
+		csLoaded = false;
+		ids.input.value = source;
+		await context.beautifyCodes();
+		const cold = ids.output.value;
+		await context.beautifyCodes();
+		assert.strictEqual(ids.output.value, cold, 'cold and warm semantic output must match');
+		if (source.startsWith('<cfset')) {
+			assert.ok(cold.includes("\n\t\tfAy(Tlt('Analysis')"), 'cold CFML semantic pass applies');
+		} else {
+			assert.match(cold, /\n\t{2,}inner\(2,/, 'cold CFScript semantic pass applies');
+		}
+	}
 	console.log('PASS mixed literal safety');
 })().catch(error => { console.error(error); process.exitCode = 1; });

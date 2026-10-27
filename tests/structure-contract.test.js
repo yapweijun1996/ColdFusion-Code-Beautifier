@@ -265,6 +265,38 @@ function assertNoInternalSentinels(name, code) {
 	assert.ok(/function f\(\)\{\n\s+return 1;/.test(decrementOutput),
 		'JavaScript decrement must not hide the next script region');
 	pass('postfix decrement does not become a SQL line comment');
+	var realScript = '<script>\nfunction f(){return 1;}\n</script>';
+	[
+		"<p>Don't</p>\n",
+		'<p>Say "hello and visit https://example.test/path</p>\n',
+		'<div title="<script>fake()</script>">Don\'t</div>\n',
+		'<textarea>Don\'t <script>fake()</script></textarea>\n',
+		'<cfset text = "<script>fake()</script>">\n',
+		'<cfscript>\ntext = "<script>fake()</script>";\n</cfscript>\n',
+		'<cfoutput>#"<script>fake()</script>"#</cfoutput>\n',
+		'<!--- <script>fake()</script> --->\n'
+	].forEach(function(prefix) {
+		var result = format(prefix + realScript, 'cfml', { deepJs: true });
+		assert.ok(/function f\(\)\{\n\s+return 1;/.test(result),
+			'real script after text or opaque content is formatted: ' + prefix);
+		assert.ok(result.indexOf('fake()') === -1 || result.indexOf('<script>fake()</script>') !== -1,
+			'tag-looking literal content remains intact: ' + prefix);
+	});
+	var afterText = format("<p>Don't</p>\n<cfquery name=\"q\">select a,b from t</cfquery>\n" +
+		'<style>.x{color:red;}</style>', 'cfml', { deepSql: true, deepCss: true });
+	assert.ok(/\bSELECT\b/.test(afterText), 'text apostrophe must not hide a query');
+	assert.ok(/color:\s*red/.test(afterText), 'text apostrophe must not hide a style');
+	var unsafeFormatter = harness.context.formatBraceCodeWithCFML;
+	try {
+		harness.context.formatBraceCodeWithCFML = function() { return 'function f(){return 2;}'; };
+		var unsafe = format("<p>Don't</p>\n" + realScript, 'cfml', { deepJs: true });
+		assert.ok(unsafe.indexOf('function f(){return 1;}') !== -1,
+			'unsafe JS after HTML text must retain the original body');
+		assert.ok(unsafe.indexOf('return 2;') === -1, 'unsafe JS candidate must not be emitted');
+	} finally {
+		harness.context.formatBraceCodeWithCFML = unsafeFormatter;
+	}
+	pass('HTML text cannot hide embedded blocks or bypass JS verification');
 })();
 
 /* -------------------------------------------------------------------------
@@ -666,5 +698,35 @@ assert.strictEqual(harness.context.detectLanguage("var html = '<div>x</div>';"),
 pass('auto route ignores HTML-looking text inside JS strings');
 assert.strictEqual(harness.context.detectLanguage('<cfif x>run()</cfif>'), 'cfml');
 pass('auto route treats real CFML tags as authoritative');
+
+(function autoRegexRouting() {
+	var source = 'function f(){return /<div>/.test("<div>");}';
+	var output = format(source, 'auto');
+	assert.strictEqual(harness.context.detectLanguage(source), 'js');
+	assert.notStrictEqual(output, source, 'auto mode formats the standalone JS');
+	assert.strictEqual(vm.runInNewContext(output + '\nf();'), true, 'formatted regex retains its behavior');
+
+	[
+		'function f(){return /* note */ /[<]div[>]/.test("<div>");}',
+		'function f(){throw /<div>/;}',
+		'function* f(){yield /<div>/;}',
+		'function f(x){switch(x){case /<div>/.source:return true;}}',
+		'function f(x){if(x) /<div>/.test(x); return x;}',
+		'function f(){return /<div>/' // Incomplete editor input still uses the lexical route.
+	].forEach(function(input) {
+		assert.strictEqual(harness.context.detectLanguage(input), 'js', input);
+	});
+	assert.strictEqual(harness.context.detectLanguage(
+		'function f(){return /<div>/;}\n<cfif ok>run()</cfif>'), 'cfml');
+	assert.strictEqual(harness.context.detectLanguage(
+		'var n = obj./* note */return / denominator; <cfset x=1> / 2;'), 'cfml');
+	assert.strictEqual(harness.context.detectLanguage(
+		'function f(x){if(x) /<div>/.test(x);}\n<div>real markup</div>'), 'cfml');
+
+	harness.elements.safe_mode = { checked: true };
+	assert.strictEqual(format(source, 'auto'), source, 'Safe Mode preserves recognized standalone JS');
+	delete harness.elements.safe_mode;
+	pass('auto routing distinguishes JS regexes from real mixed-language tags');
+})();
 
 console.log('All structure contract tests passed.');

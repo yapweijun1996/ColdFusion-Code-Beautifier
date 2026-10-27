@@ -108,14 +108,23 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (isHTMLRequest(request)) {
+    const network = fetch(request);
+    // Keep the last usable page; HTTP errors are returned online but never
+    // replace it. Track the write so it can finish after the response is sent.
+    event.waitUntil(network.then((response) => {
+      if (response && response.status === 200 && response.type === 'basic') {
+        const copy = response.clone();
+        return caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+      }
+    }).catch(() => {}));
     event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-          return response;
-        })
-        .catch(() => caches.match(request).then((c) => c || caches.match('./index.html')))
+      network.catch(() => caches.match(request).then((cached) => {
+        if (cached && cached.status === 200 && cached.type === 'basic') return cached;
+        return caches.match('./index.html').then((fallback) =>
+          fallback && fallback.status === 200 && fallback.type === 'basic'
+            ? fallback : Response.error()
+        );
+      }))
     );
     return;
   }

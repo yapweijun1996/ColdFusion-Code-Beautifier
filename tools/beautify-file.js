@@ -114,7 +114,11 @@ function parseArgs(argv) {
         } else if (arg === '--normalize-indent') {
             opts.normalizeIndent = true;
         } else if (arg === '--indent-width') {
-            opts.normalizeTabWidth = parseInt(nextArg(argv, i, arg), 10);
+            var width = nextArg(argv, i, arg);
+            if (width !== '2' && width !== '4' && width !== '8') {
+                fail('--indent-width must be 2, 4, or 8.', 2);
+            }
+            opts.normalizeTabWidth = Number(width);
             opts.normalizeIndent = true;
             i++;
         } else if (arg === '--pro-sql') {
@@ -133,9 +137,6 @@ function parseArgs(argv) {
     if (opts.input === null) fail('An input file or - is required.\nRun with --help for usage.', 2);
     if (['auto', 'cfml', 'sql', 'js'].indexOf(opts.language) === -1) {
         fail('Unsupported --language: ' + opts.language, 2);
-    }
-    if (![0, 2, 4, 8].includes(opts.normalizeTabWidth)) {
-        fail('--indent-width must be 2, 4, or 8.', 2);
     }
     if (opts.stdout && opts.output) fail('--stdout and --output cannot be used together.', 2);
     if (opts.input === '-' && opts.output) {

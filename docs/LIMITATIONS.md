@@ -58,9 +58,8 @@ Implications:
 
 ## Semantic Indent (tree-sitter, opt-in, experimental)
 
-Semantic Indent re-indents **flat, zero-indent** multi-line nested function-call
-chains by their real call depth — the case the line-scanner cannot fix because
-there is no original indentation to preserve. It runs as a post-pass over the
+Semantic Indent re-indents multi-line nested function-call chains by their real
+call depth, including flat, zero-indent cases. It runs as a post-pass over the
 beautifier output, parsing each candidate block with a vendored tree-sitter
 grammar. Boundaries:
 
@@ -96,10 +95,10 @@ grammar. Boundaries:
 - **Close-paren lines** align to the level they return to (the opener indent of
   the shallowest call ending on the line). A mixed `),fAy(` line is treated as a
   close (first non-ws char wins) — a documented edge, not optimized for.
-- **Lazy-loaded, fail-safe.** Each grammar is fetched only when a matching flat
-  block is present; if the fetch or parse fails, the post-pass is skipped and the
-  line-scanner output stands. The feature is OFF by default and is a
-  whitespace-only transform (content preserved).
+- **Lazy-loaded, fail-safe.** A grammar is fetched when the input contains a
+  supported tag candidate, even if that tag-like text is in a comment or string.
+  If loading or parsing fails, the applicable post-pass is skipped and the
+  line-scanner output stands. The feature is OFF by default; review output.
 
 ## CSS (Deep CSS)
 

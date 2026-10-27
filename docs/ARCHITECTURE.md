@@ -89,6 +89,12 @@ script are mapped to ordered comment markers for validation and checked for an
 exact round trip; the masked program must still parse. This does not prove every
 runtime branch of dynamically generated CFML/JavaScript is valid.
 
+Embedded-block discovery treats quotes and slashes in ordinary HTML text as
+text, while skipping quoted tag attributes, markup comments, CFML
+interpolations and preceding raw-code regions. Candidates in `textarea` and
+`title` content are also skipped. Script discovery is shared by formatting
+and the original/output verification mapping.
+
 When parsing, mapping, or equivalence verification fails, the formatter keeps the
 original JavaScript region and reports the fallback. If script regions cannot be
 reliably paired, it retains the original document. Multiline template content is
@@ -159,12 +165,13 @@ Indent algorithm (`computeCallIndentByLine` / `computeCfscriptIndent`):
   blocks fall back to the line-scanner. cfscript additionally **skips** any block
   containing a `statement_block` (if/for/while/function/component braces).
 
-Dual lazy-loader: one shared runtime init, then each grammar fetched
-independently and only when a matching flat block is present
-(`hasFlatInlineTagBlock` / `hasFlatCfscriptBlock`). The grammars are **not**
-precached by the service worker (they are large and opt-in); they fall to the
-stale-while-revalidate cache after first use. The whole feature is gated by a
-default-OFF checkbox and degrades to the line-scanner output on any failure.
+Dual lazy-loader: one shared runtime init, then each grammar is fetched
+independently when the input contains its supported tag candidate
+(`hasSemanticCFMLCandidate` / `hasSemanticCFScriptCandidate`). The conservative
+check can also match tags inside comments or strings; it avoids depending on
+whether a grammar was loaded by an earlier request. The grammars are **not**
+precached by the service worker and are fetched on demand. The feature is
+default-OFF and degrades to the line-scanner output on loading failure.
 
 ## Editor UI layer
 
@@ -174,6 +181,11 @@ Beautify busy indicator. It calls `beautifyCodes()` but does not implement any
 formatting rules. The formatter returns a resolved Promise for the synchronous
 path and a real Promise when Pro SQL or Tree-sitter must load, allowing the UI
 to disable duplicate actions during the wait.
+
+Line indentation includes selected empty lines; a selection ending at the next
+line's start does not edit that next line. Outdent maps positions within removed
+indentation to the affected line's new start instead of moving them backward
+into a previous line.
 
 The formatter captures the input and formatting and output controls at request
 start. If the input or any captured option changes while a lazy resource is
@@ -203,6 +215,12 @@ js/pwa.js              ← registers ./sw.js and restores one-shot input drafts
                          an update accepted in another tab offers "Reload now"
                          calls reg.update() hourly + on visibilitychange
 ```
+
+HTML requests return network responses, including HTTP errors, while caching
+only same-origin basic HTTP 200 responses. On network failure the worker uses
+the cached request or `index.html` only if it is a usable HTTP 200 response;
+previously cached errors are not served. The cache write extends the fetch
+event lifetime without making a storage failure break an online response.
 
 Release flow: edit code → push `main` → GitHub Actions runs `npm test`, stamps `CACHE_VERSION` from the commit SHA with `tools/inject-build-version.js`, then deploys via `actions/deploy-pages@v4`. For another static host, run the same stamping tool before publishing. The browser's service-worker update check compares the stamped `sw.js`, so every source commit produces a new waiting worker.
 
@@ -266,9 +284,9 @@ later pass.
    JS block/line comments remain in the body and match the JS prefix directly,
    allowing `protectBraceCodeText` to restore them with host-context-aware
    indentation.
-2. The full source has NO real `<TAG>` chars outside string literals
-   AND outside comments AND outside regex literals. `hasTagsOutsideStrings`
-   walks with JS lexer state across **six** opaque regions:
+2. The source has no apparent `<TAG>` outside strings, comments and regex
+   literals, or the post-banner body parses successfully as standalone
+   JavaScript. `hasTagsOutsideStrings` walks six opaque regions:
    - Strings with `\\`/`\'`/`\"` escapes
    - Template literals with `${…}`
    - `//` line comments
@@ -282,8 +300,11 @@ later pass.
      subsequent `<TAG>` chars in real JS strings get flagged as real
      tags → file mis-routed to cfml → content corruption.
 
-   Only `<TAG>` (alpha or `/` after `<`) outside all six contexts is
-   a real tag.
+   The scanner treats `<TAG>` (alpha or `/` after `<`) outside these regions
+   as an apparent tag. It recognizes expression-leading keywords such as
+   `return`; when slash context remains ambiguous (e.g. after `if (...)`),
+   the JS parser may confirm the entire body as standalone JavaScript.
+   A parse failure retains the conservative CFML/HTML route.
 
 The string-aware check is what makes JS fragments like
 ```js
