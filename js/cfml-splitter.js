@@ -332,3 +332,153 @@ function splitAdjacentCFMLTags(code) {
 
 	return out;
 }
+
+/* Keep literal HTML text, including whitespace between tags, as authored.
+ * CSS can change any element's display mode, so a fixed list of inline tags
+ * cannot establish that inserted whitespace is harmless. Raw code blocks are
+ * matched as units to leave their dedicated formatters in control. */
+function scanRenderedTextBoundaries(source) {
+	var markers = [];
+	var text = [];
+	var hasRenderedMarkup = false;
+	var cursor = 0;
+	var scan = 0;
+	while (scan < source.length) {
+		var start = source.indexOf('<', scan);
+		if (start === -1) break;
+		var hash = source.indexOf('#', scan);
+		if (hash !== -1 && hash < start) {
+			if (source[hash + 1] === '#') { scan = hash + 2; continue; }
+			var quote = null;
+			var expressionEnd = -1;
+			for (var h = hash + 1; h < source.length; h++) {
+				var character = source[h];
+				if (quote) {
+					if (character === quote) {
+						if (source[h + 1] === quote) h++;
+						else quote = null;
+					}
+				} else if (character === '"' || character === "'") {
+					quote = character;
+				} else if (character === '#') {
+					if (source[h + 1] === '#') h++;
+					else { expressionEnd = h; break; }
+				}
+			}
+			if (expressionEnd === -1) return null;
+			scan = expressionEnd + 1;
+			continue;
+		}
+		var rest = source.slice(start);
+		var end;
+		var key;
+		var match;
+		if (rest.slice(0, 4) === '<!--') {
+			end = findMarkupCommentEnd(source, start);
+			if (end === -1) return null;
+			key = rest.slice(0, 5) === '<!---' ? 'cf-comment' : 'html-comment';
+		} else if (/^<!doctype\b/i.test(rest)) {
+			end = source.indexOf('>', start + 2);
+			if (end === -1) return null;
+			end++;
+			key = 'doctype';
+		} else {
+			match = rest.match(/^<(\/?)([a-z][\w:-]*)(?=[\s/>])/i);
+			if (!match) { scan = start + 1; continue; }
+			var name = match[2].toLowerCase();
+			var tagEnd = findCFMLTagClose(rest);
+			if (tagEnd === -1) return null;
+			end = start + tagEnd + 1;
+			key = (match[1] ? '/' : '') + name;
+			if ((name.slice(0, 2) !== 'cf' && name !== 'script' && name !== 'style')
+					|| /^(?:cfoutput|cfinclude|cfmodule)$/.test(name)) hasRenderedMarkup = true;
+			if (!match[1] && /^(?:script|style|cfquery|cfscript|cfsilent)$/.test(name)
+					&& !/\/\s*>$/.test(source.slice(start, end))) {
+				var close = findClosingTagOutsideText(source, name, end);
+				if (!close) return null;
+				end = close.end;
+				key = 'raw:' + name;
+			}
+		}
+		text.push(source.slice(cursor, start));
+		markers.push({ key: key, start: start, end: end });
+		cursor = end;
+		scan = end;
+		if (match && !match[1] && match[2].toLowerCase() === 'textarea') {
+			var closeMatch = /<\/textarea\s*>/ig;
+			closeMatch.lastIndex = scan;
+			var textareaClose = closeMatch.exec(source);
+			if (!textareaClose) return null;
+			text.push(source.slice(cursor, textareaClose.index));
+			markers.push({ key: '/textarea', start: textareaClose.index, end: closeMatch.lastIndex });
+			cursor = closeMatch.lastIndex;
+			scan = cursor;
+		}
+		match = null;
+	}
+	text.push(source.slice(cursor));
+	if (markers.length && text.some(function(part) { return /\S/.test(part); })) {
+		hasRenderedMarkup = true;
+	}
+	return { markers: markers, text: text, hasRenderedMarkup: hasRenderedMarkup };
+}
+
+function preserveOriginalHTML(source) {
+	if (typeof console !== 'undefined' && console.warn) {
+		console.warn('[beautifier] HTML text or attributes could not be safely reconciled; preserving original document.');
+	}
+	return source;
+}
+
+function preserveRenderedHTMLWhitespace(original, formatted) {
+	var source = original.replace(/\r\n?/g, '\n');
+	var candidate = formatted.replace(/\r\n?/g, '\n');
+	var before = scanRenderedTextBoundaries(source);
+	if (!before) {
+		// Invalid CFML-only input remains the responsibility of the CFML formatter.
+		return /<style\b|<\/?(?!cf|script\b|style\b)[a-z][\w:-]*(?=[\s/>])/i.test(source) ? preserveOriginalHTML(source) : formatted;
+	}
+	var protectCSS = before.markers.some(function(marker) { return marker.key === 'raw:style'; });
+	if (!before.hasRenderedMarkup && !protectCSS) return formatted;
+	var after = scanRenderedTextBoundaries(candidate);
+	if (!after || before.markers.length !== after.markers.length) return preserveOriginalHTML(source);
+	var result = '';
+	for (var i = 0; i < before.markers.length; i++) {
+		if (before.markers[i].key !== after.markers[i].key) return preserveOriginalHTML(source);
+		var key = before.markers[i].key;
+		var originalMarker = source.slice(before.markers[i].start, before.markers[i].end);
+		var formattedMarker = candidate.slice(after.markers[i].start, after.markers[i].end);
+		if (key !== 'cf-comment' && key !== 'html-comment' && key !== 'doctype') {
+			var originalTag = originalMarker;
+			var formattedTag = formattedMarker;
+			if (key.slice(0, 4) === 'raw:') {
+				originalTag = originalTag.slice(0, findCFMLTagClose(originalTag) + 1);
+				formattedTag = formattedTag.slice(0, findCFMLTagClose(formattedTag) + 1);
+			}
+			var originalValues = originalTag.match(/"[^"]*"|'[^']*'/g) || [];
+			var formattedValues = formattedTag.match(/"[^"]*"|'[^']*'/g) || [];
+			if (originalValues.length !== formattedValues.length) return preserveOriginalHTML(source);
+			for (var j = 0; j < originalValues.length; j++) {
+				if (originalValues[j] !== formattedValues[j]) return preserveOriginalHTML(source);
+			}
+		}
+		if (key === 'raw:style' && typeof collectCSSProtectedSegments === 'function'
+				&& typeof sameCSSProtectedSegments === 'function') {
+			var originalOpenEnd = findCFMLTagClose(originalMarker) + 1;
+			var formattedOpenEnd = findCFMLTagClose(formattedMarker) + 1;
+			var originalClose = originalMarker.match(/<\/style\s*>$/i);
+			var formattedClose = formattedMarker.match(/<\/style\s*>$/i);
+			if (!originalClose || !formattedClose) return preserveOriginalHTML(source);
+			var originalCSS = originalMarker.slice(originalOpenEnd, originalClose.index);
+			var formattedCSS = formattedMarker.slice(formattedOpenEnd, formattedClose.index);
+			if (!sameCSSProtectedSegments(collectCSSProtectedSegments(originalCSS), collectCSSProtectedSegments(formattedCSS))) {
+				formattedMarker = originalMarker;
+				if (typeof console !== 'undefined' && console.warn) {
+					console.warn('[beautifier] CSS content could not be safely reconciled; preserving original style block.');
+				}
+			}
+		}
+		result += (before.hasRenderedMarkup ? before.text[i] : after.text[i]) + formattedMarker;
+	}
+	return result + (before.hasRenderedMarkup ? before.text[before.text.length - 1] : after.text[after.text.length - 1]);
+}

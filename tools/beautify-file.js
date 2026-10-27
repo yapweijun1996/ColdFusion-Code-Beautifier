@@ -11,8 +11,8 @@
  *   node tools/beautify-file.js input.cfm --output result_beutifier.cfm
  *   node tools/beautify-file.js - --stdout < input.cfm
  *
- * A file input defaults to a sibling *_beutifier.cfm output. Input is never
- * overwritten unless an explicit output path is supplied.
+ * A file input defaults to a new sibling *_beutifier.cfm output. Existing
+ * files require an explicit output path; the input itself is never overwritten.
  */
 
 'use strict';
@@ -41,6 +41,8 @@ var opts = {
     proSql: false
 };
 var inputFormat = { encoding: 'utf8', bom: false };
+var inputIdentity = null;
+var inputFd = null;
 
 function fail(message, code) {
     console.error('Error: ' + message);
@@ -56,7 +58,7 @@ function printHelp() {
         '  -                 Read from stdin; use --stdout to print formatted code.',
         '',
         'Output:',
-        '  --output FILE     Write to an explicit output path.',
+        '  --output FILE     Write to an explicit output path (not the input).',
         '  --stdout          Write formatted code to stdout (never writes a file).',
         '',
         'Formatting:',
@@ -147,12 +149,19 @@ function readInput(inputPath) {
         buffer = fs.readFileSync(0);
     } else {
         try {
-            buffer = fs.readFileSync(inputPath);
+            inputFd = fs.openSync(inputPath, 'r');
+            inputIdentity = fs.fstatSync(inputFd, { bigint: true });
+            buffer = fs.readFileSync(inputFd);
         } catch (err) {
             fail('Cannot read input file ' + inputPath + ': ' + err.message);
         }
     }
-    var decoded = sourceEncoding.decodeSource(buffer);
+    var decoded;
+    try {
+        decoded = sourceEncoding.decodeSource(buffer);
+    } catch (err) {
+        fail('Cannot decode input ' + inputPath + ': ' + err.message);
+    }
     inputFormat = decoded;
     return decoded.text;
 }
@@ -264,7 +273,28 @@ function writeOutput(inputPath, output) {
         fail('Output path must end with _beutifier.cfm: ' + outputPath, 2);
     }
     try {
-        fs.writeFileSync(outputPath, sourceEncoding.encodeSource(output, inputFormat));
+        var bytes = sourceEncoding.encodeSource(output, inputFormat);
+        if (!opts.output) {
+            // Exclusive creation also rejects dangling symlinks and avoids an
+            // existence-check/write race.
+            fs.writeFileSync(outputPath, bytes, { flag: 'wx' });
+        } else {
+            // Open without truncation, then compare the actual opened object
+            // with the input before modifying it (including hard links).
+            var outputFd = fs.openSync(outputPath, fs.constants.O_WRONLY | fs.constants.O_CREAT, 0o666);
+            try {
+                var outputIdentity = fs.fstatSync(outputFd, { bigint: true });
+                if (inputIdentity.dev === outputIdentity.dev
+                    && (inputIdentity.ino === 0n || outputIdentity.ino === 0n
+                        || inputIdentity.ino === outputIdentity.ino)) {
+                    throw new Error('Output must not refer to the input file.');
+                }
+                fs.ftruncateSync(outputFd, 0);
+                fs.writeFileSync(outputFd, bytes);
+            } finally {
+                fs.closeSync(outputFd);
+            }
+        }
     } catch (err) {
         fail('Cannot write output file ' + outputPath + ': ' + err.message);
     }

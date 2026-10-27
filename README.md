@@ -16,6 +16,7 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. T
   - `<script>` body → JS formatter with protected strings, comments, regex literals, template literals (`${…}` nesting), and `(…)` groups.
   - `<style>` body → CSS formatter.
 - **Language selector** with `Auto` / `CFML / HTML` / `SQL` / `JavaScript` modes; auto-detect routes SQL-looking input to the SQL formatter and tag-free JS-looking input through `formatBraceCode` (template literals, regex, and parens token-protected).
+- **Safe Mode** disables Deep SQL/CSS/JS, Pro SQL and Semantic Indent, restoring their previous selections when switched off in the same page session. Recognized standalone SQL and JavaScript are returned unchanged; CFML/HTML still receives outer formatting, so review its output.
 - **JavaScript safety check** compares the parsed syntax, tokens, and comment positions before accepting formatting. Unparseable or unsafe JavaScript is kept unchanged and reported. Mixed CFML tags use a checked mapping; this is not proof of every server-generated branch.
 - **Structure-based JavaScript indentation** uses parsed blocks, calls, arrays, objects, computed keys, assignment/arrow continuations and switch cases when supported. Unsupported or mixed-language constructs retain the compatibility formatter and still receive the safety check.
 - **Auto-copy / auto-clear input / auto-clear output** independent toggles. Auto-copy defaults on; both auto-clear options default off so source and result remain visible until explicitly cleared.
@@ -23,6 +24,7 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. T
 - **Fullscreen layout** with side-by-side input / output on desktop, stacked on mobile.
 - **Pro SQL** (opt-in) — vendored [sql-formatter](https://github.com/sql-formatter-org/sql-formatter) (MIT) for 16 dialects: MySQL, MariaDB, PostgreSQL, SQLite, T-SQL, PL/SQL, DB2, Redshift, Snowflake, BigQuery, Hive, Spark, Trino, N1QL, SingleStoreDB, Standard. It is runtime-lazy and falls back to the built-in formatter if loading/parsing fails. The current service worker precaches the UMD bundle for offline readiness, so installed PWA users download that asset even when the option remains off.
 - **Normalize Indent** (opt-in) — converts each line's *leading* whitespace from spaces to tabs before formatting (line content is never touched). Auto-detects the file's indent unit (2 / 4 / 8 spaces = 1 tab), or pick the width explicitly from the companion selector. Handles files that mix space-indent and tab-indent lines, including files already run through the beautifier (it recovers the original unit from the tab+space alignment). Checkbox + width persist in `localStorage`.
+- **HTML output safety** — the browser and CLI preserve source text and whitespace between HTML and CFML tags, including preformatted content. As a result, some HTML tag layouts remain as authored. Embedded SQL, CSS and JavaScript still use their selected formatters; ambiguous tag sequences fall back to the original document.
 - **Semantic Indent** (opt-in, experimental) — uses tree-sitter CFML/CFScript parsers to indent **flat, zero-indent** multi-line nested function-call chains by their real call depth — the case the line-scanner cannot fix because there is no original indentation to preserve. Covers nested calls inside `<cfset>`/`<cfparam>` tags and inside control-structure-free `<cfscript>` blocks. Struct literals and SQL strings stay flat; unbalanced / mid-edit blocks fall back to the line-scanner untouched. Each grammar (~2.6 MB CFML, ~2.1 MB CFScript) lazy-loads only when a matching flat block is present. See [docs/LIMITATIONS.md](docs/LIMITATIONS.md#semantic-indent-tree-sitter-opt-in-experimental).
 - **PWA** — installable and offline-capable via service worker. HTML uses network-first and assets use stale-while-revalidate. New releases show an **Update now** prompt with the old/new versions; the current input is saved and restored across the controlled reload. The footer displays the deployed source version. GitHub Pages automatically stamps it from the commit SHA; for another static host, run `node tools/inject-build-version.js` before publishing.
 
@@ -44,7 +46,11 @@ npx coldfusion-code-beautifier path/to/source.cfm
 ```
 
 The GitHub clone remains an offline fallback. Both entry points use the same
-formatter scripts and default to a separate `_beutifier.cfm` output file:
+formatter scripts and default to a separate `_beutifier.cfm` output file.
+
+Default file output fails rather than overwriting an existing destination. An
+explicit `--output` may replace a different file but cannot refer to the input
+or a hard-link alias. Use `--stdout` for previews without writing a file.
 
 ```bash
 node tools/beautify-file.js path/to/source.cfm
@@ -57,7 +63,7 @@ node tools/beautify-file.js - --stdout < path/to/source.cfm
 node tools/beautify-file.js path/to/source.cfm --language cfml --pro-sql --dialect postgresql
 ```
 
-The CLI never uploads source code. It requires only Node.js for the default formatter; `--pro-sql` uses the committed MIT-licensed vendor bundle. File/stdin decoding recognizes UTF-8 (with or without BOM), UTF-16LE BOM, and UTF-16BE BOM, and output preserves the detected encoding/BOM plus routed LF/CRLF style.
+The CLI never uploads source code. It requires only Node.js for the default formatter; `--pro-sql` uses the committed MIT-licensed vendor bundle. File/stdin decoding recognizes UTF-8 (with or without BOM), UTF-16LE BOM, and UTF-16BE BOM, and output preserves the detected encoding/BOM plus routed LF/CRLF style. Truncated BOM-marked UTF-16 with an odd byte count is rejected.
 
 ## Architecture overview
 
@@ -86,6 +92,11 @@ Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 npm test          # runs formatter, structure, UI, CLI, version, and Tree-sitter suites
 # or individually:
 node tests/run-tests.js          # VM-harness formatter suite
+node tests/html-whitespace.test.js # rendered HTML text preservation
+node tests/sql-token-safety.test.js # CFML token placeholder preservation
+node tests/sql-lexical-safety.test.js # SQL numeric, parameter and literal boundaries
+node tests/embedded-literal-safety.test.js # embedded SQL and JavaScript values
+node tests/mixed-literal-safety.test.js # mixed-language literals and Semantic Indent
 node tests/structure-contract.test.js # JS/CFML structural and safety contracts
 node tests/js-structure-planner.test.js # syntax-backed indentation planner
 node tests/ui.test.js            # static HTML + editor interaction suite

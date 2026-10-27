@@ -2,6 +2,14 @@ var SQL_LIST_CLAUSES = ['SELECT', 'GROUP BY', 'ORDER BY', 'VALUES'];
 
 function beautifySQL(sql) {
 	var tokens = tokenizeSQL(sql);
+	if (tokens.unsafeOffset != null) {
+		// Different SQL dialects disagree on where this quoted token ends.
+		// Once their lexical states diverge, the rest cannot be safely formatted.
+		var prefix = sql.slice(0, tokens.unsafeOffset);
+		var trailingSpace = (prefix.match(/\s*$/) || [''])[0];
+		return beautifySQL(prefix.slice(0, prefix.length - trailingSpace.length)) +
+			trailingSpace + sql.slice(tokens.unsafeOffset);
+	}
 	var lines = [];
 	var line = "";
 	var parenIndent = 0;
@@ -260,20 +268,36 @@ function tokenizeSQL(sql) {
 		if (char == "'" || char == '"' || char == '`') {
 			var quote = char;
 			var quoteStart = i;
-			i++;
-			while (i < sql.length) {
-				if (sql[i] == '\\') {
-					i += 2;
-					continue;
-				}
-				if (sql[i] == quote) {
-					if (sql[i + 1] == quote) {
-						i += 2;
-						continue;
+			function quotedEnd(start, backslashEscapes) {
+				var pos = start + 1;
+				while (pos < sql.length) {
+					if (backslashEscapes && sql[pos] == '\\') {
+						pos += Math.min(2, sql.length - pos);
+					} else if (sql[pos] == quote) {
+						if (sql[pos + 1] == quote) {
+							pos += 2;
+						} else {
+							return pos + 1;
+						}
+					} else {
+						pos++;
 					}
-					i++;
-					break;
 				}
+				return pos;
+			}
+			var standardEnd = quotedEnd(i, false);
+			var escapedEnd = quotedEnd(i, true);
+			if (standardEnd != escapedEnd) {
+				// Include an adjacent prefix (e.g. E or N) in the opaque suffix.
+				while (quoteStart > 0 && /[A-Za-z0-9_$@]/.test(sql[quoteStart - 1])) {
+					quoteStart--;
+				}
+				tokens.unsafeOffset = quoteStart;
+				return tokens;
+			}
+			i = standardEnd;
+			// Preserve adjacent identifier and parameter-like suffixes.
+			while (i < sql.length && /[A-Za-z0-9_$@]/.test(sql[i])) {
 				i++;
 			}
 			tokens.push({
@@ -311,7 +335,7 @@ function tokenizeSQL(sql) {
 				i++;
 			}
 			tokens.push({
-				type: 'word',
+				type: sql[i] == "'" || sql[i] == '"' || sql[i] == '`' ? 'prefix' : 'word',
 				value: sql.slice(wordStart, i)
 			});
 			continue;
@@ -319,17 +343,28 @@ function tokenizeSQL(sql) {
 
 		if (/[0-9]/.test(char)) {
 			var numberStart = i;
-			i++;
-			while (i < sql.length && /[0-9.]/.test(sql[i])) {
+			var numberMatch = sql.slice(i).match(/^(?:0[xX][0-9a-fA-F]+|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)/);
+			i += numberMatch[0].length;
+			// Preserve adjacent identifier characters even for dialect-specific tokens.
+			while (i < sql.length && /[A-Za-z0-9_$]/.test(sql[i])) {
 				i++;
 			}
 			tokens.push({
-				type: 'number',
+				type: sql[i] == "'" || sql[i] == '"' || sql[i] == '`' ? 'prefix' : 'number',
 				value: sql.slice(numberStart, i)
 			});
 			continue;
 		}
 
+		if ((char == '@' && /[@A-Za-z0-9_$]/.test(nextChar || '')) ||
+			(char == '$' && /[0-9]/.test(nextChar || ''))) {
+			var parameterStart = i++;
+			while (i < sql.length && /[A-Za-z0-9_$@]/.test(sql[i])) {
+				i++;
+			}
+			tokens.push({ type: sql[i] == "'" || sql[i] == '"' || sql[i] == '`' ? 'prefix' : 'parameter', value: sql.slice(parameterStart, i) });
+			continue;
+		}
 		if ((char == '-' || char == '+') && /[0-9]/.test(nextChar)) {
 			var lastTok = tokens[tokens.length - 1];
 			var unaryKeywords = /^(AND|OR|NOT|BETWEEN|LIKE|IN|IS|THEN|WHEN|ELSE|CASE|AS|RETURNING|SET|VALUES|SELECT|WHERE|HAVING|BY|ON|UNION|INTERSECT|EXCEPT|ALL|ANY|SOME|DISTINCT)$/i;
@@ -340,11 +375,13 @@ function tokenizeSQL(sql) {
 			if (isUnary) {
 				var signedStart = i;
 				i++;
-				while (i < sql.length && /[0-9.]/.test(sql[i])) {
+				var signedMatch = sql.slice(i).match(/^(?:0[xX][0-9a-fA-F]+|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)/);
+				i += signedMatch[0].length;
+				while (i < sql.length && /[A-Za-z0-9_$]/.test(sql[i])) {
 					i++;
 				}
 				tokens.push({
-					type: 'number',
+					type: sql[i] == "'" || sql[i] == '"' || sql[i] == '`' ? 'prefix' : 'number',
 					value: sql.slice(signedStart, i)
 				});
 				continue;
@@ -421,6 +458,9 @@ function needsSpaceBefore(text, token, lastToken, line) {
 		return false;
 	}
 	if (lastToken == null) {
+		return false;
+	}
+	if (lastToken.type == 'prefix') {
 		return false;
 	}
 	if (lastToken.value == '(' || lastToken.value == '.' || lastToken.value == '::' || lastToken.value == '->' || lastToken.value == '->>') {

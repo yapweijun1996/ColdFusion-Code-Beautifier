@@ -175,12 +175,16 @@ formatting rules. The formatter returns a resolved Promise for the synchronous
 path and a real Promise when Pro SQL or Tree-sitter must load, allowing the UI
 to disable duplicate actions during the wait.
 
-The formatter captures the input at request start. If the user edits the input
-while a lazy resource is loading, the stale request is not applied and
-`auto_clear` can only erase the unchanged captured input. This prevents an
-async completion from overwriting or deleting newer user work. Before copy/clear,
-`normalizeOutputLineEndings` restores CRLF when the captured source contains
-CRLF; otherwise routed browser/CLI output uses LF.
+The formatter captures the input and formatting and output controls at request
+start. If the input or any captured option changes while a lazy resource is
+loading, the stale request is cancelled before output, copy or clear. The UI
+reports the cancellation; the user can submit a fresh request. Before copy or
+clear, `normalizeOutputLineEndings` restores CRLF when the captured source
+contains CRLF; otherwise routed browser/CLI output uses LF. In Safe Mode,
+recognized standalone SQL and JavaScript bypass formatting and preserve the
+captured input; CFML/HTML still goes through the outer formatter.
+Pro SQL fallback warnings report the failed stage without printing query text
+or exception messages, which can contain source excerpts.
 
 ## PWA layer
 
@@ -219,10 +223,18 @@ beautifyCodes()                       DOM I/O + preload + stale-request guard
        │    ├─ <cfquery> → token protection + Pro/built-in structural dispatch
        │    ├─ <script>  → formatBraceCodeWithCFML / template-safe passthrough
        │    └─ <style>   → formatCSSCode
-       └─ applySemanticIndentPostPass                  stage 3, optional/loaded
+       ├─ applySemanticIndentPostPass                  stage 3, optional/loaded
+       └─ preserveRenderedHTMLWhitespace               final source-text guard
 ```
 
 The no-preload path performs formatting immediately and returns an already-resolved Promise. When resources are lazy-loaded, the captured input is checked again before output is committed or cleared.
+
+The final guard aligns recognized tag boundaries with the captured source and
+restores the intervening HTML/CFML text verbatim. Script, style, query and
+CFScript bodies remain the responsibility of their own formatters. If the tag
+sequence cannot be aligned, the router retains the original document. This
+protects text whitespace at the cost of keeping some HTML tags on their
+original lines; lower-level formatter helpers do not apply the final guard.
 
 The outer scanner maintains a persistent named CFML/HTML tag hierarchy rather
 than relying on a global opens-minus-closes counter. A matching close returns to

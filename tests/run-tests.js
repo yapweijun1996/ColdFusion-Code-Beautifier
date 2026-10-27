@@ -108,6 +108,16 @@ function runRouter(input, language, deepFormat) {
 	return harness.elements.output.value;
 }
 
+// Test the internal indentation stage where the end-to-end HTML whitespace
+// guard deliberately restores source text. Production behavior is covered by
+// html-whitespace.test.js, including independent embedded SQL formatting.
+function runIndentationStage(input, language, deepFormat) {
+	var harness = makeContext(input, language || 'auto', false, deepFormat == true);
+	harness.context.preserveRenderedHTMLWhitespace = function(original, formatted) { return formatted; };
+	harness.context.beautifyCodes();
+	return harness.elements.output.value;
+}
+
 (function runStructuralTagHierarchyTests() {
 	var structuralHarness = makeContext('', 'cfml');
 	assertEqual(
@@ -117,7 +127,7 @@ function runRouter(input, language, deepFormat) {
 	);
 	assertEqual(
 		'named container close drops every malformed descendant without hardcoded form/root anchors',
-		runRouter(
+		runIndentationStage(
 			'<section>\n<div>\n<table>\n<tr>\n<td>\nvalue\n</section>\n<footer>\nafter\n</footer>',
 			'cfml',
 			false
@@ -126,7 +136,7 @@ function runRouter(input, language, deepFormat) {
 	);
 	assertEqual(
 		'form closure restores outer body indent level for subsequent scripts',
-		runRouter(
+		runIndentationStage(
 			'<html>\n<body>\n<form name="f">\n<div>\n<table>\n<tr>\n<td>\n<input type="text">\n</form>\n<script>\nfunction done() {\nreturn true;\n}\n</script>\n</body>\n</html>',
 			'cfml',
 			false
@@ -151,17 +161,17 @@ function runRouter(input, language, deepFormat) {
 	assertEqual('packed document closers restore final stack depth', packedClose.nextLevel, 0);
 	assertEqual(
 		'unmatched close is indentation-neutral',
-		runRouter('<main>\ntext\n</ghost>\nafter\n</main>', 'cfml', false),
+		runIndentationStage('<main>\ntext\n</ghost>\nafter\n</main>', 'cfml', false),
 		'<main>\n\ttext\n\t</ghost>\n\tafter\n</main>'
 	);
 	assertEqual(
 		'optional table cells and rows implicitly close previous siblings',
-		runRouter('<table>\n<tr>\n<td>one\n<td>two\n<tr>\n<td>three\n</table>', 'cfml', false),
+		runIndentationStage('<table>\n<tr>\n<td>one\n<td>two\n<tr>\n<td>three\n</table>', 'cfml', false),
 		'<table>\n\t<tr>\n\t\t<td>one\n\t\t<td>two\n\t<tr>\n\t\t<td>three\n</table>'
 	);
 	assertEqual(
 		'braces in SQL text do not alter structural tag depth',
-		runRouter(
+		runIndentationStage(
 			'<section>\n<cfquery name="q">\nSELECT \'{\' AS literal_value\nFROM t\n</cfquery>\nafter\n</section>',
 			'cfml',
 			false
@@ -214,7 +224,7 @@ function runRouter(input, language, deepFormat) {
 	);
 	assertEqual(
 		'commented CFML code follows nested structural indentation',
-		runRouter(
+		runIndentationStage(
 			'<cfif active>\n    <!--- <tr>\n        <td>\n            <!--- inner --->\n            <cfif dead>\n                dead\n            </cfif>\n        </td>\n    </tr> --->\n    <span>live</span>\n</cfif>',
 			'cfml',
 			false
@@ -223,7 +233,7 @@ function runRouter(input, language, deepFormat) {
 	);
 	assertEqual(
 		'embedded query cfif is tracked before an own-line cfelse',
-		runRouter(
+		runIndentationStage(
 			'<section>\n<cfquery name="q">\nSELECT x\nAND <cfif flag>\nx = 1\n<cfelse>\nx = 2\n</cfif>\nORDER BY x\n</cfquery>\nafter\n</section>',
 			'cfml',
 			false
@@ -557,7 +567,7 @@ assertEqual(
 
 assertEqual(
 	'auto-split: cfif open + cfinclude + cfif close on one line — split + close on own line',
-	runRouter('<cfif x><cfinclude template="foo.cfm"></cfif>', 'cfml', false),
+	runIndentationStage('<cfif x><cfinclude template="foo.cfm"></cfif>', 'cfml', false),
 	'<cfif x>\n\t<cfinclude template="foo.cfm">\n</cfif>'
 );
 
@@ -598,7 +608,7 @@ assertEqual(
 
 assertEqual(
 	'auto-split: cfparam + cfinclude on one line',
-	runRouter('<cfparam name="x" default=""><cfinclude template="bar.cfm">', 'cfml', false),
+	runIndentationStage('<cfparam name="x" default=""><cfinclude template="bar.cfm">', 'cfml', false),
 	'<cfparam name="x" default="">\n<cfinclude template="bar.cfm">'
 );
 
@@ -610,31 +620,31 @@ assertEqual(
 
 assertEqual(
 	'auto-split: <script> mid-line gets pulled onto own line + JS body re-indents to script depth +1; stray </td> peels (Rule D)',
-	runRouter("<td>foo&nbsp;<script>doIt();</script>bar</td>", 'cfml', false),
+	runIndentationStage("<td>foo&nbsp;<script>doIt();</script>bar</td>", 'cfml', false),
 	'<td>foo&nbsp;\n\t<script>doIt();</script>bar\n</td>'
 );
 
 assertEqual(
 	'auto-split: <script> with multi-line JS body — block opens own depth, body indents +1, </script> aligns with open',
-	runRouter("<td>...&nbsp;<script>\nvar a = 1;\n</script>\n<cfif x>Only</cfif>.</td>", 'cfml', false),
+	runIndentationStage("<td>...&nbsp;<script>\nvar a = 1;\n</script>\n<cfif x>Only</cfif>.</td>", 'cfml', false),
 	'<td>...&nbsp;\n\t<script>\n\t\tvar a = 1;\n\t</script>\n\t<cfif x>Only</cfif>.\n</td>'
 );
 
 assertEqual(
 	'auto-split: <tr><td>x</td><td>y</td></tr> — opens get split at `>` boundary, structural closes (</tr>) align with opens, <td>x</td> stays inline',
-	runRouter('<tr><td>foo</td><td>bar</td></tr>', 'cfml', false),
+	runIndentationStage('<tr><td>foo</td><td>bar</td></tr>', 'cfml', false),
 	'<tr>\n\t<td>foo</td>\n\t<td>bar</td>\n</tr>'
 );
 
 assertEqual(
 	'auto-split: empty <td></td> stays glued (no `>` between them at split-trigger position)',
-	runRouter('<table><tr><td></td><td>x</td></tr></table>', 'cfml', false),
+	runIndentationStage('<table><tr><td></td><td>x</td></tr></table>', 'cfml', false),
 	'<table>\n\t<tr>\n\t\t<td></td>\n\t\t<td>x</td>\n\t</tr>\n</table>'
 );
 
 assertEqual(
 	'auto-split: <td>x<cfif>z</cfif>.</td> — line has </cfif>, so split before </td>',
-	runRouter('<td>x<cfif y>z</cfif>.</td>', 'cfml', false),
+	runIndentationStage('<td>x<cfif y>z</cfif>.</td>', 'cfml', false),
 	'<td>x<cfif y>z</cfif>.\n</td>'
 );
 
@@ -646,7 +656,7 @@ assertEqual(
 
 assertEqual(
 	'auto-split: real-world disp_pym1amt pattern — badly-indented multi-tag glued line gets fully aligned',
-	runRouter(
+	runIndentationStage(
 		'<cfif use_split_payment_yn EQ "y" AND split_payment_used EQ "y">\n' +
 		'\t\t\t\t\t\t\t\t\t\t\t\t<table width="100%" border="#bdtk#" class="#default_font#" cellspacing="0" cellpadding="0">\n' +
 		'\t\t\t\t\t\t\t\t\t\t\t\t\t<tr height=10><td></td></tr>\n' +
@@ -672,7 +682,7 @@ assertEqual(
 
 assertEqual(
 	'auto-split: stray </cfif> after text — closes outer cfif from prior line, must split off (Rule D)',
-	runRouter('<cfif outer>\n\t<cfif inner>Foo</cfif> :&nbsp;</cfif>', 'cfml', false),
+	runIndentationStage('<cfif outer>\n\t<cfif inner>Foo</cfif> :&nbsp;</cfif>', 'cfml', false),
 	'<cfif outer>\n\t<cfif inner>Foo</cfif> :&nbsp;\n</cfif>'
 );
 
@@ -684,7 +694,7 @@ assertEqual(
 
 assertEqual(
 	'auto-split: stray </b> after inline cfif — Rule D peels HTML close when no inline open on line',
-	runRouter('<b>\n\t<cfif x>GST<cfelse>VAT</cfif></b>', 'cfml', false),
+	runIndentationStage('<b>\n\t<cfif x>GST<cfelse>VAT</cfif></b>', 'cfml', false),
 	'<b>\n\t<cfif x>GST<cfelse>VAT</cfif>\n</b>'
 );
 
@@ -696,19 +706,19 @@ assertEqual(
 
 assertEqual(
 	'auto-split: real-world GST cfif pattern — <cfif>GST<cfelseif>VAT<cfelse>Sales Tax</cfif></b> peels </b>',
-	runRouter('<b>\n\t<cfif comain_gst_name EQ "GST">GST<cfelseif comain_gst_name EQ "VAT">VAT<cfelse>Sales Tax</cfif></b>', 'cfml', false),
+	runIndentationStage('<b>\n\t<cfif comain_gst_name EQ "GST">GST<cfelseif comain_gst_name EQ "VAT">VAT<cfelse>Sales Tax</cfif></b>', 'cfml', false),
 	'<b>\n\t<cfif comain_gst_name EQ "GST">GST<cfelseif comain_gst_name EQ "VAT">VAT<cfelse>Sales Tax</cfif>\n</b>'
 );
 
 assertEqual(
 	'auto-split: real-world serialnum pattern — <cfif set_language is \'english\'>Serial Number</cfif> :&nbsp;</cfif> peels trailing close',
-	runRouter('<cfif qs_sr_nums.recordcount GT 0>\n\t<br>\n\t<cfif set_language is \'english\'>Serial Number</cfif> :&nbsp;</cfif>\n\t<cfset qcnt=0>', 'cfml', false),
+	runIndentationStage('<cfif qs_sr_nums.recordcount GT 0>\n\t<br>\n\t<cfif set_language is \'english\'>Serial Number</cfif> :&nbsp;</cfif>\n\t<cfset qcnt=0>', 'cfml', false),
 	'<cfif qs_sr_nums.recordcount GT 0>\n\t<br>\n\t<cfif set_language is \'english\'>Serial Number</cfif> :&nbsp;\n</cfif>\n<cfset qcnt=0>'
 );
 
 assertEqual(
 	'auto-split: real-world memo_transdesc Remarks pattern — <font> wraps multi-line content, stray </font> after text+string-with-<br>-inside peels (Rule D ignores tags inside string literals)',
-	runRouter(
+	runIndentationStage(
 		'<td valign="top">\n' +
 		'\t<font>\n' +
 		'\t\t<b>Remarks:</b>\n' +
@@ -726,7 +736,7 @@ assertEqual(
 
 assertEqual(
 	'auto-split: real-world numberToEnglish pattern — <td>...&nbsp;<script>JS</script><cfif>x</cfif>.</td>',
-	runRouter(
+	runIndentationStage(
 		'<cfif disp_numberToEnglishProper EQ "y">\n\t<td #style_padding#>desc: &nbsp;<script Language="JavaScript">\n\tdocument.write(numberToEnglish(\'#amount_forex#\'));\n</script>\n\t<cfif set_language is \'english\'>Only</cfif>.</td>\n</cfif>',
 		'cfml',
 		false
@@ -759,13 +769,13 @@ assertEqual(
  * =================================================================== */
 assertEqual(
 	'indent leak Bug #1: glued </style> on a CSS content line no longer leaks +1 — </head> realigns with <head>',
-	runRouter('<head>\n<style>a{x:1}\nb{y:2}</style>\n</head>', 'cfml', false),
+	runIndentationStage('<head>\n<style>a{x:1}\nb{y:2}</style>\n</head>', 'cfml', false),
 	'<head>\n\t<style>a{x:1}\n\t\tb{y:2}</style>\n</head>'
 );
 
 assertEqual(
 	'indent leak Bug #2: line opening h2 + two spans counts all three — </h2> realigns with <h2>, sibling <p> does not drift',
-	runRouter(
+	runIndentationStage(
 		'<div>\n'
 		+ '<h2>T <span class="m"><cfoutput>#a#</cfoutput> more <span class="n"><cfoutput>#b#</cfoutput></span></span></h2>\n'
 		+ '<p>after</p>\n'
@@ -791,27 +801,10 @@ assertEqual(
 
 assertEqual(
 	'indent guard: CFML conditional-attribute <option …<cfif C> selected</cfif>> stays balanced (nested <cfif> counted, options align)',
-	runRouter('<select name="lim">\n<option value="1"<cfif x EQ 1> selected</cfif>>One</option>\n</select>', 'cfml', false),
+	runIndentationStage('<select name="lim">\n<option value="1"<cfif x EQ 1> selected</cfif>>One</option>\n</select>', 'cfml', false),
 	'<select name="lim">\n\t<option value="1"<cfif x EQ 1> selected</cfif>>One</option>\n</select>'
 );
 
-/* Indent leak Bug #3 — a multi-line tag whose expression holds a string
- * literal spanning the continuation lines: `<cfset q = dbgQuery("…SQL…")>`
- * where the SQL is multi-line. The per-line tag-close scanner used to read
- * each continuation line as starting OUTSIDE any string, which broke TWO ways
- * (one root cause): a `>` INSIDE the string (`a >= 1`) was mistaken for the
- * tag close (false early dedent), and the closing `"` on the `…", _dsn)>` line
- * was mistaken for an OPENING quote so the real `>` was hidden (tag never
- * closed → +1 leaked to the next sibling). `scanMultiLineTagClose` now carries
- * the open-quote state across these lines. This single byte-equality check
- * pins both: `ORDER BY b` must stay at +1 (no early close at the `>=` line),
- * and the sibling `<cfset n = 1>` must return to column 0 (no forward leak).
- * The `>=` is the discriminating character. */
-assertEqual(
-	'indent leak Bug #3: multi-line <cfset = dbgQuery("…")> with a line-spanning string — in-string `>=` is not a tag close (ORDER BY stays +1) and the closing `">` is found (sibling <cfset> back to col 0)',
-	runRouter('<cfset q = dbgQuery(\n"SELECT * FROM t WHERE a >= 1\nORDER BY b", _dsn)>\n<cfset n = 1>', 'cfml', false),
-	'<cfset q = dbgQuery(\n\t"SELECT * FROM t WHERE a >= 1\n\tORDER BY b", _dsn)>\n<cfset n = 1>'
-);
 
 /* Lite path keyword coverage: cfquery with structural cfif inside takes the
  * Tier 2 verbatim path. Even though full Pro SQL re-format is skipped, the
@@ -903,6 +896,154 @@ assertEqual(
 	'<style>\n\tbody{margin:0;color:red}\n\t.btn{padding:10px}\n</style>'
 );
 
+var cssOpaqueInput = [
+	'<style>',
+	'.box { content: "}b"; escaped: "a\\\"}c"; color: red; }',
+	'/* keep } comment */',
+	'.item { padding: 0; }',
+	'</style>'
+].join('\n');
+assertEqual(
+	'deep style preserves CSS strings and comments',
+	runRouter(cssOpaqueInput, 'cfml', true),
+	[
+		'<style>',
+		'\t.box { content: "}b"; escaped: "a\\\"}c"; color: red; }',
+		'\t/* keep } comment */',
+		'\t.item { padding: 0; }',
+		'</style>'
+	].join('\n')
+);
+
+var cssMultilineCommentInput = [
+	'<style>',
+	'/* opener {',
+	'  } comment body',
+	'*/',
+	'.box { content: "}"; }',
+	'</style>'
+].join('\n');
+assertEqual(
+	'deep style ignores braces in multiline CSS comments',
+	runRouter(cssMultilineCommentInput, 'cfml', true),
+	cssMultilineCommentInput
+);
+
+var cssEscapedNewlineInput = [
+	'<style>',
+	'.x{content:"a\\',
+	'  b";}',
+	'</style>'
+].join('\n');
+var cssEscapedNewlineExpected = cssEscapedNewlineInput;
+assertEqual(
+	'deep style preserves escaped-newline CSS string spacing',
+	runRouter(cssEscapedNewlineInput, 'cfml', true),
+	cssEscapedNewlineExpected
+);
+assertEqual(
+	'deep style escaped-newline CSS string is idempotent',
+	runRouter(cssEscapedNewlineExpected, 'cfml', true),
+	cssEscapedNewlineExpected
+);
+
+var cssEscapedStyleCloseInput = [
+	'<style>',
+	'.x{content:"a\\"</style> b";}',
+	'.y{color:red;}',
+	'</style>'
+].join('\n');
+assertEqual(
+	'deep style ignores escaped closing tag inside CSS string',
+	runRouter(cssEscapedStyleCloseInput, 'cfml', true),
+	[
+		'<style>',
+		'\t.x{content:"a\\"</style> b";}',
+		'\t.y{color:red;}',
+		'</style>'
+	].join('\n')
+);
+
+assertEqual(
+	'deep style keeps CSS hex colors distinct from CFML expressions',
+	runRouter('<style>\n.a{color:#fff}.b{color:#000}\n</style>', 'cfml', true),
+	'<style>\n\t.a{color:#fff}\n\t.b{color:#000}\n</style>'
+);
+
+var cssCommentFallbackInput = [
+	'<style>',
+	'/* keep {',
+	'    } comment payload',
+	'*/',
+	'.x{color:red;}',
+	'</style>'
+].join('\n');
+assertEqual(
+	'deep style restores original multiline comment payload after outer formatting',
+	runRouter(cssCommentFallbackInput, 'cfml', true),
+	cssCommentFallbackInput
+);
+
+var cssMixedCFMLInput = [
+	'<style>',
+	'<cfif show>',
+	'.box { content: "}x"; }',
+	'</cfif>',
+	'.item { padding: 0; }',
+	'</style>'
+].join('\n');
+assertEqual(
+	'deep style preserves mixed CFML structure around CSS strings',
+	runRouter(cssMixedCFMLInput, 'cfml', true),
+	[
+		'<style>',
+		'\t<cfif show>',
+		'\t.box { content: "}x"; }',
+		'\t</cfif>',
+		'\t.item { padding: 0; }',
+		'</style>'
+	].join('\n')
+);
+
+var cssMixedCFMLExpressionInput = [
+	'<style>',
+	'<cfif condition="#foo eq \' } \'#">',
+	'.x{content:#bar ? "}" : "x"#;color:#fff;}',
+	'</cfif>',
+	'</style>'
+].join('\n');
+assertEqual(
+	'deep style preserves CFML tag and expression payloads',
+	runRouter(cssMixedCFMLExpressionInput, 'cfml', true),
+	[
+		'<style>',
+		'\t<cfif condition="#foo eq \' } \'#">',
+		'\t.x{content:#bar ? "}" : "x"#;color:#fff;}',
+		'\t</cfif>',
+		'</style>'
+	].join('\n')
+);
+
+var cssUnsafeInput = '.box { content: "unterminated };\n.item { color: red; }';
+var cssUnsafeCommentInput = '.box { color: red; /* unterminated }\n.item { color: blue; }';
+var cssHarness = makeContext('', 'cfml');
+var cssEscapedSelectorInput = '<style>\n.a\\}b { --theme: red; color: var(--theme); }\n</style>\n<div>after</div>';
+var cssEscapedSelectorOutput = runRouter(cssEscapedSelectorInput, 'cfml', true);
+assertEqual('deep style preserves escaped selector and CSS custom property',
+	cssEscapedSelectorOutput.indexOf('.a\\}b { --theme: red; color: var(--theme); }') !== -1, true);
+assertEqual('deep style closes before following HTML with a CSS custom property',
+	cssEscapedSelectorOutput.indexOf('</style>') < cssEscapedSelectorOutput.indexOf('<div>'), true);
+assertEqual(
+	'deep style returns unsafe CSS body unchanged',
+	cssHarness.context.formatCSSCode(cssUnsafeInput),
+	cssUnsafeInput
+);
+assertEqual(
+	'deep style returns unsafe CSS comment unchanged',
+	cssHarness.context.formatCSSCode(cssUnsafeCommentInput),
+	cssUnsafeCommentInput
+);
+
 assertEqual(
 	'deep script javascript',
 	runRouter('<script>\nif(x){foo();}\n</script>', 'cfml', true),
@@ -969,17 +1110,6 @@ assertEqual(
 	'<script>\n\tvar s = `<div>${name}; end</div>`;\n</script>'
 );
 
-assertEqual(
-	'deep script preserves multiline template payload indentation',
-	runRouter(
-		'<script>\nvar html = `\n<div>\n\t<cfif flag>\n\t\tvalue\n\t</cfif>\n</div>\n`;\n</script>',
-		'cfml',
-		true
-	),
-	// The old expectation added a tab inside the template value. Returning
-	// the original script body avoids changing runtime string content.
-	'<script>\nvar html = `\n<div>\n\t<cfif flag>\n\t\tvalue\n\t</cfif>\n</div>\n`;\n</script>'
-);
 
 assertEqual(
 	'deep script preserves regex literal with semicolon — empty {} stays inline',
@@ -1005,7 +1135,7 @@ assertEqual(
 
 assertEqual(
 	'bare JavaScript inside CFML conditional gets brace indentation',
-	runRouter(
+	runIndentationStage(
 		'<cfif frommode is \'new\'>\nif ($.trim(document.ERPform.fmi_staff_unique.value))\n{\nleave_renderBU();\n}\n</cfif>',
 		'cfml',
 		true
@@ -1209,7 +1339,7 @@ assertEqual(
 
 assertEqual(
 	'multi-line html tag indents continuation lines and aligns close tag',
-	runRouter(
+	runIndentationStage(
 		'<cfif a>\n<cfif b>\n<div class="x"\ndata-uen="1"\ndata-padscale="0.02">\n</div>\n</cfif>\n</cfif>',
 		'cfml',
 		false
@@ -1245,7 +1375,7 @@ assertEqual(
 // sample/ai_chatbox_aic_api.cfm _msg struct literal (regen_group_id comment).
 assertEqual(
 	'multi-line cfset struct: trailing <!--- ---> comment does not collapse following lines',
-	runRouter(
+	runIndentationStage(
 		'<cfset _msg = {\n"a": q.a,\n"regen_group_id": q.rg, <!--- note --->\n"version_no": q.v,\n"version_count": q.vc\n}>\n<cfset _next = 1>',
 		'cfml',
 		false
@@ -1265,13 +1395,13 @@ assertEqual(
 
 assertEqual(
 	'html attribute with /* not treated as block comment',
-	runRouter('<div>\n<input type="file" accept="image/*">\n<button onclick="foo()">\n<span>ok</span>\n</button>\n</div>', 'cfml', false),
+	runIndentationStage('<div>\n<input type="file" accept="image/*">\n<button onclick="foo()">\n<span>ok</span>\n</button>\n</div>', 'cfml', false),
 	'<div>\n\t<input type="file" accept="image/*">\n\t<button onclick="foo()">\n\t\t<span>ok</span>\n\t</button>\n</div>'
 );
 
 assertEqual(
 	'standalone block comment still treated as comment',
-	runRouter('<cfif x>\n/* this spans\nmany lines */\n<cfset y = 1>\n</cfif>', 'cfml', false),
+	runIndentationStage('<cfif x>\n/* this spans\nmany lines */\n<cfset y = 1>\n</cfif>', 'cfml', false),
 	'<cfif x>\n\t/* this spans\n\tmany lines */\n\t<cfset y = 1>\n</cfif>'
 );
 
@@ -2036,7 +2166,7 @@ assertEqual(
 // the trailing tags out of their enclosing <cftry>.
 assertEqual(
 	'unbalanced ] inside a CFML comment does not dedent following tags',
-	runRouter(
+	runIndentationStage(
 		'<cftry>\n<cfset x = 1>\n<!--- note [start] sole record] --->\n<cfoutput>ok</cfoutput>\n<cfcatch type="any"><cfset y = 2></cfcatch>\n</cftry>',
 		'cfml'
 	),

@@ -345,6 +345,51 @@ async function runPwaUpdateTest() {
   pass('PWA waits for Update now, saves input, activates and reloads');
 }
 
+function runSafeModePreferenceTest() {
+  const storage = new Map();
+  function makeOptions() {
+    const elements = {};
+    for (const id of ['safe_mode', 'deep_sql', 'deep_css', 'deep_js', 'pro_sql', 'semantic_indent']) {
+      const element = new Element();
+      element.checked = id !== 'safe_mode';
+      element.dataset = {};
+      element.closest = function () { return null; };
+      elements[id] = element;
+    }
+    const document = {
+      readyState: 'complete',
+      querySelector: function () { return null; },
+      getElementById: function (id) { return elements[id] || null; }
+    };
+    const localStorage = {
+      getItem: function (key) { return storage.has(key) ? storage.get(key) : null; },
+      setItem: function (key, value) { storage.set(key, String(value)); }
+    };
+    const context = { document, localStorage };
+    vm.createContext(context);
+    vm.runInContext(app, context);
+    return elements;
+  }
+
+  let elements = makeOptions();
+  elements.semantic_indent.dispatchEvent({ type: 'change' });
+  elements.safe_mode.checked = true;
+  elements.safe_mode.dispatchEvent({ type: 'change' });
+  for (const id of ['deep_sql', 'deep_css', 'deep_js', 'pro_sql', 'semantic_indent']) {
+    assert.strictEqual(elements[id].checked, false, id + ' is off in Safe Mode');
+    assert.strictEqual(elements[id].disabled, true, id + ' is disabled in Safe Mode');
+  }
+  elements = makeOptions();
+  assert.strictEqual(elements.safe_mode.checked, true, 'Safe Mode survives reload');
+  assert.strictEqual(elements.semantic_indent.checked, false, 'persisted Semantic Indent remains gated');
+  assert.strictEqual(elements.semantic_indent.disabled, true);
+  elements.safe_mode.checked = false;
+  elements.safe_mode.dispatchEvent({ type: 'change' });
+  assert.strictEqual(elements.semantic_indent.checked, true, 'prior Semantic Indent is restored');
+  assert.strictEqual(elements.semantic_indent.disabled, false);
+  pass('Safe Mode gates and restores persisted Semantic Indent');
+}
+
 async function runFormatterAsyncSafetyTest() {
   const ids = {
     split_html_tag: { checked: false },
@@ -358,6 +403,7 @@ async function runFormatterAsyncSafetyTest() {
     normalize_indent: { checked: false },
     normalize_tab_width: { value: '0' },
     semantic_indent: { checked: false },
+    safe_mode: { checked: false },
     pro_sql: { checked: true },
     pro_sql_dialect: { value: 'sql' },
     input: { value: 'SELECT old_input' },
@@ -393,6 +439,63 @@ async function runFormatterAsyncSafetyTest() {
   assert.strictEqual(ids.output.value, 'previous output');
   pass('async formatting cannot overwrite or clear newer input');
 
+  ids.input.value = '<cfquery name="q">\nselect id from t\n</cfquery>';
+  ids.output.value = 'previous output';
+  ids.language.value = 'cfml';
+  ids.deep_sql.checked = true;
+  ids.deep_css.checked = true;
+  ids.deep_js.checked = true;
+  ids.pro_sql.checked = true;
+  const beforeSafeMode = ids.input.value;
+  const pendingSafeMode = context.beautifyCodes();
+  ids.safe_mode.checked = true;
+  ids.deep_sql.checked = false;
+  ids.deep_css.checked = false;
+  ids.deep_js.checked = false;
+  ids.pro_sql.checked = false;
+  resolveLoad();
+  assert.strictEqual(await pendingSafeMode, false);
+  assert.strictEqual(ids.input.value, beforeSafeMode, 'cancelled request must not clear input');
+  assert.strictEqual(ids.output.value, 'previous output', 'cancelled request must not apply older settings');
+  ids.auto_clear.checked = false;
+  assert.strictEqual(await context.beautifyCodes(), true);
+  assert.ok(ids.output.value.includes('select id from t'), 'a fresh request uses the current safe settings');
+  pass('async formatting cancels when safety settings change');
+
+  ids.safe_mode.checked = false;
+  ids.language.value = 'sql';
+  ids.pro_sql.checked = true;
+  ids.auto_clear.checked = false;
+  const changedOptions = [
+    ['language', 'value', 'js'],
+    ['pro_sql_dialect', 'value', 'postgresql'],
+    ['split_html_tag', 'checked', true],
+    ['preserve_continuation_alignment', 'checked', false],
+    ['normalize_indent', 'checked', true],
+    ['normalize_tab_width', 'value', '4'],
+    ['auto_copy', 'checked', true],
+    ['auto_clear', 'checked', true],
+    ['auto_clear_output', 'checked', true]
+  ];
+  for (const [id, property, changed] of changedOptions) {
+    ids.input.value = 'SELECT stable_input';
+    ids.output.value = 'previous output';
+    const previous = ids[id][property];
+    const pending = context.beautifyCodes();
+    ids[id][property] = changed;
+    resolveLoad();
+    assert.strictEqual(await pending, false, id + ' change cancels the request');
+    assert.strictEqual(ids.output.value, 'previous output', id + ' does not apply stale output');
+    assert.strictEqual(ids.input.value, 'SELECT stable_input', id + ' does not clear input');
+    ids[id][property] = previous;
+  }
+  pass('async formatting cancels when captured options change');
+
+  ids.safe_mode.checked = false;
+  ids.language.value = 'sql';
+  ids.pro_sql.checked = true;
+  ids.auto_clear.checked = true;
+
   ids.input.value = 'SELECT stable_input';
   ids.output.value = '';
   context.isProSQLLoaded = function () { return true; };
@@ -402,10 +505,68 @@ async function runFormatterAsyncSafetyTest() {
   assert.strictEqual(ids.output.value, 'formatted old input');
   assert.strictEqual(await immediateResult, true);
   pass('synchronous formatting remains immediate while returning a Promise');
+
+  ids.auto_clear.checked = false;
+  ids.safe_mode.checked = true;
+  ids.pro_sql.checked = true;
+  ids.deep_sql.checked = true;
+  ids.deep_css.checked = true;
+  ids.deep_js.checked = true;
+  ids.semantic_indent.checked = true;
+  context.isProSQLLoaded = function () { return false; };
+  context.ensureProSQL = function () { return Promise.resolve(); };
+  const standaloneCases = [
+    ['sql', 'select 1;\r\nselect 2;\n'],
+    ['auto', 'select 1;\r\nselect 2;\n'],
+    ['js', 'function f(){return 1;}\r\n'],
+    ['auto', 'function f(){return 1;}\r\n']
+  ];
+  for (const [language, source] of standaloneCases) {
+    ids.language.value = language;
+    ids.input.value = source;
+    assert.strictEqual(await context.beautifyCodes(), true);
+    assert.strictEqual(ids.output.value, source, 'Safe Mode preserves recognized standalone ' + language);
+  }
+  ids.language.value = 'cfml';
+  ids.input.value = '<cfquery name="q">\nselect id from t\n</cfquery>';
+  assert.strictEqual(await context.beautifyCodes(), true);
+  assert.ok(ids.output.value.includes('select id from t'), 'Safe Mode does not deep-format SQL inside CFML');
+  pass('Safe Mode preserves standalone SQL/JS and skips embedded SQL formatting');
+
+  ids.safe_mode.checked = false;
+  ids.pro_sql.checked = false;
+  ids.semantic_indent.checked = false;
+  ids.language.value = 'sql';
+  ids.input.value = 'select 1';
+  assert.strictEqual(await context.beautifyCodes(), true);
+  assert.strictEqual(ids.output.value, 'SELECT 1', 'normal SQL formatting resumes when Safe Mode is off');
+  ids.language.value = 'js';
+  ids.input.value = 'function f(){return 1;}';
+  assert.strictEqual(await context.beautifyCodes(), true);
+  assert.match(ids.output.value, /function f\(\)\{\n\s+return 1;/, 'normal JS formatting resumes when Safe Mode is off');
+  pass('standalone formatters resume outside Safe Mode');
+
+  ids.language.value = 'cfml';
+  ids.input.value = '<cfset x = outer(\ninner()\n)>';
+  ids.output.value = 'previous semantic output';
+  ids.semantic_indent.checked = true;
+  let resolveSemantic;
+  context.hasFlatInlineTagBlock = function () { return true; };
+  context.isTreeSitterCFMLLoaded = function () { return false; };
+  context.ensureTreeSitterCFML = function () {
+    return new Promise((resolve) => { resolveSemantic = resolve; });
+  };
+  const pendingSemantic = context.beautifyCodes();
+  ids.semantic_indent.checked = false;
+  resolveSemantic();
+  assert.strictEqual(await pendingSemantic, false);
+  assert.strictEqual(ids.output.value, 'previous semantic output', 'stale Semantic Indent request is not applied');
+  pass('async formatting cancels when Semantic Indent changes');
 }
 
 (async function runBehaviorTests() {
   await runPwaUpdateTest();
+  runSafeModePreferenceTest();
   await runFormatterAsyncSafetyTest();
   const harness = makeHarness();
   const { context, elements, document, counts } = harness;

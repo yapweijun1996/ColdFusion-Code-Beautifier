@@ -169,6 +169,97 @@
 		return out;
 	}
 
+	/* Mark genuine tag starts, skipping raw HTML bodies and markup comments.
+	 * The post-pass must never discover CFML-looking text inside JavaScript. */
+	function semanticTagStarts(code) {
+		var starts = {}, i = 0, row = 0, lineStart = 0;
+		function advance(end) {
+			while (i < end) {
+				if (code[i++] === '\n') { row++; lineStart = i; }
+			}
+		}
+		while (i < code.length) {
+			if (code.substr(i, 4) === '<!--') {
+				var cf = code.substr(i, 5) === '<!---', depth = 1, p = i + (cf ? 5 : 4);
+				while (p < code.length && depth) {
+					if (cf && code.substr(p, 5) === '<!---') { depth++; p += 5; }
+					else if (code.substr(p, cf ? 4 : 3) === (cf ? '--->' : '-->')) { depth--; p += cf ? 4 : 3; }
+					else p++;
+				}
+				advance(p); continue;
+			}
+			if (code.substr(i, 2) === '/*' || code.substr(i, 2) === '//') {
+				var blockComment = code[i + 1] === '*';
+				var stop = code.indexOf(blockComment ? '*/' : '\n', i + 2);
+				advance(stop < 0 ? code.length : stop + (blockComment ? 2 : 0));
+				continue;
+			}
+			if (code[i] === '"' || code[i] === "'" || code[i] === '`') {
+				var delimiter = code[i], literalEnd = i + 1;
+				while (literalEnd < code.length) {
+					if (code[literalEnd] === '\\') { literalEnd += 2; continue; }
+					if (code[literalEnd] === delimiter) { literalEnd++; break; }
+					if (delimiter !== '`' && code[literalEnd] === '\n') break;
+					literalEnd++;
+				}
+				advance(Math.min(literalEnd, code.length));
+				continue;
+			}
+			var m = code.slice(i).match(/^<(\/?)([a-z][\w:-]*)\b/i);
+			if (!m) { advance(i + 1); continue; }
+			var end = i + m[0].length, q = null;
+			for (; end < code.length; end++) {
+				var ch = code[end];
+				if (q) {
+					if (ch === q) {
+						if (code[end + 1] === q) end++;
+						else q = null;
+					}
+				} else if (ch === '"' || ch === "'") q = ch;
+				else if (ch === '>') break;
+			}
+			if (end === code.length) break;
+			var name = m[2].toLowerCase();
+			if (!m[1] && /^[ \t]*$/.test(code.slice(lineStart, i)) &&
+					/^(?:cfset|cfparam|cfscript)$/.test(name)) starts[row] = true;
+			advance(end + 1);
+			if (!m[1] && /^(?:script|style|cfscript|cfquery|pre|textarea|title|xmp)$/.test(name)) {
+				var close = new RegExp('</' + name + '\\s*>', 'ig');
+				close.lastIndex = i;
+				var found = close.exec(code);
+				advance(found ? close.lastIndex : code.length);
+			}
+		}
+		return starts;
+	}
+
+	/* Preserve every line intersecting a multiline CFML string or any comment.
+	 * Doubled quotes are CFML escapes; backslashes do not escape quotes. */
+	function semanticProtectedLines(code) {
+		var lines = code.split('\n'), protectedRows = {}, quote = null, block = false;
+		for (var row = 0; row < lines.length; row++) {
+			var s = lines[row], began = !!quote || block;
+			if (began) protectedRows[row] = true;
+			for (var i = 0; i < s.length; i++) {
+				var c = s[i], n = s[i + 1];
+				if (block) {
+					if (c === '*' && n === '/') { block = false; i++; }
+				} else if (quote) {
+					if (c === quote) {
+						if (n === quote) i++;
+						else quote = null;
+					}
+				} else if (c === '/' && n === '/') {
+					protectedRows[row] = true; break;
+				} else if (c === '/' && n === '*') {
+					protectedRows[row] = true; block = true; i++;
+				} else if (c === '"' || c === "'") quote = c;
+			}
+			if (quote || block) protectedRows[row] = true;
+		}
+		return protectedRows;
+	}
+
 	/* ── Block-aware post-pass ────────────────────────────────────────────────
 	 * Scans beautifier OUTPUT for multi-line inline-CF-tag expression blocks
 	 * (<cfset ...> / <cfparam ...> whose closing `>` is on a later line) and
@@ -189,9 +280,11 @@
 			: localHasTagClose;
 
 		var lines = output.split('\n');
+		var realStarts = semanticTagStarts(output);
 		var i = 0;
 		while (i < lines.length) {
 			var trimmed = lines[i].trim();
+			if (!realStarts[i]) { i++; continue; }
 
 			/* ── <cfscript> … </cfscript> block (cfscript grammar) ──────────────
 			 * Content between the tags is multiple statements, so indent is
@@ -211,18 +304,24 @@
 				var csOpen = i;
 				var csClose = -1;
 				for (var cj = i + 1; cj < lines.length; cj++) {
-					if (/<\/cfscript>/i.test(lines[cj])) { csClose = cj; break; }
+					if (/<\/cfscript>/i.test(lines[cj])) {
+						var beforeClose = lines.slice(csOpen + 1, cj + 1).join('\n');
+						var unsafeClose = semanticProtectedLines(beforeClose);
+						if (!unsafeClose[cj - csOpen - 1]) { csClose = cj; break; }
+					}
 				}
 				if (csClose === -1 || csClose === csOpen + 1) { i = (csClose === -1) ? i + 1 : csClose + 1; continue; }
 
 				var tagIndent = (lines[csOpen].match(/^[ \t]*/) || [''])[0];
 				var contentBase = tagIndent + '\t';
 				var contentLines = lines.slice(csOpen + 1, csClose);
-				var contentTrim = contentLines.map(function (l) { return l.trim(); }).join('\n');
+				var contentTrim = contentLines.join('\n');
+				var unsafeContent = semanticProtectedLines(contentTrim);
 
 				var cmap = computeCfscriptIndent(cfsParser, contentTrim);  // {} if hasError / control structures
 				if (Object.keys(cmap).length > 0) {
 					for (var ck = 0; ck < contentLines.length; ck++) {
+						if (unsafeContent[ck]) continue;
 						var cextra = cmap[ck + 1] || 0;   // 1-based within content
 						lines[csOpen + 1 + ck] = contentBase
 							+ new Array(cextra + 1).join('\t')
@@ -240,16 +339,27 @@
 			// Collect the block: from this line until the line whose `>` closes
 			// the tag (string/comment-aware via hasTagCloseOutsideStrings).
 			var start = i;
-			var end = i;
-			for (var j = i + 1; j < lines.length; j++) {
-				end = j;
-				if (hasClose(lines[j])) break;
+			var end = -1, carryQuote = null;
+			for (var j = i; j < lines.length; j++) {
+				var scanLine = lines[j];
+				for (var p = 0; p < scanLine.length; p++) {
+					var ch = scanLine[p];
+					if (carryQuote) {
+						if (ch === carryQuote) {
+							if (scanLine[p + 1] === carryQuote) p++;
+							else carryQuote = null;
+						}
+					} else if (ch === '"' || ch === "'") carryQuote = ch;
+					else if (ch === '>') { end = j; break; }
+				}
+				if (end !== -1) break;
 			}
-			if (end === start) { i++; continue; }   // never closed → skip
+			if (end <= start) { i++; continue; }
 
 			var baseIndent = (lines[start].match(/^[ \t]*/) || [''])[0];
 			var blockLines = lines.slice(start, end + 1);
-			var trimmedBlock = blockLines.map(function (l) { return l.trim(); }).join('\n');
+			var trimmedBlock = blockLines.join('\n');
+			var unsafeBlock = semanticProtectedLines(trimmedBlock);
 
 			var tree = cfmlParser.parse(trimmedBlock);
 			/* Guard on hasError (whole-subtree), NOT isError (this node only).
@@ -265,6 +375,7 @@
 				var indentMap = computeCallIndentByLine(cfmlParser, trimmedBlock);
 				if (Object.keys(indentMap).length > 0) {
 					for (var k = 0; k < blockLines.length; k++) {
+						if (unsafeBlock[k]) continue;
 						var extra = indentMap[k + 1] || 0;   // 1-based within block
 						lines[start + k] = baseIndent
 							+ new Array(extra + 1).join('\t')

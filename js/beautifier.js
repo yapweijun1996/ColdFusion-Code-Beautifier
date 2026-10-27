@@ -929,6 +929,8 @@ function alignCFMLCommentedCodeBlocks(rawCode) {
 	var result = '';
 	var position = 0;
 	var markupState = { cfmlDepth: 0, htmlDepth: 0 };
+	var literalLines = protectedScriptLiteralLines(rawCode);
+	var row = 0;
 	while (position < rawCode.length) {
 		var lineEnd = rawCode.indexOf('\n', position);
 		if (lineEnd === -1) lineEnd = rawCode.length;
@@ -936,6 +938,13 @@ function alignCFMLCommentedCodeBlocks(rawCode) {
 		var linePrefix = (line.match(/^[ \t]*/) || [''])[0];
 		var markerIndex = position + linePrefix.length;
 
+		if (literalLines[row]) {
+			result += line;
+			if (lineEnd < rawCode.length) result += '\n';
+			position = lineEnd < rawCode.length ? lineEnd + 1 : lineEnd;
+			row++;
+			continue;
+		}
 		/* Only an own-line CFML comment is a safe code block candidate. A
 		 * trailing inline comment may be part of a string/HTML/JS construct and
 		 * must continue through the normal opaque path. */
@@ -952,6 +961,7 @@ function alignCFMLCommentedCodeBlocks(rawCode) {
 					var aligned = alignOneCFMLCommentBlock(block, linePrefix);
 					result += rawCode.slice(position, markerIndex) + aligned + suffix;
 					markupState = { cfmlDepth: 0, htmlDepth: 0 };
+					row += (rawCode.slice(position, closeLineEnd).match(/\n/g) || []).length;
 					position = closeLineEnd;
 					continue;
 				}
@@ -962,6 +972,7 @@ function alignCFMLCommentedCodeBlocks(rawCode) {
 		result += line;
 		if (lineEnd < rawCode.length) result += '\n';
 		position = lineEnd < rawCode.length ? lineEnd + 1 : lineEnd;
+		row++;
 	}
 	return result;
 }
@@ -1037,10 +1048,168 @@ function looksLikeCommentedCode(text) {
 		|| /(?:^|\n)[ \t]*(?:[#.]?[a-z][a-z0-9_-]*)\s*\{/i.test(text);
 }
 
+/* Split only adjacent, lexically complete markup tags. Raw bodies and
+ * comments are opaque; quoted attribute and CFML expression text cannot
+ * supply either side of a boundary. */
+function splitRealTagBoundaries(code) {
+	var out = '', i = 0, previousTagEnd = false;
+	while (i < code.length) {
+		if (code.substr(i, 4) === '<!--') {
+			var commentEnd = findMarkupCommentEnd(code, i);
+			if (commentEnd < 0) return out + code.slice(i);
+			out += code.slice(i, commentEnd);
+			i = commentEnd;
+			previousTagEnd = false;
+			continue;
+		}
+		if (code[i] === '"' || code[i] === "'" || code[i] === '`') {
+			var delimiter = code[i], literalEnd = i + 1;
+			while (literalEnd < code.length) {
+				if (code[literalEnd] === '\\') { literalEnd += 2; continue; }
+				if (code[literalEnd] === delimiter) { literalEnd++; break; }
+				if (code[literalEnd] === '\n' && delimiter !== '`') break;
+				literalEnd++;
+			}
+			out += code.slice(i, literalEnd);
+			i = literalEnd;
+			previousTagEnd = false;
+			continue;
+		}
+		if (code.substr(i, 2) === '/*' || code.substr(i, 2) === '//') {
+			var block = code[i + 1] === '*';
+			var commentStop = code.indexOf(block ? '*/' : '\n', i + 2);
+			if (commentStop < 0) return out + code.slice(i);
+			commentStop += block ? 2 : 0;
+			out += code.slice(i, commentStop);
+			i = commentStop;
+			previousTagEnd = false;
+			continue;
+		}
+		var match = code.slice(i).match(/^<\/?([a-z][\w:-]*)\b/i);
+		if (!match) { out += code[i++]; previousTagEnd = false; continue; }
+		var quote = null, end = i + match[0].length;
+		for (; end < code.length; end++) {
+			var c = code[end];
+			if (quote) {
+				if (c === quote) {
+					if (code[end + 1] === quote) end++;
+					else quote = null;
+				}
+			} else if (c === '"' || c === "'") quote = c;
+			else if (c === '>') break;
+		}
+		if (end === code.length) return out + code.slice(i);
+		if (previousTagEnd) out += '\n';
+		out += code.slice(i, end + 1);
+		i = end + 1;
+		previousTagEnd = true;
+		if (/^(?:script|style|cfscript|cfquery|textarea|pre|xmp|title)$/i.test(match[1]) &&
+				!/^<\//.test(match[0])) {
+			var rawName = match[1].toLowerCase();
+			if (/^(?:script|style|cfscript|cfquery)$/.test(rawName)) {
+				var rawClose = findClosingTagOutsideText(code, rawName, i);
+				if (!rawClose) return out + code.slice(i);
+				out += code.slice(i, rawClose.end);
+				i = rawClose.end;
+			} else {
+				var close = new RegExp('</' + match[1] + '\\s*>', 'ig');
+				close.lastIndex = i;
+				var found = close.exec(code);
+				if (!found) return out + code.slice(i);
+				out += code.slice(i, close.lastIndex);
+				i = close.lastIndex;
+			}
+		}
+	}
+	return out;
+}
+
+/* Identify physical lines intersecting multiline script literals before
+ * changing indentation. JS and CFScript have different quote escapes. */
+function protectedScriptLiteralLines(code) {
+	var lines = code.split('\n'), protectedLines = {};
+	var mode = hasTagsOutsideStrings(code) ? '' : 'script', quote = null;
+	var blockComment = false, templateStack = [], expressionDepth = 0, tagQuote = null, inTag = false;
+	for (var row = 0; row < lines.length; row++) {
+		var text = lines[row], start = 0, beganInLiteral = !!quote || templateStack.length > 0;
+		if (!mode) {
+			var open = inTag ? null : /<(script|cfscript)\b[^>]*>/i.exec(text);
+			if (!open) {
+				var tagStart = inTag ? 0 : text.search(/<cf[a-z][\w:-]*\b/i);
+				if (tagStart < 0) continue;
+				var beganInTagQuote = !!tagQuote;
+				for (var t = tagStart; t < text.length; t++) {
+					var tc = text[t];
+					if (tagQuote) {
+						if (tc === tagQuote) {
+							if (text[t + 1] === tagQuote) t++;
+							else tagQuote = null;
+						}
+					} else if (tc === '"' || tc === "'") tagQuote = tc;
+					else if (tc === '>') { inTag = false; break; }
+					else if (tc === '<') inTag = true;
+				}
+				if (beganInTagQuote) protectedLines[row] = 1;
+				else if (tagQuote) protectedLines[row] = 2;
+				continue;
+			}
+			mode = open[1].toLowerCase();
+			start = open.index + open[0].length;
+		}
+		if (beganInLiteral) protectedLines[row] = 1;
+		for (var j = start; j < text.length; j++) {
+			var c = text[j], next = text[j + 1];
+			if (blockComment) {
+				if (c === '*' && next === '/') { blockComment = false; j++; }
+				continue;
+			}
+			if (quote) {
+				if (mode === 'script' && c === '\\') { j++; continue; }
+				if (c === quote) {
+					if (mode === 'cfscript' && next === quote) { j++; continue; }
+					quote = null;
+				}
+				continue;
+			}
+			if (templateStack.length && expressionDepth === 0) {
+				if (c === '\\') { j++; continue; }
+				if (c === '`') { expressionDepth = templateStack.pop(); continue; }
+				if (c === '$' && next === '{') { expressionDepth = 1; j++; }
+				continue;
+			}
+			if (c === '<' && new RegExp('^</' + mode + '\\s*>', 'i').test(text.slice(j))) {
+				mode = ''; break;
+			}
+			if (c === '/' && next === '/') break;
+			if (c === '/' && next === '*') { blockComment = true; j++; continue; }
+			if (mode === 'script' && c === '/' && typeof scanJSRegexLiteralEnd === 'function') {
+				var reEnd = scanJSRegexLiteralEnd(text, j, text.slice(0, j), {});
+				if (reEnd !== -1) { j = reEnd - 1; continue; }
+			}
+			if (c === '"' || c === "'") { quote = c; continue; }
+			if (mode === 'script' && c === '`') {
+				templateStack.push(expressionDepth);
+				expressionDepth = 0;
+				continue;
+			}
+			if (templateStack.length && c === '{') expressionDepth++;
+			else if (templateStack.length && c === '}') expressionDepth--;
+		}
+		if ((quote || templateStack.length) && !beganInLiteral) protectedLines[row] = 2;
+	}
+	return protectedLines;
+}
+
 function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, normalize_indent, normalize_tab_width, format_commented_code, skip_tag_splitter) {
 
 	if (normalize_indent) {
-		rawCode = normalizeLeadingSpacesToTabs(rawCode, normalize_tab_width || 0);
+		var originalLines = rawCode.split('\n');
+		var protectedBeforeNormalize = protectedScriptLiteralLines(rawCode);
+		var normalizedLines = normalizeLeadingSpacesToTabs(rawCode, normalize_tab_width || 0).split('\n');
+		Object.keys(protectedBeforeNormalize).forEach(function (row) {
+			normalizedLines[row] = originalLines[row];
+		});
+		rawCode = normalizedLines.join('\n');
 	}
 
 	/* Commented-out CFML is inert to the outer structural stack, but its
@@ -1050,13 +1219,14 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 		rawCode = alignCFMLCommentedCodeBlocks(rawCode);
 	}
 
-	if(split_html_tag == true){
-		rawCode = rawCode.replace(/></g, '>\n<');
+	if (split_html_tag == true) {
+		rawCode = splitRealTagBoundaries(rawCode);
 	}
 
 	if (!skip_tag_splitter) {
 		rawCode = splitAdjacentCFMLTags(rawCode);
 	}
+	var protectedLiteralLines = protectedScriptLiteralLines(rawCode);
 
 	var lines = rawCode.split('\n');
 	var indentLevel = 0;
@@ -1157,29 +1327,13 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 		 * so tab-vs-space mixture is preserved verbatim when sliced. */
 		var origCol    = getLeadingCol(lines[i]);
 		var origPrefix = lines[i].substring(0, origCol);
-		var line = lines[i].trim();
+		var line = protectedLiteralLines[i] ? lines[i].replace(/^[ \t]*/, '') : lines[i].trim();
 		var line_data = line.toLowerCase();
 
-		/* Template-literal lines are JavaScript string content, not markup or
-		 * CFML structure. Preserve their indentation relative to the opening
-		 * line so embedded `<cfif>`/HTML text cannot alter parser depth. */
-		if (inJsTemplateLiteral) {
-			var templateContent = lines[i].substring(origCol);
-			var templateRelativePrefix = origPrefix.indexOf(templateOrigPrefix) === 0
-				? origPrefix.substring(templateOrigPrefix.length)
-				: '';
-			if (templateContent.trim() === '') {
-				lines[i] = '';
-			} else {
-				lines[i] = templateNewPrefix + templateRelativePrefix + templateContent;
-			}
-			if (containsUnescapedBacktick(templateContent)) {
-				inJsTemplateLiteral = false;
-				templateOrigPrefix = '';
-				templateNewPrefix = '';
-			}
-			continue;
-		}
+		/* A continuation starts inside a literal, so even its leading and
+		 * trailing whitespace are data. Multi-line tags still need their
+		 * closing delimiter scanned below. */
+		if (protectedLiteralLines[i] === 1 && !inMultiLineTag) continue;
 
 		// Blank line — emit truly empty, never indentation-only. Otherwise
 		// applyIndent() (or the comment/multi-line-tag continuation handlers)
@@ -1189,7 +1343,7 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 		// rest of the loop body cannot drop a close-marker or quote-state
 		// transition. Repro: sample/ai_agent_cancel.cfm blank lines inside
 		// <cftry> emitted as a lone "\t".
-		if (line === '') { lines[i] = ''; continue; }
+		if (line === '' && !protectedLiteralLines[i]) { lines[i] = ''; continue; }
 
 		// Multi-line opening tag continuation: lines after a tag like
 		// `<div class="..."` whose `>` is on a later line. Continuation
@@ -1204,6 +1358,7 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 			/* Scan WITH the carried open-quote state so a string spanning
 			 * these continuation lines is tracked. Update the carry only
 			 * while the tag stays open. */
+			var startsInsideTagString = !!multiLineTagQuote;
 			var mlScan = scanMultiLineTagClose(line, multiLineTagQuote);
 			var closesMultiLineTag = mlScan.closes;
 			if (!closesMultiLineTag) {
@@ -1238,9 +1393,11 @@ function beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, 
 			if (inlineExpressionClose) {
 				indentLevel -= 1;
 			}
-			applyIndent();
-			if (inlineContExtraWs !== "") {
-				lines[i] = ''.padStart(indentSpace, '\t') + inlineContExtraWs + line;
+			if (!startsInsideTagString) {
+				applyIndent();
+				if (inlineContExtraWs !== "") {
+					lines[i] = ''.padStart(indentSpace, '\t') + inlineContExtraWs + line;
+				}
 			}
 			if (inlineExpressionClose) {
 				indentLevel += 1;
@@ -1953,19 +2110,22 @@ function beautifyCodes() {
 	var semantic_indent = semanticIndentEl ? semanticIndentEl.checked : false;
 	var proSqlEl = document.getElementById('pro_sql');
 	var pro_sql = proSqlEl ? proSqlEl.checked : false;
+	var safeModeEl = document.getElementById('safe_mode');
+	var safe_mode = safeModeEl ? safeModeEl.checked : false;
 	var dialectEl = document.getElementById('pro_sql_dialect');
 	var pro_sql_dialect = dialectEl ? dialectEl.value : 'sql';
 	var input = document.getElementById('input');
 	var rawCode = input.value;
 	var output = document.getElementById('output');
-	var language = document.getElementById('language').value;
+	var languageSelection = document.getElementById('language').value;
+	var language = languageSelection;
 
 	if(language == 'auto'){
 		language = detectLanguage(rawCode);
 	}
 
-	function finishOutput() {
-		output.value = normalizeOutputLineEndings(output.value, rawCode);
+	function finishOutput(preserveSource) {
+		if (!preserveSource) output.value = normalizeOutputLineEndings(output.value, rawCode);
 		var copied = false;
 		if(auto_copy == true){
 			copied = copy_output_data();
@@ -1982,10 +2142,28 @@ function beautifyCodes() {
 	}
 
 	function runFormat() {
-		/* The UI may allow editing while an async grammar is loading. A stale
-		 * request must not overwrite the output with a result for old input. */
-		if (input.value !== rawCode) return false;
-		if(language == 'js'){
+		/* A lazy load can outlive the input or formatting and output options.
+		 * Never apply, copy, or clear a result made with a stale snapshot. */
+		if (input.value !== rawCode ||
+				document.getElementById('language').value !== languageSelection ||
+				document.getElementById('split_html_tag').checked !== split_html_tag ||
+				document.getElementById('auto_copy').checked !== auto_copy ||
+				document.getElementById('auto_clear').checked !== auto_clear ||
+				document.getElementById('auto_clear_output').checked !== auto_clear_output ||
+				(safeModeEl && safeModeEl.checked !== safe_mode) ||
+				document.getElementById('deep_sql').checked !== deep_sql ||
+				document.getElementById('deep_css').checked !== deep_css ||
+				document.getElementById('deep_js').checked !== deep_js ||
+				(preserveContEl && preserveContEl.checked !== preserve_continuation_alignment) ||
+				(normalizeIndentEl && normalizeIndentEl.checked !== normalize_indent) ||
+				(normalizeTabWidthEl && (parseInt(normalizeTabWidthEl.value, 10) || 0) !== normalize_tab_width) ||
+				(dialectEl && dialectEl.value !== pro_sql_dialect) ||
+				(proSqlEl && proSqlEl.checked !== pro_sql) ||
+				(semanticIndentEl && semanticIndentEl.checked !== semantic_indent)) return false;
+		var preserveSource = safe_mode && (language === 'js' || language === 'sql');
+		if (preserveSource) {
+			output.value = rawCode;
+		} else if(language == 'js'){
 			// Bare JS path — routes through formatBraceCode (deep-format.js)
 			// instead of beautifyCFML's per-line brace counter. Wins:
 			//   - Template literals  `..${x}..`     parsed correctly, including
@@ -2008,7 +2186,7 @@ function beautifyCodes() {
 					output.value = formatProSQLSync(rawCode, pro_sql_dialect);
 				} catch (err) {
 					if (typeof console !== 'undefined' && console.warn) {
-						console.warn('[beautifier] Pro SQL direct mode threw, falling back to built-in beautifySQL. Error:', err && err.message, '\nDialect:', pro_sql_dialect, '\nSQL excerpt:', rawCode.slice(0, 400));
+						console.warn('[beautifier] Pro SQL formatting failed; falling back to built-in beautifySQL.');
 					}
 					output.value = beautifySQL(rawCode);
 				}
@@ -2017,7 +2195,7 @@ function beautifyCodes() {
 			}
 		}else{
 			var result = beautifyCFML(rawCode, split_html_tag, preserve_continuation_alignment, normalize_indent, normalize_tab_width);
-			if(deep_sql || deep_css || deep_js){
+			if(!safe_mode && (deep_sql || deep_css || deep_js)){
 				result = deepFormatEmbedded(result, {
 					sql: deep_sql,
 					css: deep_css,
@@ -2032,7 +2210,7 @@ function beautifyCodes() {
 			 * already loaded (the lazy-load gate below pre-fetches it before
 			 * calling runFormat). If the parser isn't ready we silently skip,
 			 * leaving the line-scanner output untouched. */
-			if (semantic_indent && typeof applySemanticIndentPostPass === 'function') {
+			if (!safe_mode && semantic_indent && typeof applySemanticIndentPostPass === 'function') {
 				var cfmlP = (typeof isTreeSitterCFMLLoaded === 'function' && isTreeSitterCFMLLoaded()
 					&& typeof getCfmlParser === 'function') ? getCfmlParser() : null;
 				var cfsP = (typeof isTreeSitterCFScriptLoaded === 'function' && isTreeSitterCFScriptLoaded()
@@ -2047,9 +2225,9 @@ function beautifyCodes() {
 					}
 				}
 			}
-			output.value = result;
+			output.value = preserveRenderedHTMLWhitespace(rawCode, result);
 		}
-		finishOutput();
+		finishOutput(preserveSource);
 		return true;
 	}
 
@@ -2059,16 +2237,16 @@ function beautifyCodes() {
 	 * SQL formatter / line-scanner indent). */
 	var preloads = [];
 
-	if (pro_sql && typeof ensureProSQL === 'function' && (!(typeof isProSQLLoaded === 'function') || !isProSQLLoaded())) {
-		preloads.push(ensureProSQL().catch(function(err) {
-			console.warn('[pro-sql] load failed, falling back to built-in formatter:', err);
+	if (!safe_mode && pro_sql && typeof ensureProSQL === 'function' && (!(typeof isProSQLLoaded === 'function') || !isProSQLLoaded())) {
+		preloads.push(ensureProSQL().catch(function() {
+			console.warn('[pro-sql] load failed; falling back to built-in formatter.');
 		}));
 	}
 
 	/* Fetch the 2.6 MB CFML grammar ONLY when semantic indent is on, the input
 	 * is CFML, and a flat multi-line inline-tag block is actually present —
 	 * users who never hit that case pay zero bytes. */
-	if (semantic_indent
+	if (!safe_mode && semantic_indent
 		&& language == 'cfml'
 		&& typeof hasFlatInlineTagBlock === 'function' && hasFlatInlineTagBlock(rawCode)
 		&& typeof ensureTreeSitterCFML === 'function'
@@ -2081,7 +2259,7 @@ function beautifyCodes() {
 	/* Separately fetch the 2.1 MB cfscript grammar ONLY when a flat multi-line
 	 * nested call inside a <cfscript> block is present — so a file with only
 	 * <cfset> blocks never pays for the cfscript grammar, and vice-versa. */
-	if (semantic_indent
+	if (!safe_mode && semantic_indent
 		&& language == 'cfml'
 		&& typeof hasFlatCfscriptBlock === 'function' && hasFlatCfscriptBlock(rawCode)
 		&& typeof ensureTreeSitterCFScript === 'function'

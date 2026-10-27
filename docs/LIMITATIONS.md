@@ -1,13 +1,14 @@
 # Known Limitations
 
-Real cases where the formatter does not produce ideal output. None of these corrupt code, but the result may need manual touch-up.
+These are known limitations, not a guarantee of semantic equivalence. Review diffs and validate formatted code in the target runtime; see [BUG.md](../BUG.md) for unresolved risks.
 
 ## CFML
 
 - **`##` hash escape inside SQL string literals** — a bare `##` is protected as a literal, but a surrounding single-quoted SQL string plus a nearby `#var#` in the same expression can produce slightly off spacing. Tracked as `FEAT-CFML-HASH-ESCAPE` (low priority).
 - **Non-standard comment markers** with stray whitespace like `< ! --- … --->` are not recognized; use the standard `<!--- … --->` form. Standard nested CFML comments are depth-aware and supported; HTML comments still close at the first `-->` because HTML comments do not nest.
 - **Direct helper line endings** — routed browser/CLI output restores CRLF when the captured source uses CRLF. Direct calls to lower-level helpers such as `beautifyCFML()` return their canonical LF-joined output and do not perform the router's final line-ending restoration.
-- **CLI source encoding detection** — UTF-8 (with/without BOM) and BOM-marked UTF-16LE/UTF-16BE are preserved. BOM-less UTF-16 and legacy single-byte encodings are interpreted as UTF-8; convert them or add an explicit BOM before formatting.
+- **HTML whitespace guard** — the browser/CLI pipeline retains text between recognized HTML/CFML tags and falls back to the original document if tag boundaries cannot be matched. It can leave existing HTML indentation and bare JavaScript fragments inside CFML conditionals unchanged. Lower-level `beautifyCFML()` calls do not apply this final guard. Synthetic Lucee and Chrome checks cover selected conditions and an include, not all dynamic server-generated markup; verify the target application separately.
+- **CLI source encoding detection** — UTF-8 (with/without BOM) and BOM-marked UTF-16LE/UTF-16BE are preserved. An odd byte count in BOM-marked UTF-16 is rejected. BOM-less UTF-16 and legacy single-byte encodings are interpreted as UTF-8; convert them or add an explicit BOM before formatting.
 - **`<cfoutput>` wrapping the whole file** — everything inside gets one extra indent level. This is the correct behavior; callers sometimes expect pages to stay flush-left.
 - **HTML tags that open and close across a `<cfoutput>` boundary** — a common dashboard pattern opens structural markup in one `<cfoutput>` (`<cfoutput><div class="app">…<main></cfoutput>`) and closes it in a later one (`<cfoutput></main></div></cfoutput>`). The opener's `<cfoutput>` adds +1 indent that `</cfoutput>` removes before the matching `</main></div>` appear, so those closing tags land one tab shallower than their openers (e.g. `<main>` at T5 but `</main>` at T4). The body in between is internally consistent (no sibling drift) and idempotent; only the cross-boundary close tags are off by the cfoutput depth. Resolving it would require a combined CFML+HTML parser that understands tags spanning `<cfoutput>` blocks, which would also flatten the (correct) deep nesting inside the opener. Tracked as a known edge case; the line-by-line indenter cannot disambiguate it.
 - **Dynamic SQL built with `<cfif>` inside `<cfquery>` — four-tier dispatch:**
@@ -23,12 +24,13 @@ Real cases where the formatter does not produce ideal output. None of these corr
 - **Multiple chained CTEs** (`WITH a AS (...), b AS (...), c AS (...)`) — work, but the commas between CTEs stay with the closing `)` rather than breaking onto their own line.
 - **`CASE` in rare non-list contexts** — formatter assumes CASE appears in a SELECT list or boolean condition. Unusual placements may produce extra blank lines.
 - **Semicolon-separated multi-statement SQL** — `SELECT 1; SELECT 2;` is treated as one run; the formatter does not introduce a blank line between statements.
+- **Ambiguous SQL quotes** — dialects disagree about backslash escapes in quoted text. When the built-in formatter detects divergent quote boundaries, it preserves the ambiguous suffix rather than guessing; subsequent SQL may remain unformatted.
 
 ## Pro SQL (vendored sql-formatter)
 
 - **First runtime use can be async** — the ~312KB UMD bundle is injected when Pro SQL is first enabled (or pre-warmed from a saved preference). In the installed PWA, the current service worker precaches the bundle during installation, so script injection is normally served from cache after the initial online install. Loading/parsing failure falls back to the built-in formatter.
 - **`<cfqueryparam>` and other CFML tags inside `<cfquery>`** — protected as opaque tokens before being handed to sql-formatter, then restored. Output spacing around the tokens is normalized but may differ from the built-in formatter's style.
-- **Dialect-specific quirks** — sql-formatter parses each dialect strictly. Mixing dialect-specific syntax with the wrong dialect setting (e.g., T-SQL `[brackets]` while dialect is set to `mysql`) may throw a parse error; the wrapper catches it and falls back to the built-in formatter rather than producing a broken result.
+- **Dialect-specific quirks** — sql-formatter parses each dialect strictly. Mixing dialect-specific syntax with the wrong dialect setting (e.g., T-SQL `[brackets]` while dialect is set to `mysql`) may throw a parse error; the wrapper catches it and falls back to the built-in formatter. Fallback is not proof of semantic equivalence; review output in the target dialect.
 - **Bundle size impact on PWA precache** — `vendor/sql-formatter.min.js` is currently always listed in `PRECACHE_URLS`; installed PWA users pay the ~312KB download during service-worker installation whether or not Pro SQL is enabled. The option remains runtime-lazy. The asset is evicted/replaced only through cache-version lifecycle.
 
 ## JavaScript (Deep JS)
@@ -102,7 +104,8 @@ grammar. Boundaries:
 ## CSS (Deep CSS)
 
 - **`@media` / `@keyframes` with nested rules** — opening `{` triggers a new line and increments indent, but the simple formatter does not separately format each inner rule. Complex animations may need manual tidy-up.
+- The CSS formatter is not a complete CSS parser. It compares protected strings, comments and CFML spans against the original style body and retains that body when preservation cannot be verified. This guard does not prove semantic equivalence for all CSS or server-generated CFML.
 
 ## Token protection, general
 
-- CFML tokens are replaced with placeholders padded by spaces. This means a few input patterns like `<cfif x>AND(y=1)` gain a space after the closing `>` (becomes `<cfif x>AND (y=1)`). The space is cosmetically preferable and CFML-compatible, but it is a change from the original.
+- SQL formatting uses collision-free placeholders for CFML tokens and quoted strings, and rejects missing, reordered or duplicated markers. It may still adjust spacing around restored CFML tags; review output when exact whitespace matters.

@@ -6,6 +6,11 @@
 npm test          # runs formatter, structure, UI, CLI, version, and Tree-sitter suites
 # or individually:
 node tests/run-tests.js          # VM-harness formatter suite
+node tests/html-whitespace.test.js # HTML rendered-text preservation
+node tests/sql-token-safety.test.js # CFML token placeholder preservation
+node tests/sql-lexical-safety.test.js # SQL numeric, parameter and literal boundaries
+node tests/embedded-literal-safety.test.js # embedded SQL and JavaScript values
+node tests/mixed-literal-safety.test.js # mixed CFML/JS literals and Semantic Indent
 node tests/structure-contract.test.js # JS/CFML structure and verification contracts
 node tests/js-structure-planner.test.js # syntax-backed indentation and safe fallback
 node tests/ui.test.js            # static HTML + editor interaction suite

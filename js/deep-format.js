@@ -145,8 +145,38 @@ var CFML_BUILTIN_FUNCS = {
 	'urlencodedformat': 'urlEncodedFormat'
 };
 
-function protectExpressionStrings(text) {
+// Select a namespace absent from the entire input, including literals and comments.
+function createMarkerList(source, basePrefix) {
+	var prefix = basePrefix;
+	var suffix = 0;
+	var upperSource = source.toUpperCase();
+	while (upperSource.indexOf(prefix.toUpperCase()) !== -1) {
+		prefix = basePrefix + (++suffix) + '_';
+	}
 	var tokens = [];
+	Object.defineProperty(tokens, 'markerPrefix', { value: prefix });
+	return tokens;
+}
+
+function restoreUniqueMarkers(code, tokens, defaultPrefix) {
+	var prefix = tokens.markerPrefix || defaultPrefix;
+	var pattern = new RegExp(prefix + '(\\d+)__', 'gi');
+	var next = 0;
+	var invalid = false;
+	var restored = code.replace(pattern, function(match, index) {
+		var id = Number(index);
+		if (id !== next || id >= tokens.length) {
+			invalid = true;
+			return match;
+		}
+		next++;
+		return tokens[id];
+	});
+	return invalid || next !== tokens.length ? null : restored;
+}
+
+function protectExpressionStrings(text) {
+	var tokens = createMarkerList(text, '__CFEXPSTR_');
 	var output = '';
 	var i = 0;
 	while (i < text.length) {
@@ -165,7 +195,7 @@ function protectExpressionStrings(text) {
 				i++;
 			}
 			tokens.push(text.slice(start, i));
-			output += '__CFEXPSTR_' + (tokens.length - 1) + '__';
+			output += tokens.markerPrefix + (tokens.length - 1) + '__';
 		} else {
 			output += c;
 			i++;
@@ -175,10 +205,7 @@ function protectExpressionStrings(text) {
 }
 
 function restoreProtectedExpressionStrings(text, tokens) {
-	for (var i = 0; i < tokens.length; i++) {
-		text = text.split('__CFEXPSTR_' + i + '__').join(tokens[i]);
-	}
-	return text;
+	return restoreUniqueMarkers(text, tokens, '__CFEXPSTR_');
 }
 
 function uppercaseCFMLOperators(text) {
@@ -212,7 +239,8 @@ function normalizeCFMLExpression(content) {
 	// Collapse multi-whitespace to single space, but preserve leading space.
 	var leading = (transformed.match(/^\s*/) || [''])[0];
 	transformed = (leading.length > 0 ? ' ' : '') + transformed.replace(/\s+/g, ' ').trim();
-	return restoreProtectedExpressionStrings(transformed, protectedExpr.tokens);
+	var restored = restoreProtectedExpressionStrings(transformed, protectedExpr.tokens);
+	return restored === null ? content : restored;
 }
 
 function normalizeCFMLAttributes(content) {
@@ -554,7 +582,7 @@ function formatPhase4PostFragment(post, sqlDialect) {
 		}
 	} catch (e) {
 		if (typeof console !== 'undefined' && console.warn) {
-			console.warn('[deep-format] Phase 4 post-tree synthesize failed, using lite uppercase. Error:', e && e.message);
+			console.warn('[deep-format] Phase 4 post-tree synthesis failed; using lite uppercase.');
 		}
 	}
 	// Fallback: lite uppercase only.
@@ -710,7 +738,7 @@ function formatStrippedTree(treeLines) {
 			} catch (e) {
 				result.push(repeatTab(depth) + trimmed);
 				if (typeof console !== 'undefined' && console.warn) {
-					console.warn('[deep-format] Phase 3 tree-body normalization failed on line, keeping verbatim. Error:', e && e.message);
+					console.warn('[deep-format] Phase 3 tree-body normalization failed; keeping line verbatim.');
 				}
 			}
 		}
@@ -786,7 +814,7 @@ function protectStructuralCFMLAsColumnMarkers(body) {
 	// back to their original tags and adds +1 tab to body lines so cfif
 	// branches read as nested under the cfif itself.
 	var lines = body.split('\n');
-	var markers = [];
+	var markers = createMarkerList(body, '__cfm_');
 	var processed = [];
 	var pattern = /^<\/?(?:cfif|cfelseif|cfelse|cfloop|cfswitch|cfcase|cfdefaultcase)\b[^>]*>$/i;
 	for (var i = 0; i < lines.length; i++) {
@@ -794,7 +822,7 @@ function protectStructuralCFMLAsColumnMarkers(body) {
 		if (pattern.test(trimmed)) {
 			var idx = markers.length;
 			markers.push({ tag: trimmed, kind: classifyStructuralCFMLTag(trimmed) });
-			processed.push('__cfm_' + idx + '__,');
+			processed.push(markers.markerPrefix + idx + '__,');
 		} else {
 			processed.push(lines[i]);
 		}
@@ -819,7 +847,9 @@ function restoreStructuralCFMLMarkers(formatted, markers) {
 	var result = [];
 	var consumed = [];
 	for (var i = 0; i < markers.length; i++) consumed.push(false);
-	var markerLine = /^(\s*)__cfm_(\d+)__,?\s*$/;
+	var markerLine = new RegExp('^(\\s*)' + (markers.markerPrefix || '__cfm_') + '(\\d+)__,?\\s*$', 'i');
+	var markerAnywhere = new RegExp((markers.markerPrefix || '__cfm_') + '\\d+__', 'i');
+	var nextMarker = 0;
 
 	for (var i = 0; i < lines.length; i++) {
 		var line = lines[i];
@@ -827,7 +857,8 @@ function restoreStructuralCFMLMarkers(formatted, markers) {
 		if (match) {
 			var indent = match[1];
 			var idx = parseInt(match[2], 10);
-			if (idx < 0 || idx >= markers.length) return null;
+			if (idx !== nextMarker || idx >= markers.length) return null;
+			nextMarker++;
 			consumed[idx] = true;
 			var marker = markers[idx];
 			if (marker.kind === 'OPEN') {
@@ -846,6 +877,7 @@ function restoreStructuralCFMLMarkers(formatted, markers) {
 				return null;
 			}
 		} else {
+			if (markerAnywhere.test(line)) return null;
 			if (bodyDepth > 0) {
 				var pad = '';
 				for (var p = 0; p < bodyDepth; p++) pad += '\t';
@@ -896,7 +928,7 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 			return normalizeCFMLTagsInSafeText(text);
 		} catch (err) {
 			if (typeof console !== 'undefined' && console.warn) {
-				console.warn('[deep-format] Phase 2 CFML normalization failed, leaving text unchanged. Error:', err && err.message);
+				console.warn('[deep-format] Phase 2 CFML normalization failed; leaving text unchanged.');
 			}
 			return text;
 		}
@@ -905,6 +937,7 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 	if (doSql) {
 		out = replaceEmbeddedBlock(out, 'cfquery', function(parentIndent, openTag, body, closeTag) {
 			var currentIndex = cfqueryIndex++;
+			function formatQueryBody() {
 
 			// Structural CFML control flow inside <cfquery> is incompatible
 			// with SQL formatters that normalize whitespace around tokens.
@@ -931,7 +964,7 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 					var safeBody = normalizeSafeStructuralBody(normalizeStructuralCFMLTags(body));
 					return maybeNormalizeCFMLTags(
 						parentIndent + openTag + '\n'
-						+ indentEmbeddedBody(safeBody, parentIndent) + '\n'
+						+ indentSQLBody(safeBody, parentIndent) + '\n'
 						+ parentIndent + closeTag
 					);
 				}
@@ -987,7 +1020,7 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 							if (markerRestored !== null) {
 								return maybeNormalizeCFMLTags(
 									parentIndent + openTag + '\n'
-									+ indentEmbeddedBody(markerRestored, parentIndent) + '\n'
+									+ indentSQLBody(markerRestored, parentIndent) + '\n'
 									+ parentIndent + closeTag
 								);
 							}
@@ -995,7 +1028,7 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 					} catch (markerErr) {
 						// Marker approach threw — fall through to verbatim
 						if (typeof console !== 'undefined' && console.warn) {
-							console.warn('[deep-format] Tier 1 marker injection failed (cfquery #' + currentIndex + '), falling back to next tier. Error:', markerErr && markerErr.message, '\nDialect:', sqlDialect, '\nSQL excerpt:', String(verbatimSource).slice(0, 300));
+							console.warn('[deep-format] Tier 1 marker injection failed (cfquery #' + currentIndex + '), falling back to next tier.');
 						}
 					}
 				}
@@ -1058,7 +1091,7 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 								} catch (postErr) {
 									formattedPost = '\t' + postInput;
 									if (typeof console !== 'undefined' && console.warn) {
-										console.warn('[deep-format] Phase 3 post-cfif clause uppercase failed (cfquery #' + currentIndex + '), keeping verbatim. Error:', postErr && postErr.message);
+										console.warn('[deep-format] Phase 3 post-cfif clause uppercase failed (cfquery #' + currentIndex + '); keeping verbatim.');
 									}
 								}
 							}
@@ -1070,14 +1103,14 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 
 							return maybeNormalizeCFMLTags(
 								parentIndent + openTag + '\n'
-								+ indentEmbeddedBody(assembled, parentIndent) + '\n'
+								+ indentSQLBody(assembled, parentIndent) + '\n'
 								+ parentIndent + closeTag
 							);
 						}
 					} catch (hoistErr) {
 						// Phase 3 failed — fall through to Tier 2
 						if (typeof console !== 'undefined' && console.warn) {
-							console.warn('[deep-format] Phase 3 WHERE hoisting failed (cfquery #' + currentIndex + '), falling back to Tier 2 verbatim. Error:', hoistErr && hoistErr.message, '\nDialect:', sqlDialect);
+							console.warn('[deep-format] Phase 3 WHERE hoisting failed (cfquery #' + currentIndex + '); falling back to Tier 2 verbatim.');
 						}
 					}
 				}
@@ -1130,13 +1163,13 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 
 							return maybeNormalizeCFMLTags(
 								parentIndent + openTag + '\n'
-								+ indentEmbeddedBody(assembledP4, parentIndent) + '\n'
+								+ indentSQLBody(assembledP4, parentIndent) + '\n'
 								+ parentIndent + closeTag
 							);
 						}
 					} catch (p4Err) {
 						if (typeof console !== 'undefined' && console.warn) {
-							console.warn('[deep-format] Phase 4 AND-leaves hoisting failed (cfquery #' + currentIndex + '), falling back to Tier 2 verbatim. Error:', p4Err && p4Err.message, '\nDialect:', sqlDialect);
+							console.warn('[deep-format] Phase 4 AND-leaves hoisting failed (cfquery #' + currentIndex + '); falling back to Tier 2 verbatim.');
 						}
 					}
 				}
@@ -1170,13 +1203,13 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 							} catch (upperErr) {
 								verbatimFinal = verbatimCleaned;
 								if (typeof console !== 'undefined' && console.warn) {
-									console.warn('[deep-format] Tier 2 keyword uppercase failed (cfquery #' + currentIndex + '), leaving body verbatim. Error:', upperErr && upperErr.message);
+									console.warn('[deep-format] Tier 2 keyword uppercase failed (cfquery #' + currentIndex + '); leaving body verbatim.');
 								}
 							}
 						}
 						return maybeNormalizeCFMLTags(
 							parentIndent + openTag + '\n'
-							+ indentEmbeddedBody(verbatimFinal, parentIndent) + '\n'
+							+ indentSQLBody(verbatimFinal, parentIndent) + '\n'
 							+ parentIndent + closeTag
 						);
 					}
@@ -1197,7 +1230,7 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 					formattedSQL = formatProSQLSync(protectedSQL.code, sqlDialect);
 				} catch (err) {
 					if (typeof console !== 'undefined' && console.warn) {
-						console.warn('[deep-format] Pro SQL formatter threw on cfquery #' + currentIndex + ', falling back to built-in beautifySQL. This is why your output lacks list-break / cfqueryparam lowercasing. Error:', err && err.message, '\nDialect:', sqlDialect, '\nProtected SQL excerpt:', protectedSQL.code.slice(0, 400));
+						console.warn('[deep-format] Pro SQL formatter failed on cfquery #' + currentIndex + ', falling back to built-in beautifySQL.');
 					}
 					formattedSQL = beautifySQL(protectedSQL.code);
 				}
@@ -1207,10 +1240,31 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 				}
 				formattedSQL = beautifySQL(protectedSQL.code);
 			}
-			var restoredSQL = restoreCFMLTokens(formattedSQL, protectedSQL.tokens);
+			var restoredSQL;
+			try {
+				restoredSQL = restoreCFMLTokens(formattedSQL, protectedSQL.tokens);
+			} catch (restoreErr) {
+				if (typeof console !== 'undefined' && console.warn) {
+					console.warn('[deep-format] SQL token restoration failed; preserving original query.');
+				}
+				return parentIndent + openTag
+					+ (originalBodies[currentIndex] !== undefined ? originalBodies[currentIndex] : body) + closeTag;
+			}
 			restoredSQL = cleanRestoredCFMLTokenSpacing(restoredSQL);
 
-			return maybeNormalizeCFMLTags(parentIndent + openTag + '\n' + indentEmbeddedBody(restoredSQL, parentIndent) + '\n' + parentIndent + closeTag);
+			return maybeNormalizeCFMLTags(parentIndent + openTag + '\n' + indentSQLBody(restoredSQL, parentIndent) + '\n' + parentIndent + closeTag);
+			}
+			var candidate = formatQueryBody();
+			var originalBody = originalBodies[currentIndex] !== undefined ? originalBodies[currentIndex] : body;
+			var expectedData = protectSQLData(originalBody);
+			var candidateClose = findClosingTagOutsideText(candidate, 'cfquery', candidate.indexOf(openTag) + openTag.length);
+			var candidateBody = candidateClose && candidate.slice(candidate.indexOf(openTag) + openTag.length, candidateClose.start);
+			var actualData = candidateBody === null || candidateBody === false ? null : protectSQLData(candidateBody);
+			if (!expectedData.safe || !actualData || !actualData.safe ||
+					JSON.stringify(expectedData.tokens) !== JSON.stringify(actualData.tokens)) {
+				return parentIndent + openTag + originalBody + closeTag;
+			}
+			return candidate;
 		});
 	}
 
@@ -1275,22 +1329,65 @@ function deepFormatEmbedded(cfmlCode, opts, originalSource) {
 			if (typeof applyValidatedJavaScriptIndentation === 'function') {
 				formattedJS = applyValidatedJavaScriptIndentation(formattedJS);
 			}
-			if (!verifyMixedJavaScriptTransformation(originalScript.body, formattedJS)) {
+			var emittedJS = '\n' + indentEmbeddedBody(formattedJS, parentIndent) + '\n' + parentIndent;
+			if (!verifyMixedJavaScriptTransformation(originalScript.body, emittedJS)) {
 				if (typeof notifyJavaScriptFallback === 'function') notifyJavaScriptFallback();
 				return parentIndent + openTag + originalScript.body + closeTag;
 			}
-			return parentIndent + openTag + '\n' + indentEmbeddedBody(formattedJS, parentIndent) + '\n' + parentIndent + closeTag;
+			return parentIndent + openTag + emittedJS + closeTag;
 		});
 	}
 
 	if (doCss) {
+		var originalStyleBodies = extractCSSStyleBodies(originalSource);
+		var styleIndex = 0;
 		out = replaceEmbeddedBlock(out, 'style', function(parentIndent, openTag, body, closeTag) {
-			if (body.trim() == "") {
+			var originalBody = originalStyleBodies[styleIndex++];
+			var hasOriginalBody = typeof originalBody === 'string';
+			var cssBody = body;
+			var originalProtected = hasOriginalBody ? collectCSSProtectedSegments(originalBody) : null;
+			var currentProtected = collectCSSProtectedSegments(body);
+			if (hasOriginalBody && !sameCSSProtectedSegments(originalProtected, currentProtected)) {
+				/* beautifyCFML runs before this pass and may rewrite indentation
+				 * inside escaped CSS strings, comments, CFML tags, or #expressions.
+				 * Those bytes belong to the style body, so use the pre-outer-pass
+				 * body instead of trying to recover from the already changed one. */
+				cssBody = originalBody;
+				if (typeof console !== 'undefined' && console.warn) {
+					console.warn('[deep-format] CSS protected content changed by outer formatting; using original <style> body.');
+				}
+			}
+
+			if (cssBody.trim() == "") {
 				return parentIndent + openTag + body + closeTag;
 			}
 
-			var formattedCSS = formatCSSCode(cleanEmbeddedBody(body));
-			return parentIndent + openTag + '\n' + indentEmbeddedBody(formattedCSS, parentIndent) + '\n' + parentIndent + closeTag;
+			var normalizedCSSBody = cleanEmbeddedBody(cssBody);
+			var formattedCSS = formatCSSCode(normalizedCSSBody);
+			if (hasOriginalBody && originalProtected && originalProtected.safe) {
+				var normalizedOriginal = cleanEmbeddedBody(originalBody);
+				var candidateProtected = collectCSSProtectedSegments(formattedCSS);
+				var expectedProtected = collectCSSProtectedSegments(normalizedOriginal);
+				if (!sameCSSProtectedSegments(expectedProtected, candidateProtected)) {
+					/* The formatter is intentionally conservative: if a future CSS
+					 * branch changes an opaque span, emit the normalized original body
+					 * rather than returning a damaged candidate. */
+					formattedCSS = normalizedOriginal;
+					if (typeof console !== 'undefined' && console.warn) {
+						console.warn('[deep-format] CSS candidate changed protected content; preserving original <style> body.');
+					}
+				}
+			}
+			var candidateBody = '\n' + indentEmbeddedBody(formattedCSS, parentIndent) + '\n' + parentIndent;
+			// Indentation itself can alter a continuation inside a string or comment.
+			// Compare after every formatting pass, against the original opaque spans.
+			if (hasOriginalBody && !sameCSSProtectedSegments(originalProtected, collectCSSProtectedSegments(candidateBody))) {
+				if (typeof console !== 'undefined' && console.warn) {
+					console.warn('[deep-format] CSS content cannot be safely formatted; preserving original <style> body.');
+				}
+				candidateBody = originalBody;
+			}
+			return parentIndent + openTag + candidateBody + closeTag;
 		});
 	}
 
@@ -1310,7 +1407,7 @@ function replaceEmbeddedBlock(code, tagName, formatter) {
 		while (true) {
 			var candidate = openRegex.exec(code);
 			if (!candidate) break;
-			if (isInsideCommentOrString(code, candidate.index)) {
+			if (isInsideCommentOrString(code.slice(index), candidate.index - index)) {
 				continue;
 			}
 			openMatch = candidate;
@@ -1389,6 +1486,26 @@ function isInsideCommentOrString(code, pos) {
 			i = markupEnd - 1;
 			continue;
 		}
+		/* A preceding raw-text element has its own lexical rules. In
+		 * particular, quotes inside JS regex literals are not HTML quotes.
+		 * Skip its complete body rather than letting it hide later blocks;
+		 * candidates inside that body must still not become markup blocks. */
+		if (c === '<') {
+			var rawOpen = code.slice(i).match(/^<(script|style)\b/i);
+			if (rawOpen) {
+				var rawTagEnd = findCFMLTagClose(code.slice(i));
+				if (rawTagEnd === -1 || i + rawTagEnd >= pos) return true;
+				var rawContentStart = i + rawTagEnd + 1;
+				if (/\/\s*>$/.test(code.slice(i, rawContentStart))) {
+					i = rawContentStart - 1;
+					continue;
+				}
+				var rawClose = findClosingTagOutsideText(code, rawOpen[1], rawContentStart);
+				if (!rawClose || rawClose.start >= pos) return true;
+				i = rawClose.end - 1;
+				continue;
+			}
+		}
 		if (c == '"' || c == "'" || c == '`') { quote = c; continue; }
 	}
 	return inLine || inBlock || quote != "";
@@ -1400,6 +1517,10 @@ function findClosingTagOutsideText(code, tagName, startIndex) {
 	var quote = "";
 	var inLineComment = false;
 	var inBlockComment = false;
+	var isScript = tagName.toLowerCase() === 'script';
+	var lastScriptToken = null;
+	var scriptParens = [];
+	var controlKeyword = false;
 
 	for (var i = startIndex; i < code.length; i++) {
 		var char = code[i];
@@ -1424,8 +1545,17 @@ function findClosingTagOutsideText(code, tagName, startIndex) {
 			// JS strings and templates use backslash escapes; CFML/SQL use
 			// doubled quotes and treat a backslash as an ordinary character.
 			if (tagName.toLowerCase() === 'script' && char === '\\') { i++; continue; }
+			/* CSS strings use backslash escapes, including an escaped physical
+			 * newline. Keep `</style>` inside `"...\"</style>..."` and the
+			 * continuation line inside the style body. This branch is deliberately
+			 * style-only; CFML/SQL quote rules above remain unchanged. */
+			if (tagName.toLowerCase() === 'style' && char === '\\') {
+				if (nextChar === '\r' && code[i + 2] === '\n') i += 2;
+				else i++;
+				continue;
+			}
 			if (char == quote) {
-				if (tagName.toLowerCase() !== 'script' && (quote == "'" || quote == '"') && nextChar == quote) {
+				if (tagName.toLowerCase() !== 'script' && tagName.toLowerCase() !== 'style' && (quote == "'" || quote == '"') && nextChar == quote) {
 					i++;
 					continue;
 				}
@@ -1449,15 +1579,20 @@ function findClosingTagOutsideText(code, tagName, startIndex) {
 
 		if (tagName.toLowerCase() === 'script' && char === '<' && /^<\/?cf[a-z]/i.test(code.slice(i))) {
 			var cfTagClose = findCFMLTagClose(code.slice(i));
-			if (cfTagClose !== -1) { i += cfTagClose; continue; }
+			if (cfTagClose !== -1) { i += cfTagClose; lastScriptToken = 'operator'; continue; }
+		}
+		if (tagName.toLowerCase() === 'style' && char === '\\') {
+			if (nextChar === '\r' && code[i + 2] === '\n') i += 2;
+			else i++;
+			continue;
 		}
 
-		if (char == '-' && nextChar == '-' && tagName.toLowerCase() !== 'script') {
+		if (char == '-' && nextChar == '-' && tagName.toLowerCase() !== 'script' && tagName.toLowerCase() !== 'style') {
 			inLineComment = true;
 			i++;
 			continue;
 		}
-		if (char == '/' && nextChar == '/') {
+		if (char == '/' && nextChar == '/' && tagName.toLowerCase() !== 'style') {
 			inLineComment = true;
 			i++;
 			continue;
@@ -1467,8 +1602,27 @@ function findClosingTagOutsideText(code, tagName, startIndex) {
 			i++;
 			continue;
 		}
+		if (isScript && char === '/' && (lastScriptToken === null || lastScriptToken === 'operator')) {
+			var regexEnd = i + 1;
+			var inClass = false;
+			while (regexEnd < code.length && code[regexEnd] !== '\n' && code[regexEnd] !== '\r') {
+				var regexChar = code[regexEnd];
+				if (regexChar === '\\') { regexEnd += 2; continue; }
+				if (regexChar === '[') inClass = true;
+				else if (regexChar === ']') inClass = false;
+				else if (regexChar === '/' && !inClass) break;
+				regexEnd++;
+			}
+			if (code[regexEnd] === '/') {
+				i = regexEnd;
+				while (/[a-z]/i.test(code[i + 1] || '')) i++;
+				lastScriptToken = 'value';
+				continue;
+			}
+		}
 		if (char == "'" || char == '"' || char == '`') {
 			quote = char;
+			if (isScript) lastScriptToken = 'value';
 			continue;
 		}
 		if (lowerCode.slice(i, i + closeTag.length) == closeTag
@@ -1477,18 +1631,106 @@ function findClosingTagOutsideText(code, tagName, startIndex) {
 			while (end < code.length && /[ \t\r\n]/.test(code[end])) end++;
 			if (code[end] == '>') return { start: i, end: end + 1 };
 		}
+		if (isScript && !/\s/.test(char)) {
+			if (/[A-Za-z_$]/.test(char)) {
+				var wordStart = i;
+				while (/[A-Za-z0-9_$]/.test(code[i + 1] || '')) i++;
+				var word = code.slice(wordStart, i + 1);
+				controlKeyword = /^(?:if|while|for|with|switch|catch)$/.test(word);
+				lastScriptToken = REGEX_CONTEXT_KEYWORDS[word] ? 'operator' : 'value';
+			} else if (/[0-9]/.test(char)) {
+				while (/[A-Za-z0-9_.]/.test(code[i + 1] || '')) i++;
+				lastScriptToken = 'value';
+			} else if (char === '(') {
+				scriptParens.push(controlKeyword);
+				controlKeyword = false;
+				lastScriptToken = 'operator';
+			} else if (char === ')') {
+				lastScriptToken = scriptParens.pop() ? 'operator' : 'value';
+			} else {
+				lastScriptToken = char === ']' ? 'value' : 'operator';
+				controlKeyword = false;
+			}
+		}
 	}
 
 	return null;
 }
 
+/* Keep SQL data opaque through whitespace cleanup and indentation. The same
+ * spans are compared with the pre-outer-pass body before emitting a query. */
+function protectSQLData(source) {
+	var tokens = createMarkerList(source, '__SQLDATA_');
+	var output = '';
+	var safe = true;
+	for (var i = 0; i < source.length;) {
+		var start = i;
+		var c = source[i];
+		var next = source[i + 1];
+		if (source.substr(i, 5) === '<!---') {
+			var commentEnd = findCFMLCommentEnd(source, i);
+			if (commentEnd === -1) { safe = false; break; }
+			output += source.slice(i, commentEnd);
+			i = commentEnd;
+			continue;
+		}
+		if (c === '<' && /^<\/?cf\w+\b/i.test(source.slice(i))) {
+			var tagEnd = findCFMLTagClose(source.slice(i));
+			if (tagEnd === -1) { safe = false; break; }
+			output += source.slice(i, i + tagEnd + 1);
+			i += tagEnd + 1;
+			continue;
+		}
+		var dollar = c === '$' && source.slice(i).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
+		if (dollar) {
+			var dollarEnd = source.indexOf(dollar[0], i + dollar[0].length);
+			if (dollarEnd === -1) { safe = false; break; }
+			i = dollarEnd + dollar[0].length;
+		} else if ((c === '-' && next === '-') || (c === '/' && next === '/')) {
+			i += 2;
+			while (i < source.length && source[i] !== '\n' && source[i] !== '\r') i++;
+		} else if (c === '/' && next === '*') {
+			var end = source.indexOf('*/', i + 2);
+			if (end === -1) { safe = false; break; }
+			i = end + 2;
+		} else if (c === "'" || c === '"' || c === '`' || c === '[') {
+			var close = c === '[' ? ']' : c;
+			i++;
+			var closed = false;
+			while (i < source.length) {
+				if (source[i] === '\\' && c !== '[') { i += 2; continue; }
+				if (source[i] === close) {
+					if (source[i + 1] === close) { i += 2; continue; }
+					i++;
+					closed = true;
+					break;
+				}
+				i++;
+			}
+			if (!closed) { safe = false; break; }
+		} else {
+			output += c;
+			i++;
+			continue;
+		}
+		output += tokens.markerPrefix + tokens.length + '__';
+		tokens.push(source.slice(start, i));
+	}
+	if (!safe) output += source.slice(i);
+	return { code: output, tokens: tokens, safe: safe };
+}
+
+function restoreSQLData(code, protectedData) {
+	return restoreUniqueMarkers(code, protectedData.tokens, '__SQLDATA_');
+}
+
 function protectCFMLTokens(sqlBody) {
-	var tokens = [];
+	var tokens = createMarkerList(sqlBody, '__CFTOKEN_');
 	var code = "";
 	var i = 0;
 
 	function addToken(value) {
-		var id = '__CFTOKEN_' + tokens.length + '__';
+		var id = tokens.markerPrefix + tokens.length + '__';
 		tokens.push(value);
 		return id;
 	}
@@ -1527,7 +1769,16 @@ function protectCFMLTokens(sqlBody) {
 			i += commentValue.length;
 			continue;
 		}
-		var tokenMatch = rest.match(/^(<cfqueryparam\b[^>]*\/?>|<\/?cf\w+\b[^>]*>|##|#(?:##|[^#])+#)/i);
+		if (/^<\/?cf\w+\b/i.test(rest)) {
+			var tagEnd = findCFMLTagClose(rest);
+			if (tagEnd !== -1) {
+				var tag = rest.slice(0, tagEnd + 1);
+				code += addToken(tag);
+				i += tag.length;
+				continue;
+			}
+		}
+		var tokenMatch = rest.match(/^(##|#(?:##|[^#])+#)/);
 		if (tokenMatch) {
 			code += addToken(tokenMatch[0]);
 			i += tokenMatch[0].length;
@@ -1545,19 +1796,21 @@ function protectCFMLTokens(sqlBody) {
 }
 
 function restoreCFMLTokens(code, tokens) {
-	for (var i = 0; i < tokens.length; i++) {
-		code = code.split('__CFTOKEN_' + i + '__').join(tokens[i]);
-	}
-	return code;
+	var restored = restoreUniqueMarkers(code, tokens, '__CFTOKEN_');
+	if (restored === null) throw new Error('Unable to restore protected SQL tokens safely');
+	return restored;
 }
 
 function cleanRestoredCFMLTokenSpacing(code) {
-	var cleaned = code
+	var protectedData = protectSQLData(code);
+	if (!protectedData.safe) return code;
+	var cleaned = protectedData.code
 		.replace(/\s+(<\/cf\w+\b[^>]*>)/gi, '$1')
 		.replace(/(<\/?cf\w+\b[^>]*>)(and|or)\s*\(/gi, function(match, cfTag, operator) {
 			return cfTag + operator.toUpperCase() + ' (';
 		});
-	return splitMergedSQLComments(cleaned);
+	var restored = restoreSQLData(splitMergedSQLComments(cleaned), protectedData);
+	return restored === null ? code : restored;
 }
 
 /* sql-formatter is fed CFML markup comments (`<!--- ... --->`) masked as
@@ -1702,6 +1955,13 @@ function indentEmbeddedBody(body, parentIndent) {
 		}
 		return parentIndent + '\t' + line;
 	}).join('\n');
+}
+
+function indentSQLBody(body, parentIndent) {
+	var protectedData = protectSQLData(body);
+	if (!protectedData.safe) return body;
+	var restored = restoreSQLData(indentEmbeddedBody(protectedData.code, parentIndent), protectedData);
+	return restored === null ? body : restored;
 }
 
 /* Count SQL parenthesis changes after hiding quoted strings and CFML tokens.
@@ -2112,31 +2372,363 @@ function restoreBraceCodeCFMLTags(code, tags) {
 	return code;
 }
 
+function findCSSMarkupCommentEnd(code, start) {
+	if (typeof findMarkupCommentEnd === 'function') {
+		return findMarkupCommentEnd(code, start);
+	}
+	var marker = code.substr(start, 5) === '<!---' ? '--->' : '-->';
+	var close = code.indexOf(marker, start + marker.length);
+	return close === -1 ? -1 : close + marker.length;
+}
+
+function extractCSSStyleBodies(source) {
+	var bodies = [];
+	if (typeof source !== 'string') return bodies;
+	replaceEmbeddedBlock(source, 'style', function(parentIndent, openTag, body, closeTag) {
+		bodies.push(body);
+		return parentIndent + openTag + body + closeTag;
+	});
+	return bodies;
+}
+
+function findCSSStringEnd(code, start) {
+	var quote = code[start];
+	for (var i = start + 1; i < code.length; i++) {
+		if (code[i] === '\\') {
+			if (code[i + 1] === '\r' && code[i + 2] === '\n') i += 2;
+			else i++;
+			continue;
+		}
+		if (code[i] === quote) return i + 1;
+		if (code[i] === '\n' || code[i] === '\r') return -1;
+	}
+	return -1;
+}
+
+function findCSSHashExpressionEnd(code, start) {
+	var quote = null;
+	var parenDepth = 0;
+	var braceDepth = 0;
+	for (var i = start + 1; i < code.length; i++) {
+		var char = code[i];
+		if (quote) {
+			if (char === quote) {
+				if (code[i + 1] === quote) i++;
+				else quote = null;
+			}
+			continue;
+		}
+		if (char === "'" || char === '"') {
+			quote = char;
+			continue;
+		}
+		if (char === '(') {
+			parenDepth++;
+			continue;
+		}
+		if (char === ')' && parenDepth > 0) {
+			parenDepth--;
+			continue;
+		}
+		if (char === '{') {
+			braceDepth++;
+			continue;
+		}
+		if (char === '}') {
+			if (braceDepth === 0) return -1;
+			braceDepth--;
+			continue;
+		}
+		if (char === ';' && braceDepth === 0) return -1;
+		if ((char === '\n' || char === '\r') && parenDepth === 0 && braceDepth === 0) return -1;
+		if (char === '#' && code[i + 1] === '#') {
+			i++;
+			continue;
+		}
+		if (char === '#' && parenDepth === 0) return i + 1;
+	}
+	return -1;
+}
+
+function collectCSSProtectedSegments(code) {
+	var segments = [];
+	var i = 0;
+	while (i < code.length) {
+		var char = code[i];
+		var next = code[i + 1];
+		if (char === '\\') {
+			var escapeEnd = i + (next === '\r' && code[i + 2] === '\n' ? 3 : 2);
+			if (next === '\n' || next === '\r') {
+				while (code[escapeEnd] === ' ' || code[escapeEnd] === '\t') escapeEnd++;
+			}
+			segments.push(code.slice(i, escapeEnd));
+			i = escapeEnd;
+			continue;
+		}
+		if (char === '/' && next === '*') {
+			var blockEnd = code.indexOf('*/', i + 2);
+			if (blockEnd === -1) return { safe: false, segments: segments };
+			blockEnd += 2;
+			segments.push(code.slice(i, blockEnd));
+			i = blockEnd;
+			continue;
+		}
+		if (char === '/' && next === '/' && (i === 0 || /[\s{;]/.test(code[i - 1]))) {
+			var lineEnd = code.indexOf('\n', i + 2);
+			if (lineEnd === -1) lineEnd = code.length;
+			segments.push(code.slice(i, lineEnd));
+			i = lineEnd;
+			continue;
+		}
+		if (char === '<' && (code.substr(i, 5) === '<!---' || code.substr(i, 4) === '<!--')) {
+			var markupEnd = findCSSMarkupCommentEnd(code, i);
+			if (markupEnd === -1) return { safe: false, segments: segments };
+			segments.push(code.slice(i, markupEnd));
+			i = markupEnd;
+			continue;
+		}
+		if (char === '<' && /^<\/?cf\w/i.test(code.slice(i))) {
+			var tagClose = findCFMLTagClose(code.slice(i));
+			if (tagClose === -1) return { safe: false, segments: segments };
+			tagClose += i + 1;
+			segments.push(code.slice(i, tagClose));
+			i = tagClose;
+			continue;
+		}
+		if (char === '"' || char === "'") {
+			var stringEnd = findCSSStringEnd(code, i);
+			if (stringEnd === -1) return { safe: false, segments: segments };
+			segments.push(code.slice(i, stringEnd));
+			i = stringEnd;
+			continue;
+		}
+		if (char === '#' && next !== '#') {
+			var hashEnd = findCSSHashExpressionEnd(code, i);
+			if (hashEnd !== -1) {
+				segments.push(code.slice(i, hashEnd));
+				i = hashEnd;
+				continue;
+			}
+		}
+		i++;
+	}
+	return { safe: true, segments: segments };
+}
+
+function sameCSSProtectedSegments(left, right) {
+	if (!left || !right || !left.safe || !right.safe) return false;
+	if (left.segments.length !== right.segments.length) return false;
+	for (var i = 0; i < left.segments.length; i++) {
+		if (left.segments[i] !== right.segments[i]) return false;
+	}
+	return true;
+}
+
+function scanCSSRuleBoundaries(code) {
+	var output = '';
+	var i = 0;
+	while (i < code.length) {
+		var char = code[i];
+		var next = code[i + 1];
+		if (char === '\\') {
+			var escapeLength = next === '\r' && code[i + 2] === '\n' ? 3 : 2;
+			output += code.slice(i, i + escapeLength);
+			i += escapeLength;
+			continue;
+		}
+		if (char === '/' && next === '*') {
+			var blockEnd = code.indexOf('*/', i + 2);
+			if (blockEnd === -1) return { code: code, safe: false };
+			blockEnd += 2;
+			output += code.slice(i, blockEnd);
+			i = blockEnd;
+			continue;
+		}
+		if (char === '/' && next === '/' && (i === 0 || /[\s{;]/.test(code[i - 1]))) {
+			var lineEnd = code.indexOf('\n', i + 2);
+			if (lineEnd === -1) lineEnd = code.length;
+			output += code.slice(i, lineEnd);
+			i = lineEnd;
+			continue;
+		}
+		if (char === '<' && (code.substr(i, 5) === '<!---' || code.substr(i, 4) === '<!--')) {
+			var markupEnd = findCSSMarkupCommentEnd(code, i);
+			if (markupEnd === -1) return { code: code, safe: false };
+			output += code.slice(i, markupEnd);
+			i = markupEnd;
+			continue;
+		}
+		if (char === '<' && /^<\/?cf\w/i.test(code.slice(i))) {
+			var tagClose = findCFMLTagClose(code.slice(i));
+			if (tagClose === -1) return { code: code, safe: false };
+			tagClose += i + 1;
+			output += code.slice(i, tagClose);
+			i = tagClose;
+			continue;
+		}
+		if (char === '"' || char === "'") {
+			var stringEnd = findCSSStringEnd(code, i);
+			if (stringEnd === -1) return { code: code, safe: false };
+			output += code.slice(i, stringEnd);
+			i = stringEnd;
+			continue;
+		}
+		if (char === '#' && next !== '#') {
+			var hashEnd = findCSSHashExpressionEnd(code, i);
+			if (hashEnd !== -1) {
+				output += code.slice(i, hashEnd);
+				i = hashEnd;
+				continue;
+			}
+		}
+		if (char === '}') {
+			var lookahead = i + 1;
+			while (lookahead < code.length && /\s/.test(code[lookahead])) lookahead++;
+			output += '}';
+			if (lookahead > i + 1 && lookahead < code.length) {
+				var selectorStart = code[lookahead];
+				if (/[.#A-Za-z_*\[]/.test(selectorStart)) {
+					output += '\n';
+					i = lookahead;
+					continue;
+				}
+			} else if (lookahead === i + 1 && lookahead < code.length
+					&& /[.#A-Za-z_*\[]/.test(code[lookahead])) {
+				output += '\n';
+				i = lookahead;
+				continue;
+			}
+			i++;
+			continue;
+		}
+		output += char;
+		i++;
+	}
+	return { code: output, safe: true };
+}
+
+function cssLineMetadata(code) {
+	var lines = [{ first: null, last: null, opaque: false }];
+	var line = 0;
+	var i = 0;
+
+	/* Mark only physical lines after an opaque region's first newline. The
+	 * opening line may still contain CSS code that should receive normal
+	 * structural indentation; continuation lines must remain byte-for-byte
+	 * relative to the embedded body so comment text is not trimmed. */
+	function advanceOpaque(end, preserveContinuation) {
+		while (i < end) {
+			if (code[i] === '\n') {
+				line++;
+				lines[line] = { first: null, last: null, opaque: preserveContinuation && i + 1 < end };
+			}
+			i++;
+		}
+	}
+
+	function addVisible(character) {
+		if (/\s/.test(character)) return;
+		if (!lines[line]) lines[line] = { first: null, last: null, opaque: false };
+		if (lines[line].first === null) lines[line].first = character;
+		lines[line].last = character;
+	}
+
+	while (i < code.length) {
+		var char = code[i];
+		var next = code[i + 1];
+		if (char === '\\') {
+			addVisible(char);
+			advanceOpaque(Math.min(code.length, i + (next === '\r' && code[i + 2] === '\n' ? 3 : 2)), true);
+			continue;
+		}
+		if (char === '/' && next === '*') {
+			var blockEnd = code.indexOf('*/', i + 2);
+			if (blockEnd !== -1) {
+				advanceOpaque(blockEnd + 2, true);
+				continue;
+			}
+		}
+		if (char === '<' && (code.substr(i, 5) === '<!---' || code.substr(i, 4) === '<!--')) {
+			var markupEnd = findCSSMarkupCommentEnd(code, i);
+			if (markupEnd !== -1) {
+				advanceOpaque(markupEnd, true);
+				continue;
+			}
+		}
+		if (char === '<' && /^<\/?cf\w/i.test(code.slice(i))) {
+			var tagClose = findCFMLTagClose(code.slice(i));
+			if (tagClose !== -1) {
+				advanceOpaque(i + tagClose + 1, true);
+				continue;
+			}
+		}
+		if (char === '"' || char === "'") {
+			var quoteEnd = findCSSStringEnd(code, i);
+			if (quoteEnd === -1) {
+				i = code.length;
+				break;
+			}
+			var stringHasNewline = /[\r\n]/.test(code.slice(i, quoteEnd));
+			advanceOpaque(quoteEnd, stringHasNewline);
+			continue;
+		}
+		if (char === '#' && next !== '#') {
+			var hashEnd = findCSSHashExpressionEnd(code, i);
+			if (hashEnd !== -1) {
+				advanceOpaque(hashEnd, /[\r\n]/.test(code.slice(i, hashEnd)));
+				continue;
+			}
+		}
+		if (char === '/' && next === '/' && (i === 0 || /[\s{;]/.test(code[i - 1]))) {
+			var lineEnd = code.indexOf('\n', i + 2);
+			if (lineEnd === -1) lineEnd = code.length;
+			advanceOpaque(lineEnd);
+			continue;
+		}
+		if (char === '\n') {
+			line++;
+			lines[line] = { first: null, last: null, opaque: false };
+			i++;
+			continue;
+		}
+		addVisible(char);
+		i++;
+	}
+	return lines;
+}
+
 function formatCSSCode(code) {
-	var normalized = code.replace(/}\s*(?=[.#A-Za-z_*[])/g, '}\n');
+	var scanned = scanCSSRuleBoundaries(code);
+	if (!scanned.safe) return code;
+	var normalized = scanned.code;
 	var lines = normalized.split('\n');
+	var metadata = cssLineMetadata(normalized);
 	var output = [];
 	var indentLevel = 0;
 
 	for (var i = 0; i < lines.length; i++) {
-		var line = lines[i].trim();
-		if (line == "") {
-			continue;
-		}
-
-		if (indentLevel < 0) {
-			indentLevel = 0;
-		}
-		if (line.startsWith("}")) {
+		var lineStructure = metadata[i] || { first: null, last: null, opaque: false };
+		if (lineStructure.first === '}') {
 			indentLevel -= 1;
 		}
 		if (indentLevel < 0) {
 			indentLevel = 0;
 		}
+		if (lineStructure.opaque) {
+			output.push(lines[i]);
+			if (lineStructure.last === '{') {
+				indentLevel += 1;
+			}
+			continue;
+		}
+		var line = lines[i].trim();
+		if (line == "") {
+			continue;
+		}
 
 		output.push(''.padStart(indentLevel, '\t') + line);
 
-		if (line.endsWith("{")) {
+		if (lineStructure.last === '{') {
 			indentLevel += 1;
 		}
 	}

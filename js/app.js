@@ -80,9 +80,7 @@ if (typeof document !== 'undefined' && document.querySelector) {
 	}
 })();
 
-/* Persist Semantic Indent (tree-sitter) opt-in across reloads. NOT gated by
- * Safe Mode: it is a whitespace-only transform (re-indents flat nested-call
- * chains; content is preserved — proven by tests/tree-sitter.test.mjs C4). */
+/* Persist Semantic Indent opt-in; Safe Mode temporarily disables it. */
 (function persistSemanticIndent() {
 	var KEY = 'cfb.semantic_indent';
 	function safeGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
@@ -160,25 +158,13 @@ if (typeof document !== 'undefined' && document.querySelector) {
 	}
 })();
 
-/* Safe Mode — one-click disable of all "content-shaped change" paths.
- *
- * When checked, force-unchecks AND disables (greys out) the four toggles
- * that can alter content beyond whitespace:
- *   - deep_sql / deep_css / deep_js  (home-rolled language formatters)
- *   - pro_sql                         (sql-formatter library rewrites SQL)
- *
- * What remains active: CFML auto-split (Rules A/B/C/D) + indent tracker.
- * Both are whitespace-only transformations (proven by 22 content-
- * preservation invariants in tests/run-tests.js). Use Safe Mode when
- * processing sensitive or production CFML where you cannot tolerate
- * even a cosmetic SQL keyword case change.
- *
- * Persisted in localStorage so a one-time opt-in survives reloads.
- * See docs/SAFETY.md for the full per-language risk evaluation.
- */
+/* Safe Mode temporarily disables the deep formatters and Semantic Indent.
+ * Standalone SQL/JS is returned unchanged by the formatter. CFML/HTML still
+ * uses the outer formatter; its output requires review.
+ * The user's prior option states are restored when Safe Mode is disabled. */
 (function persistSafeMode() {
 	var STORAGE_KEY = 'cfb.safe_mode';
-	var GATED_IDS = ['deep_sql', 'deep_css', 'deep_js', 'pro_sql'];
+	var GATED_IDS = ['deep_sql', 'deep_css', 'deep_js', 'pro_sql', 'semantic_indent'];
 
 	function safeGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
 	function safeSet(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }

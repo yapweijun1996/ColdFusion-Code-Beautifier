@@ -17,6 +17,10 @@ function swapUtf16Bytes(buffer, start) {
 
 function decodeSource(buffer) {
 	if (!Buffer.isBuffer(buffer)) buffer = Buffer.from(buffer);
+	if (((buffer[0] === 0xFE && buffer[1] === 0xFF)
+		|| (buffer[0] === 0xFF && buffer[1] === 0xFE)) && buffer.length % 2 !== 0) {
+		throw new Error('Invalid UTF-16 input: odd number of bytes after BOM.');
+	}
 	if (buffer[0] === 0xFE && buffer[1] === 0xFF) {
 		return {
 			text: swapUtf16Bytes(buffer, 2).toString('utf16le'),

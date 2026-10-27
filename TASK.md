@@ -5,13 +5,36 @@
 - **Current source baseline:** current `main`; full `npm test` passes with the completed nested-comment/encoding hardening.
 - **Latest product hardening:** depth-aware nested CFML comments, routed CRLF restoration, UTF-8/BOM-marked UTF-16 CLI encoding preservation, structural SQL fixed-point alignment, whitespace-tolerant raw closes, deep-JS CFML depth, bare-JS fragments in CFML, multi-line templates, and legacy script wrappers are present.
 - **Refactor epic:** in progress; a common Node script manifest and JavaScript verification guard are present, while broader formatter extraction remains pending.
-- **Next task:** complete the `R01`/`R02` characterization and golden baseline.
+- **Next task:** address the P0 mixed-language safety findings below, then complete the `R01`/`R02` characterization and golden baseline.
 - **External blockers:** none.
 - **Sequencing:** the shared manifest and safety guard were implemented alongside the characterization baseline; broader extraction remains gated on completing it.
 - **Known coverage/tooling gaps:** full mixed-language characterization, source mapping and parser-backed indentation remain open.
 - **Privacy constraint:** tracked/CI fixtures must be synthetic; private `sample/*.cfm` remains ignored.
 
 Machine-readable status is mirrored in [task.jsonl](task.jsonl).
+
+## Mixed-language safety and maintenance backlog
+
+The following findings were observed against the local CLI on 2026-10-27; they do not establish the behavior of a published package. The original `npm test` did not detect the CSS or SQL corruption. Local fixes and synthetic Chrome and Lucee checks are recorded below; no business page or database was exercised.
+
+| ID | Priority | Task | Status |
+|---|:-:|---|---|
+| S01 | P0 | Preserve CSS strings and comments during Deep CSS formatting; add semantic regression coverage | in progress — targeted fix and synthetic browser checks; broader CSS/CFML semantics remain unverified |
+| S02 | P0 | Prevent CFML-token placeholder collisions in SQL; add collision and restoration regression coverage | in progress — targeted fix and formatter regressions; Lucee/ColdFusion execution remains unverified |
+| S03 | P0 | Preserve whitespace-sensitive HTML output, including adjacent inline elements and preformatted text; verify in a real browser | done — synthetic Lucee 6.2.2.91 and Chrome comparisons pass for the covered cases |
+| S04 | P1 | Extend mixed-language safety fixtures and real-browser smoke coverage; complete R01/R02 before core extraction | in progress — literal, SQL and filesystem regressions added; full characterization remains pending |
+| S05 | P1 | Verify the declared Node support range in CI and establish a supported Node/OS test matrix | pending |
+| S06 | P1 | Audit Pro SQL fallback logging for source disclosure and CLI output overwrites; define and test safe behavior | done — SQL fallback warnings omit source/exception text; default and input-alias output protection have focused CLI tests |
+| S07 | P1 | Document vendored dependency versions, provenance, integrity verification, and upgrade process | pending |
+
+### Reproduced cases and acceptance criteria
+
+- **S01:** In a `<style>` block, `content: "}b";` is split by a newline inside the string with default Deep CSS enabled. `--no-deep-css` preserved this example. Preserve string/comment contents and CSS semantics across normal and mixed-CFML cases; verify the default and disabled paths.
+- **S02:** A `<cfquery>` containing `SELECT __CFTOKEN_0__` and a `<cfqueryparam>` replaced the identifier with the parameter tag under default Deep SQL; the CLI exited successfully. `--no-deep-sql` preserved this example. Preserve user identifiers, literals, comments, CFML tokens and their order across built-in, Pro SQL and fallback paths, including marker-like input.
+- **S03:** The browser/CLI pipeline restores original text around recognized HTML/CFML tags. Synthetic Lucee 6.2.2.91 pages were compared in Chrome across true/false CFML branches, `cfinclude`, dynamic values, adjacent text, `<pre>`, `<textarea>` and CSS whitespace. Three formatter configurations preserved server responses for one fixture; a second fixture changed both CSS and JavaScript formatting while preserving browser text, computed color and script result in both branches. Tests do not establish behavior for every template or CFML engine. The guard can leave bare JavaScript fragments inside CFML conditionals unchanged.
+- **S04–S07:** Keep private source out of fixtures and logs. Record actual tested environments and update safety guidance when behavior is fixed. Idempotency and whitespace-normalized comparisons alone do not prove semantic equivalence.
+
+Until these are resolved, preserve originals and review output; disabling Deep CSS or Deep SQL only avoids the two specific reproduced examples and does not establish whole-file safety.
 
 ## Refactor tasks
 
@@ -96,7 +119,7 @@ Detailed original findings remain in [docs/UI-UX-AUDIT-2026-05-11.md](docs/UI-UX
 
 ## Next-step order
 
-1. Implement R01/R02 only and review the test baseline.
-2. Implement R03/R04 harness consolidation.
-3. Begin low-risk extraction at R05.
-4. Stop immediately on unexplained output drift.
+1. Reproduce and fix S01/S02 with targeted regression tests; investigate and address S03 with browser evidence.
+2. Complete the mixed-language characterization and R01/R02 test baseline, including S04.
+3. Address S05–S07, then implement R03/R04 harness consolidation.
+4. Begin low-risk extraction at R05; stop immediately on unexplained output drift.

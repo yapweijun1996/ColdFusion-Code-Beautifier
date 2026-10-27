@@ -207,7 +207,7 @@
 		state.busy = false;
 		setBeautifyBusy(false);
 		if (result === false) {
-			notify('Input changed while formatting; the result was not applied.');
+			notify('Input or formatting options changed while formatting; the result was not applied.');
 		}
 	}
 

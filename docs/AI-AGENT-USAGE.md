@@ -100,6 +100,10 @@ The source remains unchanged and the default output is:
 path/to/source_beutifier.cfm
 ```
 
+Default file output fails if the destination already exists. Explicit `--output`
+can replace another destination but cannot refer to the input or its hard-link
+alias. Use `--stdout` to preview without writing an output file.
+
 For an agent working with a buffer:
 
 ```bash
@@ -132,6 +136,7 @@ continuation-alignment preservation. Disable stages with `--no-deep-sql`,
   small Node VM-backed DOM harness.
 - UTF-8 (with/without BOM) and BOM-marked UTF-16LE/UTF-16BE inputs are decoded
   and written back using the same encoding/BOM; LF/CRLF style is also preserved.
+  BOM-marked UTF-16 with an odd byte count is rejected.
 - Semantic Indent is currently browser-only and remains opt-in.
 - The `_beutifier.cfm` spelling is intentional for compatibility with the
   existing project output convention.

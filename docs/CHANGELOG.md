@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Mixed-language and file safety
+
+- Preserve multiline CFML and JavaScript literal content, split only recognized tag boundaries, and prevent Semantic Indent from rewriting protected literal or comment content.
+- Keep closing-tag-like text inside raw script strings and preserve CSS escape continuations even when Deep CSS is disabled; retain the original style block when protected content changes.
+- Preserve embedded SQL literal/comment bytes, reject unsafe marker restoration per query, and validate emitted JavaScript after indentation. The built-in SQL formatter preserves numeric/parameter tokens and retains a dialect-ambiguous quoted suffix rather than guessing its interpretation.
+- Create default CLI output exclusively; explicit output cannot alias the input. Reject truncated BOM-marked UTF-16 with an odd byte count. Added focused literal, SQL and filesystem regression suites.
+- Safe Mode skips standalone SQL/JS formatting and disables Semantic Indent as well as deep formatting. Cancel pending formatting before output, copy or clear when captured formatting or output settings change; retain a user-visible cancellation message. SQL fallback diagnostics no longer log source text or parser exception messages.
+
 ### PWA user-controlled updates
 
 - Replaced automatic update reloads with a persistent `Update now` action toast when a new service worker is waiting.
