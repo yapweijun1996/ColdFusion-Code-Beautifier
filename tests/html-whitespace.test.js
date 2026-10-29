@@ -24,7 +24,6 @@ var cases = [
 	'<cfif flag><cfset value=1>A</cfif>',
 	'<cfif flag>\nif (ready) {\nrun();\n}\n</cfif>',
 	'<cfoutput><cfset x=1> A <cfset y=2> B </cfoutput>',
-	'<cfoutput>\n<cfif ok>\nvalue\n</cfif>\n</cfoutput>\n',
 	'<div><p style="display:inline">A</p><p style="display:inline">B</p></div>',
 	'<table><tr><td>foo</td><td>bar</td></tr></table>',
 	'<div><pre>A B\n  C\n\n D <b>x</b></pre><textarea>A B\n  C <b>x</b></textarea></div>',
@@ -43,6 +42,38 @@ cases.forEach(function(source, index) {
 		});
 });
 console.log('PASS HTML whitespace: inline, block-display, CFML, pre and textarea cases');
+
+var cfmlLines = '<cfoutput>\n<cfif ok>\nvalue\n</cfif>\n</cfoutput>\n';
+var cfmlLinesOutput = '<cfoutput>\n\t<cfif ok>\nvalue\n</cfif>\n</cfoutput>\n';
+assert.strictEqual(format(cfmlLines), cfmlLinesOutput, 'standalone CFML tags receive structural indentation');
+assert.strictEqual(format(cfmlLinesOutput), cfmlLinesOutput, 'standalone CFML indentation is idempotent');
+
+var misaligned = '<!--- header --->\n\t<cfset x=0>\n    <cfif flag>\n  <cfset x=1>\n'
+	+ '\t<cfelse>\n   <cfset x=2>\n    </cfif>\n<div><span>A</span> <span>B</span></div>';
+var aligned = '<!--- header --->\n<cfset x=0>\n<cfif flag>\n\t<cfset x=1>\n'
+	+ '<cfelse>\n\t<cfset x=2>\n</cfif>\n<div><span>A</span> <span>B</span></div>';
+assert.strictEqual(format(misaligned), aligned, 'align CFML branches while preserving inline HTML spacing');
+assert.strictEqual(format(aligned), aligned, 'aligned mixed document is idempotent');
+
+var loopAndAssignments = '<cfloop query="q">\n   <cfset x=1>\n     <cfset y=2>\n</cfloop>\n'
+	+ '<cfset width=700><cfset height=720><cfset inner=height>\n<div>text</div>';
+var loopAndAssignmentsOutput = '<cfloop query="q">\n\t<cfset x=1>\n\t<cfset y=2>\n</cfloop>\n'
+	+ '<cfset width=700>\n<cfset height=720>\n<cfset inner=height>\n<div>text</div>';
+assert.strictEqual(format(loopAndAssignments), loopAndAssignmentsOutput,
+	'loop assignments align and adjacent standalone assignments split');
+assert.strictEqual(format(loopAndAssignmentsOutput), loopAndAssignmentsOutput,
+	'loop and split assignments are idempotent');
+var inlineAssignments = '<div>Start<cfset x=1><cfset y=2>End</div>';
+assert.strictEqual(format(inlineAssignments), inlineAssignments, 'inline HTML text and CFML adjacency remain intact');
+
+var preWithCFML = '<pre>\n  <cfif flag>\n    <cfset x=1>\n  </cfif>\n</pre>';
+assert.strictEqual(format(preWithCFML), preWithCFML, 'CFML indentation inside preformatted text stays unchanged');
+
+var querySample = '<cfset x=0>\n    <cfquery name="q">\nSELECT id FROM items\n</cfquery>\n<div>text</div>';
+var queryOutput = format(querySample);
+assert.match(queryOutput, /(?:^|\r?\n)<cfquery\b[^>]*>\r?\n\tSELECT /,
+	'mixed CFML aligns the query and its SQL body');
+assert.strictEqual(format(queryOutput), queryOutput, 'mixed CFML query is idempotent');
 
 var styled = '<style>div { white-space: pre; }</style><div>A\n  B<span>C</span></div>';
 var styledOutput = format(styled);

@@ -443,6 +443,8 @@ function preserveRenderedHTMLWhitespace(original, formatted) {
 	var after = scanRenderedTextBoundaries(candidate);
 	if (!after || before.markers.length !== after.markers.length) return preserveOriginalHTML(source);
 	var result = '';
+	var preDepth = 0;
+	var previousStandaloneCFSet = false;
 	for (var i = 0; i < before.markers.length; i++) {
 		if (before.markers[i].key !== after.markers[i].key) return preserveOriginalHTML(source);
 		var key = before.markers[i].key;
@@ -478,7 +480,29 @@ function preserveRenderedHTMLWhitespace(original, formatted) {
 				}
 			}
 		}
-		result += (before.hasRenderedMarkup ? before.text[i] : after.text[i]) + formattedMarker;
+		var leadingText = before.hasRenderedMarkup ? before.text[i] : after.text[i];
+		var currentStandaloneCFSet = key === 'cfset'
+			&& (!/\S/.test(source.slice(source.lastIndexOf('\n', before.markers[i].start - 1) + 1, before.markers[i].start))
+				|| (previousStandaloneCFSet && before.text[i] === ''));
+		// Adjacent standalone assignments are split by the CFML formatter;
+		// retain that split without inserting whitespace into inline HTML text.
+		if (before.hasRenderedMarkup && preDepth === 0 && currentStandaloneCFSet
+				&& previousStandaloneCFSet && before.text[i] === ''
+				&& /^\s*\n\s*$/.test(after.text[i])) {
+			leadingText = after.text[i];
+		}
+		// Keep rendered text and existing line breaks, but allow the indentation
+		// before a standalone CFML tag to follow the structural formatter.
+		if (before.hasRenderedMarkup && preDepth === 0
+				&& /^(?:\/?cf[\w:-]+|raw:cf[\w:-]+|cf-comment)$/.test(key)
+				&& /^\s*\n[\s\S]*$/.test(leadingText) && !/\S/.test(leadingText)
+				&& /^\s*\n[\s\S]*$/.test(after.text[i]) && !/\S/.test(after.text[i])) {
+			leadingText = leadingText.replace(/[ \t]*$/, (after.text[i].match(/[ \t]*$/) || [''])[0]);
+		}
+		result += leadingText + formattedMarker;
+		if (key === 'pre') preDepth++;
+		else if (key === '/pre' && preDepth > 0) preDepth--;
+		previousStandaloneCFSet = currentStandaloneCFSet;
 	}
 	return result + (before.hasRenderedMarkup ? before.text[before.text.length - 1] : after.text[after.text.length - 1]);
 }
