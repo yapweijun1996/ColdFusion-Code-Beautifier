@@ -333,10 +333,27 @@ function splitAdjacentCFMLTags(code) {
 	return out;
 }
 
-/* Keep literal HTML text, including whitespace between tags, as authored.
- * CSS can change any element's display mode, so a fixed list of inline tags
- * cannot establish that inserted whitespace is harmless. Raw code blocks are
- * matched as units to leave their dedicated formatters in control. */
+function findRenderedCFMLExpressionEnd(source, start) {
+	var quote = null;
+	for (var i = start + 1; i < source.length; i++) {
+		var character = source[i];
+		if (quote) {
+			if (character === quote) {
+				if (source[i + 1] === quote) i++;
+				else quote = null;
+			}
+		} else if (character === '"' || character === "'") {
+			quote = character;
+		} else if (character === '#') {
+			if (source[i + 1] === '#') i++;
+			else return i;
+		}
+	}
+	return -1;
+}
+
+/* Keep inline text as authored while reconciling its line indentation.
+ * Raw code blocks are matched as units for their dedicated formatters. */
 function scanRenderedTextBoundaries(source) {
 	var markers = [];
 	var text = [];
@@ -349,22 +366,7 @@ function scanRenderedTextBoundaries(source) {
 		var hash = source.indexOf('#', scan);
 		if (hash !== -1 && hash < start) {
 			if (source[hash + 1] === '#') { scan = hash + 2; continue; }
-			var quote = null;
-			var expressionEnd = -1;
-			for (var h = hash + 1; h < source.length; h++) {
-				var character = source[h];
-				if (quote) {
-					if (character === quote) {
-						if (source[h + 1] === quote) h++;
-						else quote = null;
-					}
-				} else if (character === '"' || character === "'") {
-					quote = character;
-				} else if (character === '#') {
-					if (source[h + 1] === '#') h++;
-					else { expressionEnd = h; break; }
-				}
-			}
+			var expressionEnd = findRenderedCFMLExpressionEnd(source, hash);
 			if (expressionEnd === -1) return null;
 			scan = expressionEnd + 1;
 			continue;
@@ -430,6 +432,40 @@ function preserveOriginalHTML(source) {
 	return source;
 }
 
+function mergeRenderedTextIndentation(original, formatted) {
+	if (original.indexOf('\n') === -1) return original;
+	var sourceLines = original.split('\n');
+	var candidateLines = formatted.split('\n').filter(function(line) { return /\S/.test(line); });
+	var contentLines = sourceLines.filter(function(line) { return /\S/.test(line); });
+	if (contentLines.length !== candidateLines.length) return original;
+	for (var i = 0; i < contentLines.length; i++) {
+		if (contentLines[i].trim() !== candidateLines[i].trim()) return original;
+	}
+	// A hash expression is opaque after its opening line: indentation there
+	// may belong to a multiline string rather than to rendered HTML text.
+	var protectedRows = {};
+	var row = 0;
+	for (var pos = 0; pos < original.length; pos++) {
+		if (original[pos] === '\n') row++;
+		if (original[pos] !== '#') continue;
+		if (original[pos + 1] === '#') { pos++; continue; }
+		var end = findRenderedCFMLExpressionEnd(original, pos);
+		if (end === -1) return original;
+		while (pos < end) {
+			if (original[pos++] === '\n') protectedRows[++row] = true;
+		}
+	}
+	var contentIndex = 0;
+	return sourceLines.map(function(line, index) {
+		if (!/\S/.test(line)) return line;
+		var candidate = candidateLines[contentIndex++];
+		// The first gap line follows a tag on that same line. Its spaces
+		// separate inline content and must not become block indentation.
+		if (index === 0 || protectedRows[index]) return line;
+		return line.replace(/^[ \t]*/, candidate.match(/^[ \t]*/)[0]);
+	}).join('\n');
+}
+
 function preserveRenderedHTMLWhitespace(original, formatted) {
 	var source = original.replace(/\r\n?/g, '\n');
 	var candidate = formatted.replace(/\r\n?/g, '\n');
@@ -439,11 +475,15 @@ function preserveRenderedHTMLWhitespace(original, formatted) {
 		return /<style\b|<\/?(?!cf|script\b|style\b)[a-z][\w:-]*(?=[\s/>])/i.test(source) ? preserveOriginalHTML(source) : formatted;
 	}
 	var protectCSS = before.markers.some(function(marker) { return marker.key === 'raw:style'; });
+	var preserveStylesheetText = before.markers.some(function(marker) {
+		return marker.key === 'raw:style' && /\bwhite-space\s*:/i.test(source.slice(marker.start, marker.end));
+	});
 	if (!before.hasRenderedMarkup && !protectCSS) return formatted;
 	var after = scanRenderedTextBoundaries(candidate);
 	if (!after || before.markers.length !== after.markers.length) return preserveOriginalHTML(source);
 	var result = '';
-	var preDepth = 0;
+	var preformattedDepth = 0;
+	var htmlTextStack = [];
 	var previousStandaloneCFSet = false;
 	for (var i = 0; i < before.markers.length; i++) {
 		if (before.markers[i].key !== after.markers[i].key) return preserveOriginalHTML(source);
@@ -481,28 +521,62 @@ function preserveRenderedHTMLWhitespace(original, formatted) {
 			}
 		}
 		var leadingText = before.hasRenderedMarkup ? before.text[i] : after.text[i];
+		var preserveInlineWhitespace = htmlTextStack.some(function(element) {
+			return element.preserveWhitespace;
+		});
+		var preserveStyledText = preserveStylesheetText || preserveInlineWhitespace;
+		if (before.hasRenderedMarkup && preformattedDepth === 0 && !preserveStyledText && htmlTextStack.length > 0) {
+			leadingText = mergeRenderedTextIndentation(leadingText, after.text[i]);
+		}
+		var originalLinePrefix = source.slice(source.lastIndexOf('\n', before.markers[i].start - 1) + 1, before.markers[i].start);
+		var formattedLinePrefix = candidate.slice(candidate.lastIndexOf('\n', after.markers[i].start - 1) + 1, after.markers[i].start);
 		var currentStandaloneCFSet = key === 'cfset'
-			&& (!/\S/.test(source.slice(source.lastIndexOf('\n', before.markers[i].start - 1) + 1, before.markers[i].start))
+			&& (!/\S/.test(originalLinePrefix)
 				|| (previousStandaloneCFSet && before.text[i] === ''));
 		// Adjacent standalone assignments are split by the CFML formatter;
 		// retain that split without inserting whitespace into inline HTML text.
-		if (before.hasRenderedMarkup && preDepth === 0 && currentStandaloneCFSet
+		if (before.hasRenderedMarkup && preformattedDepth === 0 && !preserveInlineWhitespace && currentStandaloneCFSet
 				&& previousStandaloneCFSet && before.text[i] === ''
 				&& /^\s*\n\s*$/.test(after.text[i])) {
 			leadingText = after.text[i];
 		}
-		// Keep rendered text and existing line breaks, but allow the indentation
-		// before a standalone CFML tag to follow the structural formatter.
-		if (before.hasRenderedMarkup && preDepth === 0
-				&& /^(?:\/?cf[\w:-]+|raw:cf[\w:-]+|cf-comment)$/.test(key)
-				&& /^\s*\n[\s\S]*$/.test(leadingText) && !/\S/.test(leadingText)
-				&& /^\s*\n[\s\S]*$/.test(after.text[i]) && !/\S/.test(after.text[i])) {
-			leadingText = leadingText.replace(/[ \t]*$/, (after.text[i].match(/[ \t]*$/) || [''])[0]);
+		// Use one hierarchy for standalone HTML and CFML tags. Replace only
+		// their line prefix, even when earlier lines in this gap contain text.
+		if (before.hasRenderedMarkup && preformattedDepth === 0 && !preserveInlineWhitespace
+				&& /^[ \t]*$/.test(originalLinePrefix) && /^[ \t]*$/.test(formattedLinePrefix)) {
+			leadingText = leadingText.replace(/[ \t]*$/, formattedLinePrefix);
+		}
+		// A close whose opener was on a prior line belongs on its own line.
+		// Keep complete inline elements together, including nested same-name tags.
+		if (before.hasRenderedMarkup && preformattedDepth === 0 && !preserveStyledText
+				&& key[0] === '/' && /\S/.test(originalLinePrefix) && /^[ \t]*$/.test(formattedLinePrefix)) {
+			var closeName = key.slice(1);
+			var inlineDepth = 1;
+			var lineStart = before.markers[i].start - originalLinePrefix.length;
+			for (var prior = i - 1; prior >= 0 && before.markers[prior].start >= lineStart; prior--) {
+				if (before.markers[prior].key === key) inlineDepth++;
+				else if (before.markers[prior].key === closeName && --inlineDepth === 0) break;
+			}
+			if (inlineDepth !== 0) leadingText += '\n' + formattedLinePrefix;
 		}
 		result += leadingText + formattedMarker;
-		if (key === 'pre') preDepth++;
-		else if (key === '/pre' && preDepth > 0) preDepth--;
+		if (key === 'pre' || key === 'textarea') preformattedDepth++;
+		else if ((key === '/pre' || key === '/textarea') && preformattedDepth > 0) preformattedDepth--;
 		previousStandaloneCFSet = currentStandaloneCFSet;
+		var htmlTag = /^(\/?)([a-z][\w:-]*)$/.exec(key);
+		if (htmlTag && htmlTag[2].slice(0, 2) !== 'cf' && key !== 'html-comment'
+				&& key !== 'doctype' && key.slice(0, 4) !== 'raw:') {
+			if (htmlTag[1]) {
+				var htmlOpen = htmlTextStack.length - 1;
+				while (htmlOpen >= 0 && htmlTextStack[htmlOpen].name !== htmlTag[2]) htmlOpen--;
+				if (htmlOpen !== -1) htmlTextStack.length = htmlOpen;
+			} else if (isIndentingTag(htmlTag[2]) && !/\/\s*>$/.test(originalMarker)) {
+				htmlTextStack.push({
+					name: htmlTag[2],
+					preserveWhitespace: /\bstyle\s*=\s*(?:"[^"]*\bwhite-space\s*:|'[^']*\bwhite-space\s*:)/i.test(originalMarker)
+				});
+			}
+		}
 	}
 	return result + (before.hasRenderedMarkup ? before.text[before.text.length - 1] : after.text[after.text.length - 1]);
 }

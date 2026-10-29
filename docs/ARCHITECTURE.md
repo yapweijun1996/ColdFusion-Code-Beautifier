@@ -255,9 +255,16 @@ beautifyCodes()                       DOM I/O + preload + stale-request guard
 The no-preload path performs formatting immediately and returns an already-resolved Promise. When resources are lazy-loaded, the captured input is checked again before output is committed or cleared.
 
 The final guard aligns recognized tag boundaries with the captured source and
-restores the intervening HTML/CFML text, except that whitespace-only line
-indentation before standalone CFML tags, and line breaks between adjacent
-standalone assignments, are taken from the formatter outside `<pre>`. This can
+reconciles the intervening HTML/CFML text. Standalone tags and ordinary text
+lines inside HTML elements take their leading indentation from the same formatter.
+Text lines must match in order before indentation is merged; their characters,
+trailing spaces and inline separators remain unchanged. A closing tag whose
+opener is on an earlier source line can move onto its own line; complete inline
+elements remain together.
+Multiline hash-expression continuations and `<pre>`/`<textarea>` contents are
+opaque. Inline CSS `white-space` protection follows the source element stack and
+ends with its element. Stylesheet `white-space` declarations conservatively disable
+document text-line reindentation. Adjacent standalone assignments retain the formatter's line breaks. This can
 change whitespace emitted by the template. Script, style, query and
 CFScript bodies remain the responsibility of their own formatters. If the tag
 sequence cannot be aligned, the router retains the original document. This

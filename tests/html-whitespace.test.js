@@ -18,6 +18,7 @@ function format(source, flags) {
 var cases = [
 	'<div><span>A</span><span>B</span></div>',
 	'<div><span>A</span> <span>B</span></div>',
+	'<div><span>A<span>B</span>C</span></div>',
 	'<div><span>A</span><cfif flag><span>B</span></cfif><span>C</span></div>',
 	'<cfoutput><span>A</span><cfif flag><span>B</span></cfif><span>C</span></cfoutput>',
 	'<cfif flag><cfinclude template="noop.cfm">A</cfif>',
@@ -26,25 +27,72 @@ var cases = [
 	'<cfoutput><cfset x=1> A <cfset y=2> B </cfoutput>',
 	'<div><p style="display:inline">A</p><p style="display:inline">B</p></div>',
 	'<table><tr><td>foo</td><td>bar</td></tr></table>',
-	'<div><pre>A B\n  C\n\n D <b>x</b></pre><textarea>A B\n  C <b>x</b></textarea></div>',
-	'<div title="left > right"> A\n  B <span>x</span> C </div>',
+	{
+		input: '<div><pre>A B\n  C\n\n D <b>x</b></pre><textarea>A B\n  C <b>x</b></textarea></div>',
+		output: '<div><pre>A B\n  C\n\n D <b>x</b></pre><textarea>A B\n  C <b>x</b></textarea>\n</div>'
+	},
 	'<div><input value="><"><span>ok</span></div>',
 	'<cfoutput><div>#replace(value, "<span>", "x")#<span>A</span><span>B</span></div></cfoutput>',
 	'<div><span>A</span><!-- note --><span>B</span></div>'
 ];
 
-cases.forEach(function(source, index) {
+cases.forEach(function(entry, index) {
+	var source = typeof entry === 'string' ? entry : entry.input;
+	var expected = typeof entry === 'string' ? entry : entry.output;
 	[[], ['--split-html-tag'], ['--no-deep-sql', '--no-deep-css', '--no-deep-js']]
 		.forEach(function(flags) {
 			var output = format(source, flags);
-			assert.strictEqual(output, source, 'rendered text case ' + index + ' ' + flags.join(' '));
+			assert.strictEqual(output, expected, 'rendered text case ' + index + ' ' + flags.join(' '));
 			assert.strictEqual(format(output, flags), output, 'idempotence case ' + index);
 		});
 });
 console.log('PASS HTML whitespace: inline, block-display, CFML, pre and textarea cases');
 
+assert.strictEqual(format('<div title="left > right"> A\n  B <span>x</span> C </div>'),
+	'<div title="left > right"> A\n\tB <span>x</span> C \n</div>',
+	'only line-leading text indentation changes next to inline tags');
+
+var nestedMixed = [
+	'  <html>', '<cfoutput>', ' <body>', '   <table>', '<cfif show>',
+	'<tr>', ' <td>', '<table>', '<tr><td>A <span>B</span> C</td></tr>',
+	' </table>', '</td>', ' </tr>', '</cfif>', ' </table>', '</body>', '</cfoutput>', ' </html>'
+].join('\n');
+var nestedMixedExpected = [
+	'<html>', '\t<cfoutput>', '\t\t<body>', '\t\t\t<table>', '\t\t\t\t<cfif show>',
+	'\t\t\t\t\t<tr>', '\t\t\t\t\t\t<td>', '\t\t\t\t\t\t\t<table>',
+	'\t\t\t\t\t\t\t\t<tr><td>A <span>B</span> C</td></tr>',
+	'\t\t\t\t\t\t\t</table>', '\t\t\t\t\t\t</td>', '\t\t\t\t\t</tr>',
+	'\t\t\t\t</cfif>', '\t\t\t</table>', '\t\t</body>', '\t</cfoutput>', '</html>'
+].join('\n');
+assert.strictEqual(format(nestedMixed), nestedMixedExpected,
+	'HTML and CFML use the same hierarchy through nested tables and document closes');
+assert.strictEqual(format(nestedMixedExpected), nestedMixedExpected,
+	'mixed hierarchy is idempotent');
+
+var textBeforeClose = '<div>\n   <span>\nraw  text\n   </span>\n</div>';
+assert.strictEqual(format(textBeforeClose), '<div>\n\t<span>\n\t\traw  text\n\t</span>\n</div>',
+	'text and its surrounding tags share the same hierarchy without changing internal spaces');
+
+var signatureBlock = '<table>\n<tr>\n<td>\n  _________________________<br>\n'
+	+ '   <cfif ok>Approved By</cfif>\n Confirmed & Received By<br>\n  Name, Date and Company\n</td>\n</tr>\n</table>';
+var signatureExpected = '<table>\n\t<tr>\n\t\t<td>\n\t\t\t_________________________<br>\n'
+	+ '\t\t\t<cfif ok>Approved By</cfif>\n\t\t\tConfirmed & Received By<br>\n\t\t\tName, Date and Company\n\t\t</td>\n\t</tr>\n</table>';
+assert.strictEqual(format(signatureBlock), signatureExpected, 'signature text, br and CFML labels align within their cell');
+assert.strictEqual(format(signatureExpected), signatureExpected, 'signature block is idempotent');
+
+var priorLineClose = '<table>\n<tr>\n<td>\n<cfif ok>Draft</cfif>\n&nbsp;</td>\n</tr>\n</table>';
+var priorLineCloseExpected = '<table>\n\t<tr>\n\t\t<td>\n\t\t\t<cfif ok>Draft</cfif>\n\t\t\t&nbsp;\n\t\t</td>\n\t</tr>\n</table>';
+assert.strictEqual(format(priorLineClose), priorLineCloseExpected,
+	'entity content and its prior-line cell close use distinct hierarchy levels');
+assert.strictEqual(format(priorLineCloseExpected), priorLineCloseExpected, 'split cell close is idempotent');
+
+var expressionText = '<div>\n #value#\n #formatText("first\n  keep these spaces\nlast")#\n  after\n</div>';
+var expressionExpected = '<div>\n\t#value#\n\t#formatText("first\n  keep these spaces\nlast")#\n\tafter\n</div>';
+assert.strictEqual(format(expressionText), expressionExpected, 'CFML expression continuation lines remain exact while surrounding text aligns');
+assert.strictEqual(format(expressionExpected), expressionExpected, 'text containing multiline expressions is idempotent');
+
 var cfmlLines = '<cfoutput>\n<cfif ok>\nvalue\n</cfif>\n</cfoutput>\n';
-var cfmlLinesOutput = '<cfoutput>\n\t<cfif ok>\nvalue\n</cfif>\n</cfoutput>\n';
+var cfmlLinesOutput = '<cfoutput>\n\t<cfif ok>\nvalue\n\t</cfif>\n</cfoutput>\n';
 assert.strictEqual(format(cfmlLines), cfmlLinesOutput, 'standalone CFML tags receive structural indentation');
 assert.strictEqual(format(cfmlLinesOutput), cfmlLinesOutput, 'standalone CFML indentation is idempotent');
 
@@ -81,9 +129,20 @@ assert.ok(styledOutput.indexOf('<div>A\n  B<span>C</span></div>') !== -1,
 	'CSS whitespace mode preserves rendered text exactly');
 assert.ok(styledOutput.indexOf('<style>\n') !== -1, 'embedded CSS still formats independently');
 assert.strictEqual(format(styledOutput), styledOutput, 'mixed CSS and HTML is idempotent');
+var inlineStyled = '<div style="white-space: pre">A\n   B</div>';
+assert.strictEqual(format(inlineStyled), inlineStyled, 'inline CSS whitespace mode preserves text indentation');
+var styledAndSibling = inlineStyled + '\n<div>\n  C\n  <span>D</span>\n</div>';
+assert.strictEqual(format(styledAndSibling), inlineStyled + '\n<div>\n\tC\n\t<span>D</span>\n</div>',
+	'inline whitespace protection ends with its element instead of affecting sibling text');
+var nestedStyled = '<div style="white-space: pre">\n  A\n    <span>B</span>\n</div>';
+assert.strictEqual(format(nestedStyled), nestedStyled, 'inline whitespace mode also protects nested tag indentation');
 
 var crlf = '<div>\r\n  <pre>A\r\n  B</pre>\r\n</div>';
-assert.strictEqual(format(crlf), crlf, 'CRLF preformatted text remains unchanged');
+assert.strictEqual(format(crlf), '<div>\r\n\t<pre>A\r\n  B</pre>\r\n</div>',
+	'CRLF is retained while preformatted text remains unchanged');
+var textarea = '<div>\n   <textarea>\n  A\n    B\n  </textarea>\n  <span>after</span>\n</div>';
+assert.strictEqual(format(textarea), '<div>\n\t<textarea>\n  A\n    B\n  </textarea>\n\t<span>after</span>\n</div>',
+	'textarea content including indentation before its close remains unchanged');
 var mixed = '<div><span>A</span><span>B</span></div>\n'
 	+ '<cfquery name="q">\nselect a,b from records\n</cfquery>';
 var mixedOutput = format(mixed);
@@ -100,6 +159,10 @@ vm.createContext(context);
 vm.runInContext(scripts.map(function(file) {
 	return fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 }).join('\n'), context);
+assert.strictEqual(context.mergeRenderedTextIndentation('\n  A\n  B', '\n\tA\n\tchanged'), '\n  A\n  B',
+	'changed text content rejects the indentation merge');
+assert.strictEqual(context.mergeRenderedTextIndentation('\n A\n A  ', '\n\tA\n\t\tA'), '\n\tA\n\t\tA  ',
+	'repeated text matches in order and retains trailing spaces');
 var original = '<div><span>A</span><span>B</span></div>';
 assert.strictEqual(context.preserveRenderedHTMLWhitespace(original, '<div><span>A</span></div>'), original,
 	'changed tag structure falls back to the original document');

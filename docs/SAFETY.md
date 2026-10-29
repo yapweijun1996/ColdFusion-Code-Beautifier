@@ -59,7 +59,7 @@ Goes through the same `beautifyCFML` indent tracker.
 | Surface | Risk |
 |---------|------|
 | Tag boundaries | **Low**. Unescaped `<` in HTML body text (e.g. `if a < b` written without entity encoding) may be parsed as a tag start, but the splitter recovers as verbatim copy when the parse fails. |
-| Text content | **Guarded in the browser/CLI pipeline**. Source text between recognized HTML/CFML tags is restored except for line-leading indentation before standalone CFML tags and line breaks between adjacent standalone assignments outside `<pre>`; these can change emitted whitespace. Unmatched boundaries fall back to the original document. Previous synthetic Lucee 6.2.2.91 and Chrome checks cover selected conditional and include paths, inline text, `<pre>`, `<textarea>` and CSS whitespace, but do not verify this change or every template/runtime case. |
+| Text content | **Guarded in the browser/CLI pipeline**. Text characters, inline separators, multiline hash-expression continuations and `<pre>`/`<textarea>` contents are preserved. Standalone HTML/CFML tags and matched ordinary text lines inside HTML elements receive structural indentation; prior-line closes and adjacent standalone assignments can receive line breaks. These can change emitted whitespace. Inline CSS `white-space` protects its element's content; stylesheet declarations conservatively retain document text-line indentation. External CSS is not evaluated. Unmatched boundaries fall back to the original document. Previous synthetic Lucee 6.2.2.91 and Chrome checks cover selected conditional and include paths, inline text, `<pre>`, `<textarea>` and CSS whitespace, but do not verify this change or every template/runtime case. |
 
 ## Empirical corpus baseline (v18)
 
