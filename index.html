@@ -53,77 +53,103 @@
 			<h1>ColdFusion Code Beautifier</h1>
 
 			<div class="editor-grid">
-				<section class="pane">
-					<label class="pane-label" for="input">Input</label>
+				<section class="pane input-pane">
+					<div class="pane-heading"><label class="pane-label" for="input">Input</label></div>
 					<span id="input-keyboard-help" class="visually-hidden">Press Control or Command plus Enter to beautify. Press Tab to insert indentation. Press Escape, then Tab, to move focus out of the editor.</span>
 					<textarea id="input" aria-describedby="input-keyboard-help" aria-keyshortcuts="Tab Shift+Tab" placeholder="Paste your code here..." spellcheck="false" autocapitalize="off" autocorrect="off"></textarea>
 				</section>
 
-				<section class="pane">
-					<label class="pane-label" for="output">Output</label>
+				<nav class="toolbar" aria-label="Formatting actions and options">
+					<label class="language-control" title="SQL formatter works best with standalone queries. Complex procedures may require manual adjustment.">
+						<span>Language</span>
+						<select id="language" class="lang-select">
+							<option value="auto">Auto</option>
+							<option value="cfml">CFML / HTML</option>
+							<option value="sql">SQL</option>
+							<option value="js">JavaScript</option>
+						</select>
+					</label>
+					<button type="button" id="beautify" class="btn-primary" aria-keyshortcuts="Control+Enter Meta+Enter">Beautify</button>
+					<div class="workflow-options">
+						<label class="safe-control" title="Safe Mode disables Deep SQL, Deep CSS, Deep JS, Pro SQL and Semantic Indent. Recognized standalone SQL and JavaScript are returned unchanged; CFML/HTML still uses the outer formatter. Review output; semantic equivalence is not guaranteed."><input type="checkbox" id="safe_mode" value="y" aria-describedby="safe-mode-help"> Safe Mode</label>
+						<label class="auto-copy-control"><input type="checkbox" id="auto_copy" value="y" checked> Auto copy</label>
+					</div>
+					<p id="safe-mode-help" class="safe-mode-help">Safe Mode skips deep SQL, CSS and JS formatting, Semantic Indent and Pro SQL.</p>
+				</nav>
+
+				<section class="pane output-pane">
+					<div class="pane-heading">
+						<label class="pane-label" for="output">Output</label>
+						<div class="output-actions">
+							<button type="button" id="copy" class="btn-secondary">Copy</button>
+							<button type="button" id="clear" class="btn-ghost">Clear all</button>
+						</div>
+					</div>
 					<textarea id="output" readonly placeholder="Your beautified code will appear here..." spellcheck="false"></textarea>
 				</section>
+
+				<details class="options-panel">
+					<summary>Formatting options <span>Layout, deep formatting and auto clear</span></summary>
+					<div class="toolbar-options">
+						<fieldset class="option-group">
+							<legend>Layout</legend>
+							<div class="option-items">
+								<label><input type="checkbox" id="split_html_tag" value="y"> Split &lt;tag&gt;&lt;tag&gt;</label>
+								<label title="Convert leading spaces to tabs before formatting. Auto-detects indent unit (e.g. 2, 4, or 8 spaces = 1 tab). Use when your file mixes space-indent and tab-indent lines."><input type="checkbox" id="normalize_indent" value="y"> Normalize Indent</label>
+								<label class="normalize-tab-width" title="How many spaces equal one tab in the source file (Auto = detect from file)">
+									<span class="visually-hidden">Indent tab width</span>
+									<select id="normalize_tab_width" class="lang-select">
+										<option value="0">Auto</option>
+										<option value="2">2 sp</option>
+										<option value="4">4 sp</option>
+										<option value="8">8 sp</option>
+									</select>
+								</label>
+								<label title="Preserves visual column alignment of multi-line ternary / && / || / + / comma continuation lines inside <script> blocks (detect-and-anchor)"><input type="checkbox" id="preserve_continuation_alignment" value="y" checked> Preserve continuation alignment</label>
+							</div>
+						</fieldset>
+						<fieldset class="option-group">
+							<legend>Deep formatting</legend>
+							<p class="options-hint">Safe Mode pauses these formatters.</p>
+							<div class="option-items">
+								<label title="Formats SQL inside <cfquery>"><input type="checkbox" id="deep_sql" value="y" checked> Deep SQL</label>
+								<label title="Formats CSS inside <style>"><input type="checkbox" id="deep_css" value="y" checked> Deep CSS</label>
+								<label title="Formats JS inside <script> — strings, templates, regex, and for-loop semicolons all protected"><input type="checkbox" id="deep_js" value="y" checked> Deep JS</label>
+								<label title="Experimental — uses tree-sitter CFML/CFScript parsers (lazy-loads the ~2.6 MB CFML grammar and/or ~2.1 MB CFScript grammar on first use) to indent flat, zero-indent multi-line nested function-call chains by their real call depth. Covers: &lt;cfset&gt;/&lt;cfparam&gt; tags, and CONTROL-STRUCTURE-FREE &lt;cfscript&gt; blocks (top-level assignment/call chains only — blocks containing if/for/while/function/component are left to the normal indenter). Struct literals and SQL strings stay flat. Each grammar is fetched only when a matching flat block is present."><input type="checkbox" id="semantic_indent" value="y"> Semantic Indent</label>
+								<label class="pro-sql" title="Use the dialect-aware sql-formatter library (~312KB, lazy-loaded on first use). Falls back to built-in formatter if the bundle fails to load."><input type="checkbox" id="pro_sql" value="y"> Pro SQL</label>
+								<label class="pro-sql-dialect" title="SQL dialect for Pro SQL">
+									<span>Dialect</span>
+									<select id="pro_sql_dialect" class="lang-select">
+										<option value="sql">Standard SQL</option>
+										<option value="mysql">MySQL</option>
+										<option value="mariadb">MariaDB</option>
+										<option value="postgresql">PostgreSQL</option>
+										<option value="sqlite">SQLite</option>
+										<option value="tsql">SQL Server (T-SQL)</option>
+										<option value="plsql">Oracle (PL/SQL)</option>
+										<option value="db2">IBM DB2</option>
+										<option value="redshift">Amazon Redshift</option>
+										<option value="snowflake">Snowflake</option>
+										<option value="bigquery">Google BigQuery</option>
+										<option value="hive">Apache Hive</option>
+										<option value="spark">Apache Spark</option>
+										<option value="trino">Trino / Presto</option>
+										<option value="n1ql">Couchbase N1QL</option>
+										<option value="singlestoredb">SingleStoreDB</option>
+									</select>
+								</label>
+							</div>
+						</fieldset>
+						<fieldset class="option-group">
+							<legend>Auto clear</legend>
+							<div class="option-items">
+								<label><input type="checkbox" id="auto_clear" value="y"> Auto clear input</label>
+								<label><input type="checkbox" id="auto_clear_output" value="y"> Auto clear output</label>
+							</div>
+						</fieldset>
+					</div>
+				</details>
 			</div>
-
-			<nav class="toolbar" aria-label="Formatting actions and options">
-				<label class="language-control" title="SQL formatter works best with standalone queries. Complex procedures may require manual adjustment.">
-					<span>Language</span>
-					<select id="language" class="lang-select">
-						<option value="auto">Auto</option>
-						<option value="cfml">CFML / HTML</option>
-						<option value="sql">SQL</option>
-						<option value="js">JavaScript</option>
-					</select>
-				</label>
-				<button type="button" id="beautify" class="btn-primary" aria-keyshortcuts="Control+Enter Meta+Enter">Beautify</button>
-				<button type="button" id="copy" class="btn-secondary">Copy</button>
-				<button type="button" id="clear" class="btn-ghost">Clear</button>
-
-				<div class="toolbar-options">
-					<label><input type="checkbox" id="split_html_tag" value="y"> Split &lt;tag&gt;&lt;tag&gt;</label>
-					<label title="Convert leading spaces to tabs before formatting. Auto-detects indent unit (e.g. 2, 4, or 8 spaces = 1 tab). Use when your file mixes space-indent and tab-indent lines."><input type="checkbox" id="normalize_indent" value="y"> Normalize Indent</label>
-					<label class="normalize-tab-width" title="How many spaces equal one tab in the source file (Auto = detect from file)">
-						<span class="visually-hidden">Indent tab width</span>
-						<select id="normalize_tab_width" class="lang-select">
-							<option value="0">Auto</option>
-							<option value="2">2 sp</option>
-							<option value="4">4 sp</option>
-							<option value="8">8 sp</option>
-						</select>
-					</label>
-					<label><input type="checkbox" id="auto_copy" value="y" checked> Auto copy</label>
-					<label><input type="checkbox" id="auto_clear" value="y"> Auto clear input</label>
-					<label><input type="checkbox" id="auto_clear_output" value="y"> Auto clear output</label>
-					<label title="Safe Mode disables Deep SQL, Deep CSS, Deep JS, Pro SQL and Semantic Indent. Recognized standalone SQL and JavaScript are returned unchanged; CFML/HTML still uses the outer formatter. Review output; semantic equivalence is not guaranteed."><input type="checkbox" id="safe_mode" value="y"> Safe Mode</label>
-					<label title="Formats SQL inside <cfquery>"><input type="checkbox" id="deep_sql" value="y" checked> Deep SQL</label>
-					<label title="Formats CSS inside <style>"><input type="checkbox" id="deep_css" value="y" checked> Deep CSS</label>
-					<label title="Formats JS inside <script> — strings, templates, regex, and for-loop semicolons all protected"><input type="checkbox" id="deep_js" value="y" checked> Deep JS</label>
-					<label title="Preserves visual column alignment of multi-line ternary / && / || / + / comma continuation lines inside <script> blocks (detect-and-anchor)"><input type="checkbox" id="preserve_continuation_alignment" value="y" checked> Preserve Cont Align</label>
-					<label title="Experimental — uses tree-sitter CFML/CFScript parsers (lazy-loads the ~2.6 MB CFML grammar and/or ~2.1 MB CFScript grammar on first use) to indent flat, zero-indent multi-line nested function-call chains by their real call depth. Covers: &lt;cfset&gt;/&lt;cfparam&gt; tags, and CONTROL-STRUCTURE-FREE &lt;cfscript&gt; blocks (top-level assignment/call chains only — blocks containing if/for/while/function/component are left to the normal indenter). Struct literals and SQL strings stay flat. Each grammar is fetched only when a matching flat block is present."><input type="checkbox" id="semantic_indent" value="y"> Semantic Indent</label>
-					<label class="pro-sql" title="Use the dialect-aware sql-formatter library (~312KB, lazy-loaded on first use). Falls back to built-in formatter if the bundle fails to load."><input type="checkbox" id="pro_sql" value="y"> Pro SQL</label>
-					<label class="pro-sql-dialect" title="SQL dialect for Pro SQL">
-						<span>Dialect</span>
-						<select id="pro_sql_dialect" class="lang-select">
-							<option value="sql">Standard SQL</option>
-							<option value="mysql">MySQL</option>
-							<option value="mariadb">MariaDB</option>
-							<option value="postgresql">PostgreSQL</option>
-							<option value="sqlite">SQLite</option>
-							<option value="tsql">SQL Server (T-SQL)</option>
-							<option value="plsql">Oracle (PL/SQL)</option>
-							<option value="db2">IBM DB2</option>
-							<option value="redshift">Amazon Redshift</option>
-							<option value="snowflake">Snowflake</option>
-							<option value="bigquery">Google BigQuery</option>
-							<option value="hive">Apache Hive</option>
-							<option value="spark">Apache Spark</option>
-							<option value="trino">Trino / Presto</option>
-							<option value="n1ql">Couchbase N1QL</option>
-							<option value="singlestoredb">SingleStoreDB</option>
-						</select>
-					</label>
-				</div>
-			</nav>
 		</main>
 		<footer>
 			<p>By <a href="https://github.com/yapweijun1996" target="_blank" rel="noopener">yapweijun1996</a> @ <span class="at_year"></span> · Version <span class="app-version" id="app-version" data-build-version="__BUILD_VERSION__">dev</span></p>

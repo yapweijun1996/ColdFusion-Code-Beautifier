@@ -21,7 +21,7 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. T
 - **Structure-based JavaScript indentation** uses parsed blocks, calls, arrays, objects, computed keys, assignment/arrow continuations and switch cases when supported. Unsupported or mixed-language constructs retain the compatibility formatter and still receive the safety check.
 - **Auto-copy / auto-clear input / auto-clear output** independent toggles. Auto-copy defaults on; both auto-clear options default off so source and result remain visible until explicitly cleared.
 - **Force-split `<tag><tag>`** option for dense HTML.
-- **Fullscreen layout** with side-by-side input / output on desktop, stacked on mobile.
+- **Responsive workspace** with side-by-side editors above 900px and a paste → Beautify → output/Copy flow on narrower screens. Formatting options are grouped in a keyboard-accessible disclosure; Safe Mode and Auto copy stay visible. Safe Mode displays its effect when enabled, and Clear all explicitly identifies the action that clears both editors. All existing options remain available.
 - **Pro SQL** (opt-in) — vendored [sql-formatter](https://github.com/sql-formatter-org/sql-formatter) (MIT) for 16 dialects: MySQL, MariaDB, PostgreSQL, SQLite, T-SQL, PL/SQL, DB2, Redshift, Snowflake, BigQuery, Hive, Spark, Trino, N1QL, SingleStoreDB, Standard. It is runtime-lazy and falls back to the built-in formatter if loading/parsing fails. The current service worker precaches the UMD bundle for offline readiness, so installed PWA users download that asset even when the option remains off.
 - **Normalize Indent** (opt-in) — converts each line's *leading* whitespace from spaces to tabs before formatting (line content is never touched). Auto-detects the file's indent unit (2 / 4 / 8 spaces = 1 tab), or pick the width explicitly from the companion selector. Handles files that mix space-indent and tab-indent lines, including files already run through the beautifier (it recovers the original unit from the tab+space alignment). Checkbox + width persist in `localStorage`.
 - **HTML output safety** — standalone HTML/CFML tags and ordinary HTML text lines share the same indentation hierarchy. Text characters, inline spaces, multiline CFML expression contents, and `<pre>`/`<textarea>` contents are preserved. Inline CSS `white-space` declarations protect their element's content; stylesheet declarations conservatively preserve document text-line indentation. Closing tags whose openers are on earlier lines and adjacent standalone assignments can split onto separate lines; complete inline elements stay together. Indentation changes may affect whitespace emitted by the template; review output where exact whitespace matters. Embedded SQL, CSS and JavaScript still use their selected formatters; ambiguous tag sequences fall back to the original document.
@@ -30,10 +30,10 @@ A browser-side tool for formatting ColdFusion, HTML, JavaScript, CSS, and SQL. T
 
 ## Usage
 
-1. Paste code into the left textarea.
+1. Paste code into the Input editor.
 2. Pick `Auto`, `CFML / HTML`, `SQL`, or `JavaScript` from the Language dropdown.
-3. Toggle the deep-format checkboxes (SQL / CSS / JS) to pick what gets formatted inside embedded blocks.
-4. Click **Beautify**. The right textarea shows the output and is copied to the clipboard if `Auto copy` is on. `Ctrl+Enter` / `Cmd+Enter` also runs Beautify; `Tab` and `Shift+Tab` indent the selected input lines, and `Escape` then `Tab` moves focus out of the editor.
+3. Expand **Formatting options** to choose layout and deep-format settings. Safe Mode and Auto copy remain visible beside the main actions.
+4. Click **Beautify**. The Output editor shows the result and is copied to the clipboard if `Auto copy` is on. Use **Copy** to copy it manually, or **Clear all** to clear both editors. `Ctrl+Enter` / `Cmd+Enter` also runs Beautify; `Tab` and `Shift+Tab` indent the selected input lines, and `Escape` then `Tab` moves focus out of the editor.
 
 ## Command-line use for AI agents
 

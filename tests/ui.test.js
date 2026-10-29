@@ -51,7 +51,7 @@ expectMatch('auto-clear input defaults off', html, /id="auto_clear"[^>]*>/);
 expectNoMatch('auto-clear input is not checked by default', html, /id="auto_clear"[^>]*checked/);
 expectNoMatch('auto-clear output is not checked by default', html, /id="auto_clear_output"[^>]*checked/);
 expectNoMatch('inline click handlers are removed', html, /\bonclick\s*=/i);
-expectMatch('mobile layout breakpoint is 640px', css, /@media\s*\(max-width:\s*640px\)/);
+expectMatch('narrow editors stack at 900px', css, /@media\s*\(max-width:\s*900px\)/);
 expectNoMatch('legacy 768px mobile breakpoint is removed', css, /@media\s*\(max-width:\s*768px\)/);
 expectMatch('dark surface has increased contrast', css, /--surface:\s*#1a212b/);
 expectMatch('toolbar options have 44px touch targets', css, /\.toolbar-options label\s*\{[\s\S]*?min-height:\s*var\(--tap\)/);

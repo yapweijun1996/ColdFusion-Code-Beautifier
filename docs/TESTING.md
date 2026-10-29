@@ -48,13 +48,20 @@ Control/Command+Enter, Tab/Shift-Tab, Escape-to-exit, async busy state, and
 user-controlled PWA update/draft recovery). It intentionally has no jsdom or
 network dependency.
 
+For layout changes, also inspect actual browser screenshots at 320, 390, 430,
+768, 1024 and 1440 CSS pixels. Check the options disclosure both closed and open,
+including the conditional indent-width and Pro SQL dialect selectors. Verify
+no document-level horizontal scrolling, Escape then Tab exits the input toward
+the language selector, and format/copy/Safe Mode still work. Long code may
+scroll inside its editor. DOM-only tests do not establish responsive quality.
+
 ## Browser smoke test
 
 For UI-level checks that the harness cannot reach (clipboard, language-selector DOM, toast animations):
 
 1. Open `index.html` in a browser.
 2. Paste a known-good CFML file.
-3. Toggle `Deep SQL`, `Deep CSS`, `Deep JS` individually and verify only the matching embedded language changes.
+3. Expand **Formatting options**, then toggle `Deep SQL`, `Deep CSS`, `Deep JS` individually and verify only the matching embedded language changes.
 4. Confirm `Auto copy` is on by default while `Auto clear input` and `Auto clear output` are off by default; enable the latter two and verify their explicit behavior.
 5. While Pro SQL or Semantic Indent is loading, verify Beautify is disabled and returns to normal after success or fallback.
 6. Verify Tab/Shift-Tab indentation, Escape then Tab focus exit, and Control/Command+Enter.
